@@ -2661,8 +2661,9 @@ views:
               per dag.
 
 
-              Bij **Ontladen Na Opladen Vertraging⚙️** stel je in hoeveel
-              seconden de Zendure na opladen wacht voordat ontladen mag starten.
+              Bij **Moduswissel Vertraging⚙️** stel je in hoeveel seconden de
+              Zendure na iedere moduswissel wacht voordat opladen of ontladen
+              mag starten.
 
 
               Wil je niet te veel gedoe neem dan in eerste instantie de **Advies
@@ -2743,8 +2744,8 @@ views:
                 name: Max. Ontlaadvermogen
               - entity: input_number.zendure_2400_ac_ontladen_starten_bij
                 name: Ontladen Starten Bij
-              - entity: input_number.zendure_2400_ac_ontladen_na_opladen_vertraging
-                name: Ontladen Na Opladen Vertraging
+              - entity: input_number.zendure_2400_ac_moduswissel_vertraging
+                name: Moduswissel Vertraging
               - entity: input_number.zendure_2400_ac_ontlaadmarge
                 name: Ontlaadmarge
       - type: grid

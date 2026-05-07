@@ -142,8 +142,8 @@ input_number:
     mode: box
     unit_of_measurement: "Min"
 
-  zendure_2400_ac_ontladen_na_opladen_vertraging:
-    name: Zendure 2400 AC Ontladen Na Opladen Vertraging
+  zendure_2400_ac_moduswissel_vertraging:
+    name: Zendure 2400 AC Moduswissel Vertraging
     icon: mdi:timer-outline
     min: 0
     max: 300

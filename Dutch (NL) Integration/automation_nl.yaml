@@ -179,6 +179,13 @@ actions:
             state:
               - Snel ontladen
         sequence:
+          - delay:
+              seconds: >-
+                {% set vertraging =
+                states('input_number.zendure_2400_ac_moduswissel_vertraging') |
+                int(45) %} {% set verstreken = as_timestamp(now()) -
+                as_timestamp(states.sensor.zendure_2400_ac_modus.last_changed)
+                %} {{ [vertraging - verstreken, 0] | max | int }}
           - action: rest_command.zendure_snel_ontladen
             data:
               sn: "{{ states('sensor.zendure_2400_ac_serienummer') }}"
@@ -194,6 +201,13 @@ actions:
             state:
               - Snel opladen
         sequence:
+          - delay:
+              seconds: >-
+                {% set vertraging =
+                states('input_number.zendure_2400_ac_moduswissel_vertraging') |
+                int(45) %} {% set verstreken = as_timestamp(now()) -
+                as_timestamp(states.sensor.zendure_2400_ac_modus.last_changed)
+                %} {{ [vertraging - verstreken, 0] | max | int }}
           - action: rest_command.zendure_snel_laden
             data:
               sn: "{{ states('sensor.zendure_2400_ac_serienummer') }}"
@@ -336,6 +350,13 @@ actions:
                 state:
                   - "off"
         sequence:
+          - delay:
+              seconds: >-
+                {% set vertraging =
+                states('input_number.zendure_2400_ac_moduswissel_vertraging') |
+                int(45) %} {% set verstreken = as_timestamp(now()) -
+                as_timestamp(states.sensor.zendure_2400_ac_modus.last_changed)
+                %} {{ [vertraging - verstreken, 0] | max | int }}
           - data:
               sn: "{{ states('sensor.zendure_2400_ac_serienummer') }}"
               inputLimit: >
@@ -521,15 +542,15 @@ actions:
           - action: input_number.set_value
             metadata: {}
             target:
-              entity_id: input_number.zendure_2400_ac_ontladen_na_opladen_vertraging
+              entity_id: input_number.zendure_2400_ac_moduswissel_vertraging
             data:
               value: 45
           - action: logbook.log
             data:
               message: >-
                 ⚙️Advies instellingen overnemen — Standby vertraging ingesteld
-                op 15 minuten en ontladen na opladen vertraging ingesteld op 45
-                seconden — 
+                op 15 minuten en moduswissel vertraging ingesteld op 45 seconden
+                — 
               entity_id: input_select.zendure_2400_ac_modus_selecteren
               name: " "
           - action: input_number.set_value
@@ -855,23 +876,19 @@ actions:
             entity_id: sensor.zendure_2400_ac_vermogen_aansturing
             above: -30
             below: 30
-          - alias: Na opladen pas na ingestelde vertraging ontladen
+          - alias: Na elke moduswissel pas na ingestelde vertraging ontladen
             condition: or
             conditions:
               - condition: template
                 value_template: >-
                   {% set vertraging =
-                  states('input_number.zendure_2400_ac_ontladen_na_opladen_vertraging')
-                  | int(45) %} {{ is_state('sensor.zendure_2400_ac_modus',
-                  'Opladen') and (as_timestamp(now()) -
+                  states('input_number.zendure_2400_ac_moduswissel_vertraging')
+                  | int(45) %} {% set modus =
+                  states('sensor.zendure_2400_ac_modus') %} {{ modus ==
+                  'Ontladen' or (modus not in ['unknown', 'unavailable'] and
+                  (as_timestamp(now()) -
                   as_timestamp(states.sensor.zendure_2400_ac_modus.last_changed))
-                  >= vertraging }}
-              - condition: state
-                entity_id: sensor.zendure_2400_ac_modus
-                state: Ontladen
-              - condition: state
-                entity_id: sensor.zendure_2400_ac_modus
-                state: Standby
+                  >= vertraging) }}
           - condition: or
             conditions:
               - condition: or
@@ -1119,23 +1136,19 @@ actions:
                 entity_id: input_select.zendure_2400_ac_modus_selecteren
                 state:
                   - Dynamisch Handelen + NOM
-          - alias: Minstens 2 automatiseringen na ontladen pas activeren
+          - alias: Na elke moduswissel pas na ingestelde vertraging opladen
             condition: or
             conditions:
-              - condition: state
-                entity_id: sensor.zendure_2400_ac_modus
-                state: Ontladen
-                for:
-                  hours: 0
-                  minutes: 0
-                  seconds: 9
-                  milliseconds: 0
-              - condition: state
-                entity_id: sensor.zendure_2400_ac_modus
-                state: Opladen
-              - condition: state
-                entity_id: sensor.zendure_2400_ac_modus
-                state: Standby
+              - condition: template
+                value_template: >-
+                  {% set vertraging =
+                  states('input_number.zendure_2400_ac_moduswissel_vertraging')
+                  | int(45) %} {% set modus =
+                  states('sensor.zendure_2400_ac_modus') %} {{ modus ==
+                  'Opladen' or (modus not in ['unknown', 'unavailable'] and
+                  (as_timestamp(now()) -
+                  as_timestamp(states.sensor.zendure_2400_ac_modus.last_changed))
+                  >= vertraging) }}
           - condition: and
             conditions:
               - condition: state
@@ -1154,6 +1167,13 @@ actions:
                   - unknown
                   - unavailable
         sequence:
+          - delay:
+              seconds: >-
+                {% set vertraging =
+                states('input_number.zendure_2400_ac_moduswissel_vertraging') |
+                int(45) %} {% set verstreken = as_timestamp(now()) -
+                as_timestamp(states.sensor.zendure_2400_ac_modus.last_changed)
+                %} {{ [vertraging - verstreken, 0] | max | int }}
           - data:
               sn: "{{ states('sensor.zendure_2400_ac_serienummer') }}"
               inputLimit: >-
@@ -1351,6 +1371,13 @@ actions:
               | abs !=
                  states('sensor.zendure_2400_ac_ingesteld_ontlaadvermogen') | int }}
         sequence:
+          - delay:
+              seconds: >-
+                {% set vertraging =
+                states('input_number.zendure_2400_ac_moduswissel_vertraging') |
+                int(45) %} {% set verstreken = as_timestamp(now()) -
+                as_timestamp(states.sensor.zendure_2400_ac_modus.last_changed)
+                %} {{ [vertraging - verstreken, 0] | max | int }}
           - data:
               sn: "{{ states('sensor.zendure_2400_ac_serienummer') }}"
               outputLimit: >-
@@ -1561,6 +1588,13 @@ actions:
               minutes: 0
               seconds: 5
               milliseconds: 0
+          - delay:
+              seconds: >-
+                {% set vertraging =
+                states('input_number.zendure_2400_ac_moduswissel_vertraging') |
+                int(45) %} {% set verstreken = as_timestamp(now()) -
+                as_timestamp(states.sensor.zendure_2400_ac_modus.last_changed)
+                %} {{ [vertraging - verstreken, 0] | max | int }}
           - action: rest_command.zendure_snel_laden
             data:
               sn: "{{ states('sensor.zendure_2400_ac_serienummer') }}"
@@ -1675,6 +1709,13 @@ actions:
               minutes: 0
               seconds: 5
               milliseconds: 0
+          - delay:
+              seconds: >-
+                {% set vertraging =
+                states('input_number.zendure_2400_ac_moduswissel_vertraging') |
+                int(45) %} {% set verstreken = as_timestamp(now()) -
+                as_timestamp(states.sensor.zendure_2400_ac_modus.last_changed)
+                %} {{ [vertraging - verstreken, 0] | max | int }}
           - action: rest_command.zendure_snel_laden
             data:
               sn: "{{ states('sensor.zendure_2400_ac_serienummer') }}"
@@ -1784,6 +1825,13 @@ actions:
               minutes: 0
               seconds: 5
               milliseconds: 0
+          - delay:
+              seconds: >-
+                {% set vertraging =
+                states('input_number.zendure_2400_ac_moduswissel_vertraging') |
+                int(45) %} {% set verstreken = as_timestamp(now()) -
+                as_timestamp(states.sensor.zendure_2400_ac_modus.last_changed)
+                %} {{ [vertraging - verstreken, 0] | max | int }}
           - action: rest_command.zendure_snel_ontladen
             data:
               sn: "{{ states('sensor.zendure_2400_ac_serienummer') }}"
