@@ -406,10 +406,10 @@ template:
           {% set ontladen_starten_bij = states('input_number.zendure_2400_ac_ontladen_starten_bij') | float(0) %}
           {% set opladen_starten_bij = states('input_number.zendure_2400_ac_opladen_starten_bij') | float(0) %}
           {% set vertraging = states('input_number.zendure_2400_ac_moduswissel_vertraging') | int(45) %}
-          {% set sinds = as_timestamp(states('input_datetime.zendure_2400_ac_moduswissel_aangevraagd_sinds'), 0) %}
           {% set aanvraag = states('input_text.zendure_2400_ac_moduswissel_aanvraag') %}
-          {% set wacht_op_ontladen = aanvraag == 'Ontladen' and sinds > 0 and (as_timestamp(now()) - sinds) < vertraging %}
-          {% set wacht_op_opladen = aanvraag == 'Opladen' and sinds > 0 and (as_timestamp(now()) - sinds) < vertraging %}
+          {% set verstreken = (now() - states.input_text.zendure_2400_ac_moduswissel_aanvraag.last_changed).total_seconds() %}
+          {% set wacht_op_ontladen = aanvraag == 'Ontladen' and verstreken < vertraging %}
+          {% set wacht_op_opladen = aanvraag == 'Opladen' and verstreken < vertraging %}
           {% set ontladen_gevraagd = vermogen > ontladen_starten_bij and selectie in ['Nul op de meter', 'Alleen slim ontladen', 'Dynamisch NOM', 'Dynamisch NOM (Duur)', 'Dynamisch Handelen + NOM'] and not is_state('sensor.zendure_2400_ac_modus', 'Ontladen') %}
           {% set opladen_gevraagd = vermogen < opladen_starten_bij and selectie in ['Nul op de meter', 'Alleen slim opladen', 'Dynamisch NOM', 'Dynamisch NOM (Duur)', 'Dynamisch Handelen + NOM'] and not is_state('sensor.zendure_2400_ac_modus', 'Opladen') %}
           {% if wacht_op_ontladen or ontladen_gevraagd %}
