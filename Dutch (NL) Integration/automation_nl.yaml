@@ -7,6 +7,9 @@ triggers:
   - id: hartslag_trigger
     trigger: time_pattern
     minutes: /1
+  - id: homeassistant_start
+    trigger: homeassistant
+    event: start
   - at: "00:00:00"
     id: dynamisch_middernacht
     trigger: time
@@ -68,6 +71,54 @@ triggers:
     id: systeem_instelling_zendure_ip
 conditions: []
 actions:
+  - alias: Moduswissel standaardwaarden initialiseren
+    choose:
+      - conditions:
+          - condition: trigger
+            id: homeassistant_start
+          - condition: state
+            entity_id: input_boolean.zendure_2400_ac_moduswissel_standaardwaarden_ingesteld
+            state: "off"
+        sequence:
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: >-
+                      {{
+                      states('input_number.zendure_2400_ac_moduswissel_vertraging')
+                      | float(0) <= 0 }}
+                sequence:
+                  - action: input_number.set_value
+                    metadata: {}
+                    target:
+                      entity_id: input_number.zendure_2400_ac_moduswissel_vertraging
+                    data:
+                      value: 45
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: >-
+                      {{
+                      states('input_number.zendure_2400_ac_minimaal_vermogen_tijdens_moduswissel')
+                      | float(0) <= 0 }}
+                sequence:
+                  - action: input_number.set_value
+                    metadata: {}
+                    target:
+                      entity_id: input_number.zendure_2400_ac_minimaal_vermogen_tijdens_moduswissel
+                    data:
+                      value: 30
+          - action: input_boolean.turn_on
+            target:
+              entity_id: input_boolean.zendure_2400_ac_moduswissel_standaardwaarden_ingesteld
+            data: {}
+          - action: logbook.log
+            data:
+              message: >-
+                ⚙️Moduswissel standaardwaarden gecontroleerd — lege waarden
+                ingesteld op 45 seconden en 30 watt —
+              entity_id: input_select.zendure_2400_ac_modus_selecteren
+              name: " "
   - alias: Modus Selecteren
     choose:
       - conditions:

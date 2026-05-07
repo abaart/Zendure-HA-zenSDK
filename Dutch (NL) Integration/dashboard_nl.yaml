@@ -2661,18 +2661,6 @@ views:
               per dag.
 
 
-              Bij **Moduswissel Vertraging⚙️** stel je in hoeveel seconden de
-              vraag naar opladen of ontladen aanwezig moet blijven voordat de
-              Zendure van modus wisselt. Dit voorkomt dat korte verbruikspieken,
-              bijvoorbeeld van een Quooker, veel relais-schakelingen
-              veroorzaken.
-
-
-              Bij **Min. Vermogen Tijdens Moduswissel⚙️** stel je in met welk
-              minimaal laad- of ontlaadvermogen de oude modus actief blijft
-              tijdens de wachttijd.
-
-
               Wil je niet te veel gedoe neem dan in eerste instantie de **Advies
               Instellingen⚙️** voor het gedrag in één keer over. Pas het daarna
               na eigen smaak aan.
@@ -2687,6 +2675,34 @@ views:
               - entity: input_text.homewizard_p1_ip_adres
               - entity: input_number.zendure_2400_ac_standby_vertraging
                 name: Standby Vertraging
+          - type: heading
+            icon: ''
+            heading: Configuratie (Moduswissel)
+            heading_style: title
+          - type: markdown
+            content: >-
+              <ha-alert alert-type="info">Helptekst</ha-alert>Bij
+              **Moduswissel Vertraging⚙️** stel je in hoeveel seconden de vraag
+              naar opladen of ontladen aanwezig moet blijven voordat de Zendure
+              van modus wisselt. Dit voorkomt dat korte verbruikspieken,
+              bijvoorbeeld van een Quooker, veel relais-schakelingen
+              veroorzaken.
+
+
+              Bij **Min. Vermogen Tijdens Moduswissel⚙️** stel je in met welk
+              minimaal laad- of ontlaadvermogen de oude modus actief blijft
+              tijdens de wachttijd.
+            text_only: true
+            visibility:
+              - condition: state
+                entity: input_boolean.help_tonen_op_dashboard
+                state: 'on'
+          - type: entities
+            entities:
+              - entity: input_number.zendure_2400_ac_moduswissel_vertraging
+                name: Moduswissel Vertraging
+              - entity: input_number.zendure_2400_ac_minimaal_vermogen_tijdens_moduswissel
+                name: Min. Vermogen Tijdens Moduswissel
           - type: heading
             icon: ''
             heading: Configuratie (Opladen)
@@ -2751,10 +2767,6 @@ views:
                 name: Max. Ontlaadvermogen
               - entity: input_number.zendure_2400_ac_ontladen_starten_bij
                 name: Ontladen Starten Bij
-              - entity: input_number.zendure_2400_ac_moduswissel_vertraging
-                name: Moduswissel Vertraging
-              - entity: input_number.zendure_2400_ac_minimaal_vermogen_tijdens_moduswissel
-                name: Min. Vermogen Tijdens Moduswissel
               - entity: input_number.zendure_2400_ac_ontlaadmarge
                 name: Ontlaadmarge
       - type: grid

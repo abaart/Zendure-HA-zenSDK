@@ -53,6 +53,10 @@ input_boolean:
     name: Zendure 2400 AC SOC Bescherming Uitgeschakeld
     icon: mdi:battery-heart-variant
 
+  zendure_2400_ac_moduswissel_standaardwaarden_ingesteld:
+    name: Zendure 2400 AC Moduswissel Standaardwaarden Ingesteld
+    icon: mdi:check-circle-outline
+
 input_text:
   zendure_2400_ac_batterij_volgorde:
     name: Zendure 2400 AC Batterij Volgorde
