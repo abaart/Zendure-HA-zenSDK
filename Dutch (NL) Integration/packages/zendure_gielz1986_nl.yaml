@@ -397,6 +397,32 @@ template:
         icon: mdi:one-up
         state: "v20260507"
 
+      - name: "Zendure 2400 AC Moduswissel Status"
+        unique_id: zendure_2400_ac_moduswissel_status
+        icon: mdi:swap-horizontal-circle-outline
+        state: >-
+          {% set aanvraag = states('input_text.zendure_2400_ac_moduswissel_aanvraag') %}
+          {% set vertraging = states('input_number.zendure_2400_ac_moduswissel_vertraging') | int(45) %}
+          {% set sinds = as_timestamp(states('input_datetime.zendure_2400_ac_moduswissel_aangevraagd_sinds'), 0) %}
+          {% set wacht_op_ontladen = aanvraag == 'Ontladen' and sinds > 0 and (as_timestamp(now()) - sinds) < vertraging %}
+          {% set wacht_op_opladen = aanvraag == 'Opladen' and sinds > 0 and (as_timestamp(now()) - sinds) < vertraging %}
+          {% if wacht_op_ontladen %}
+            Wacht op ontladen
+          {% elif wacht_op_opladen %}
+            Wacht op opladen
+          {% else %}
+            {{ states('sensor.zendure_2400_ac_modus') }}
+          {% endif %}
+
+      - name: "Zendure 2400 AC Moduswissel Aangevraagd Sinds"
+        unique_id: zendure_2400_ac_moduswissel_aangevraagd_sinds
+        icon: mdi:clock-start
+        device_class: timestamp
+        availability: >-
+          {{ states('input_datetime.zendure_2400_ac_moduswissel_aangevraagd_sinds') not in ['unknown', 'unavailable', ''] }}
+        state: >-
+          {{ as_datetime(states('input_datetime.zendure_2400_ac_moduswissel_aangevraagd_sinds')) }}
+
       - name: "Zendure 2400 AC Laatste Kalibratie (Dagen)"
         unique_id: Zendure_2400_AC_Laatste_Kalibratie_Dagen
         unit_of_measurement: "d"

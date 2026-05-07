@@ -817,6 +817,10 @@ views:
             entities:
               - entity: sensor.zendure_2400_ac_modus
                 name: Modus
+              - entity: sensor.zendure_2400_ac_moduswissel_status
+                name: Moduswissel Status
+              - entity: sensor.zendure_2400_ac_moduswissel_aangevraagd_sinds
+                name: Moduswissel Aangevraagd Sinds
               - type: conditional
                 conditions:
                   - condition: or
