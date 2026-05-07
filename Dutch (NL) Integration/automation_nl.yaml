@@ -923,8 +923,11 @@ actions:
               'Ontladen') }}
           - condition: template
             value_template: >-
-              {{ not is_state('input_text.zendure_2400_ac_moduswissel_aanvraag',
-              'Ontladen') }}
+              {% set aanvraag_sinds =
+              as_timestamp(states('input_datetime.zendure_2400_ac_moduswissel_aangevraagd_sinds'),
+              0) %} {{ not
+              is_state('input_text.zendure_2400_ac_moduswissel_aanvraag',
+              'Ontladen') or aanvraag_sinds <= 0 }}
         sequence:
           - action: input_text.set_value
             target:
@@ -935,7 +938,7 @@ actions:
             target:
               entity_id: input_datetime.zendure_2400_ac_moduswissel_aangevraagd_sinds
             data:
-              datetime: "{{ now() }}"
+              datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
         alias: Ontladen aanvraag starttijd vastleggen
       - conditions:
           - condition: trigger
@@ -953,8 +956,11 @@ actions:
               'Opladen') }}
           - condition: template
             value_template: >-
-              {{ not is_state('input_text.zendure_2400_ac_moduswissel_aanvraag',
-              'Opladen') }}
+              {% set aanvraag_sinds =
+              as_timestamp(states('input_datetime.zendure_2400_ac_moduswissel_aangevraagd_sinds'),
+              0) %} {{ not
+              is_state('input_text.zendure_2400_ac_moduswissel_aanvraag',
+              'Opladen') or aanvraag_sinds <= 0 }}
         sequence:
           - action: input_text.set_value
             target:
@@ -965,7 +971,7 @@ actions:
             target:
               entity_id: input_datetime.zendure_2400_ac_moduswissel_aangevraagd_sinds
             data:
-              datetime: "{{ now() }}"
+              datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
         alias: Opladen aanvraag starttijd vastleggen
       - conditions:
           - condition: trigger
@@ -1021,10 +1027,22 @@ actions:
             value_template: |
               {{ states('sensor.zendure_2400_ac_laadpercentage') | float >
                states('sensor.zendure_2400_ac_minimale_laadpercentage') | float }}
-          - condition: numeric_state
-            entity_id: sensor.zendure_2400_ac_vermogen_aansturing
-            above: -30
-            below: 30
+          - alias: >-
+              Batterijvermogen is laag of de gevraagde ontlaadmodus wacht lang
+              genoeg
+            condition: template
+            value_template: >-
+              {% set vermogen =
+              states('sensor.zendure_2400_ac_vermogen_aansturing') | float(0)
+              %} {% set vertraging =
+              states('input_number.zendure_2400_ac_moduswissel_vertraging') |
+              int(45) %} {% set aanvraag_sinds =
+              as_timestamp(states('input_datetime.zendure_2400_ac_moduswissel_aangevraagd_sinds'),
+              0) %} {% set ontladen_vrij =
+              is_state('input_text.zendure_2400_ac_moduswissel_aanvraag',
+              'Ontladen') and aanvraag_sinds > 0 and (as_timestamp(now()) -
+              aanvraag_sinds) >= vertraging %} {{ (-30 < vermogen < 30) or
+              ontladen_vrij }}
           - alias: Na elke moduswissel pas na ingestelde vertraging ontladen
             condition: or
             conditions:
@@ -1273,10 +1291,22 @@ actions:
             value_template: |2-
                     {{ states('sensor.zendure_2400_ac_laadpercentage') | float(0) < 
                        states('sensor.zendure_2400_ac_maximale_laadpercentage') | float(0) }}
-          - condition: numeric_state
-            entity_id: sensor.zendure_2400_ac_vermogen_aansturing
-            above: -30
-            below: 30
+          - alias: >-
+              Batterijvermogen is laag of de gevraagde laadmodus wacht lang
+              genoeg
+            condition: template
+            value_template: >-
+              {% set vermogen =
+              states('sensor.zendure_2400_ac_vermogen_aansturing') | float(0)
+              %} {% set vertraging =
+              states('input_number.zendure_2400_ac_moduswissel_vertraging') |
+              int(45) %} {% set aanvraag_sinds =
+              as_timestamp(states('input_datetime.zendure_2400_ac_moduswissel_aangevraagd_sinds'),
+              0) %} {% set opladen_vrij =
+              is_state('input_text.zendure_2400_ac_moduswissel_aanvraag',
+              'Opladen') and aanvraag_sinds > 0 and (as_timestamp(now()) -
+              aanvraag_sinds) >= vertraging %} {{ (-30 < vermogen < 30) or
+              opladen_vrij }}
           - condition: or
             conditions:
               - condition: state
