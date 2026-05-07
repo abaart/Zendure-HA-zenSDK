@@ -2662,8 +2662,10 @@ views:
 
 
               Bij **Moduswissel Vertraging⚙️** stel je in hoeveel seconden de
-              Zendure na iedere moduswissel wacht voordat opladen of ontladen
-              mag starten.
+              vraag naar opladen of ontladen aanwezig moet blijven voordat de
+              Zendure van modus wisselt. Dit voorkomt dat korte verbruikspieken,
+              bijvoorbeeld van een Quooker, veel relais-schakelingen
+              veroorzaken.
 
 
               Wil je niet te veel gedoe neem dan in eerste instantie de **Advies

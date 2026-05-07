@@ -96,6 +96,18 @@ input_text:
     max: 250
     mode: text
 
+  zendure_2400_ac_moduswissel_aanvraag:
+    name: Zendure 2400 AC Moduswissel Aanvraag
+    icon: mdi:swap-horizontal
+    max: 20
+    mode: text
+
+input_datetime:
+  zendure_2400_ac_moduswissel_aangevraagd_sinds:
+    name: Zendure 2400 AC Moduswissel Aangevraagd Sinds
+    has_date: true
+    has_time: true
+
 input_number:
   zendure_2400_ac_max_oplaadvermogen:
     name: Zendure 2400 AC Max. Oplaadvermogen
