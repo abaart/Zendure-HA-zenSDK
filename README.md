@@ -5,6 +5,15 @@
 [![Open Issues](https://img.shields.io/github/issues/Gielz1986/Zendure-HA-zenSDK?style=for-the-badge&label=Issues&labelColor=029c7b&color=0d2e2b)](https://github.com/Gielz1986/Zendure-HA-zenSDK/issues)
 [![Issue SLA](https://img.shields.io/badge/Average%20Resolution%20Time-~7%20Days-brightgreen?style=for-the-badge&labelColor=029c7b&color=0d2e2b)](https://github.com/Gielz1986/Zendure-HA-zenSDK/issues)
 
+## Differences in this fork
+
+This fork keeps a few local changes compared with `Gielz1986/Zendure-HA-zenSDK`:
+
+- `dynamic_setting_minimal_spread` uses an absolute spread in `ct/kWh`, not a percentage.
+- `sensor.dynamic_spread_indication`, `sensor.dynamic_spread_indication_dsc`, `sensor.dynamic_spread_indication_tomorrow`, and `sensor.dynamic_spread_indication_dsc_tomorrow` calculate spread with `(average highest price - average lowest price) * 100`, so the sensor value matches `unit_of_measurement: "ct/kWh"`.
+- The Dutch automation waits 45 seconds after charging before discharging starts. This change is in `Dutch (NL) Integration/automation_nl.yaml`.
+- `.DS_Store` files are ignored with `.gitignore`, so macOS metadata files stay out of commits.
+
 ![Preview](Images/Global-Dashboard-300326.gif) <br>
 <sub>
 <a href="https://github.com/Gielz1986/Zendure-HA-zenSDK/wiki/Global-%E2%80%90-Available-entities">
@@ -16,7 +25,7 @@ Go to the explanation of all entities and the dashboard
 
 **Get your battery running locally in Home Assistant in just 2️⃣ simple steps.**
 
-Based on the zenSDK RESTful API for Home Assistant. This package connects locally to one Zendure Solarflow 2400 (AC, AC+ or AC Pro) / Zendure Solarflow 1600 AC+ / Zendure Solarflow 800 (Pro or Plus). Perfect for anyone who wants to run their battery **100% local** in Home Assistant.
+Based on the zenSDK RESTful API for Home Assistant. This package connects locally to one Zendure Solarflow 2400 (AC, AC+ or AC Pro) / Zendure Solarflow 1600 AC+ / Zendure Solarflow 800 (Pro(2) or Plus) / Zendure Solarflow 3000 Mix AC+ / Zendure Solarflow 4000 Mix (AC+ or Pro). Perfect for anyone who wants to run their battery **100% local** in Home Assistant.
 
 There are now **11 preconfigured modes** — from relaxed solar-based usage to acting like an energy trader with dynamic pricing for a few extra cents.
 
@@ -35,7 +44,7 @@ Buy me a coffee ☕️ and follow this GitHub repository ⭐⭐⭐.
 #### ℹ️ Required Hardware
 
 - Homewizard P1 (or another home energy meter that provides per-second data (+watt import / -watt export)).
-- One Solarflow 2400 (AC, AC+ or AC Pro) / Solarflow 1600 AC+ / Solarflow 800 (Pro or Plus).
+- One Solarflow 2400 (AC, AC+ or AC Pro) / Solarflow 1600 AC+ / Solarflow 800 (Pro(2) or Plus) / Solarflow 3000 Mix AC+ / Solarflow 4000 Mix (AC+ or Pro).
 - Or two identical inverters combined with the [Node-RED proxy by Gast777](https://github.com/gast777/Zendure-zenSDK-proxy)
 
 ---
@@ -60,7 +69,7 @@ homeassistant:
 
 ---
 
-![Preview](Images/Global-Settings-110426b.png)  
+![Preview](Images/Global-Settings-060526.png)  
 <sub>*plug-n-play dashboard*</sub>
 
 <br>
@@ -68,29 +77,33 @@ homeassistant:
 | Explanation per configuration item | |
 |-|-|
 | **Configuration (Basic)** | **Information** |
-| `zendure_setting_ip_address` | **e.g. 192.168.0.172** – Found in the Zendure app under device information |
+| `zendure_setting_ip_address` | **e.g. 192.168.0.172** – Found in the Zendure app under device information. |
 | `homewizard_setting_p1_ip_address` | **e.g. 192.168.0.192** – Enable local API in the Homewizard app |
-| `zendure_setting_standby_delay` | **(Recommended: 15 minutes) 5–30 minutes** – Defines how quickly the inverter goes into full standby at 0 activity. Prevents ~19W idle consumption |
-| `zendure_setting_set_default_settings` | Once the battery is running, you can use this to apply the recommended settings below |
+| `zendure_setting_standby_delay` | **(Recommended: 15 minutes) 5–30 minutes** – Defines how quickly the inverter goes into full standby at 0 activity. Prevents ~19W idle consumption. |
+| `zendure_setting_set_default_settings` | Once the battery is running, you can use this to apply the recommended settings below. |
 | **Configuration (Charging)** | **Information** |
-| `zendure_setting_max_charge_power` | **800–2400W** – Maximum charging power (up to 4800W with multiple inverters via Node-RED) |
-| `zendure_setting_start_charging_at` | **(Recommended: -300W) -1000 to -100W** – Defines when charging starts |
-| `zendure_setting_charge_buffer` | **(Recommended: 50W) 0–250W** – Determines how much less to include during charging. In summer you can increase this (e.g. 200W) to prevent daytime grid import |
+| `zendure_setting_max_charge_power` | **400–2400W** – Maximum charging power (up to 7200W with multiple inverters via Node-RED). |
+| `zendure_setting_start_charging_at` | **(Recommended: -300W) -1000 to -80W** – Defines when charging starts. |
+| `zendure_setting_charge_buffer` | **(Recommended: 50W) 0–250W** – Determines how much less to include during charging. In summer you can increase this (e.g. 200W) to prevent daytime grid import. |
 | **Configuration (Discharging)** | **Information** |
-| `zendure_setting_max_discharge_power` | **800–2400W** – Maximum discharge power (up to 4800W with multiple inverters via Node-RED) |
-| `zendure_setting_start_discharging_at` | **(Recommended: 100W) 100–500W** – Defines when discharging starts |
-| `zendure_setting_discharge_buffer` | **(Recommended: 5W) 0–250W** – Extra margin for discharging |
+| `zendure_setting_max_discharge_power` | **400–2400W** – Maximum discharge power (up to 7200W with multiple inverters via Node-RED). |
+| `zendure_setting_start_discharging_at` | **(Recommended: 100W) 80–500W** – Defines when discharging starts. |
+| `zendure_setting_discharge_buffer` | **(Recommended: 5W) 0–250W** – Extra margin for discharging. |
+| **Configuration (State Of Charge)** |**Information**|  
+| `zendure_setting_soc_protection_disabled`    | Check this to disable the dual SOC protection. When the battery drops below the minimum allowed charge percentage, it will no longer automatically recharge. It will wait until the BMS (Battery Management System) takes action. |  
+| `zendure_setting_minimum_allowed_state_of_charge` | **(Recommended: 10%) 5% to 50%** – Set the minimum allowed state of charge percentage here. | 
+| `zendure_setting_maximum_allowed_state_of_charge` | **(Recommended: 100%) 70% to 100%** – Set the maximum allowed state of charge percentage here. At 100%, an SOC calibration is performed to accurately estimate the state of charge level. | 
 | **Configuration (Optional)** | **Information** |
 | `home_energy_setting_meter_sensor` | **e.g. sensor.custom_energy** – Add your own home energy sensor (+watt import / -watt export). This will take priority. [Go to WIKI](https://github.com/Gielz1986/Zendure-HA-zenSDK/wiki/Global-and-NL-%E2%80%90-P1-CT-meters-(API's))) for P1/CT API's. |
-| `zendure_setting_battery_order` | **e.g. 1;5;3;4;2** – Manually define battery order based on serial numbers and physical stacking |
+| `zendure_setting_battery_order` | **e.g. 1;5;3;4;2** – Manually define battery order based on serial numbers and physical stacking. |
 | **Configuration (Dynamic)** | **Information** |
-| `dynamic_setting_nordpool_sensor` | **e.g. sensor.nordpool_kwh_nl_eur_3_09_0** – Your Nordpool (HACS) sensor |
-| `dynamic_setting_minimal_spread` | **e.g. 25%** – Minimum price spread before dynamic charging/discharging activates |
-| `dynamic_setting_15_minute_interval` | Enable this if you want to use 15-minute intervals |
+| `dynamic_setting_nordpool_sensor` | **e.g. sensor.nordpool_kwh_nl_eur_3_09_0** – Your Nordpool (HACS) sensor. |
+| `dynamic_setting_minimal_spread` | **e.g. 25 ct/kWh** – Minimum price spread in ct/kWh before dynamic charging/discharging activates. |
+| `dynamic_setting_15_minute_interval` | Enable this if you want to use 15-minute intervals. |
 | **Configuration (Dashboard)** | **Information** |
-| `dashboard_setting_show_help` | Enable to show help text on the dashboard |
-| `dashboard_setting_show_pv` | Enable to show connected (offgrid/mppt) PV on the dashboard |
-| `dashboard_setting_show_dynamic` | Enable to show dynamic control on the dashboard |
+| `dashboard_setting_show_help` | Enable to show help text on the dashboard. |
+| `dashboard_setting_show_pv` | Enable to show connected (offgrid/mppt) PV on the dashboard. |
+| `dashboard_setting_show_dynamic` | Enable to show dynamic control on the dashboard. |
 
 ---
 
