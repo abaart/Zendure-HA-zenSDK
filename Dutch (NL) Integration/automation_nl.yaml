@@ -545,12 +545,18 @@ actions:
               entity_id: input_number.zendure_2400_ac_moduswissel_vertraging
             data:
               value: 45
+          - action: input_number.set_value
+            metadata: {}
+            target:
+              entity_id: input_number.zendure_2400_ac_minimaal_vermogen_tijdens_moduswissel
+            data:
+              value: 30
           - action: logbook.log
             data:
               message: >-
                 ⚙️Advies instellingen overnemen — Standby vertraging ingesteld
-                op 15 minuten en moduswissel vertraging ingesteld op 45 seconden
-                — 
+                op 15 minuten, moduswissel vertraging ingesteld op 45 seconden
+                en minimaal vermogen tijdens moduswissel ingesteld op 30 watt — 
               entity_id: input_select.zendure_2400_ac_modus_selecteren
               name: " "
           - action: input_number.set_value
@@ -1168,7 +1174,9 @@ actions:
                 0) %} {% set wacht_op_opladen =
                 is_state('input_text.zendure_2400_ac_moduswissel_aanvraag',
                 'Opladen') and aanvraag_sinds > 0 and (as_timestamp(now()) -
-                aanvraag_sinds) < vertraging %} {{ ([beperkt, 30] | max if
+                aanvraag_sinds) < vertraging %} {% set minimaal =
+                states('input_number.zendure_2400_ac_minimaal_vermogen_tijdens_moduswissel')
+                | float(30) %} {{ ([beperkt, minimaal] | max if
                 wacht_op_opladen else beperkt) | int }}
             action: rest_command.zendure_x_ontladen_balanceren
           - action: logbook.log
@@ -1295,7 +1303,9 @@ actions:
                 0) %} {% set wacht_op_ontladen =
                 is_state('input_text.zendure_2400_ac_moduswissel_aanvraag',
                 'Ontladen') and aanvraag_sinds > 0 and (as_timestamp(now()) -
-                aanvraag_sinds) < vertraging %} {{ ([beperkt, 30] | max if
+                aanvraag_sinds) < vertraging %} {% set minimaal =
+                states('input_number.zendure_2400_ac_minimaal_vermogen_tijdens_moduswissel')
+                | float(30) %} {{ ([beperkt, minimaal] | max if
                 wacht_op_ontladen else beperkt) | int }}
             action: rest_command.zendure_x_laden
           - action: logbook.log
@@ -1411,7 +1421,9 @@ actions:
                 0) %} {% set wacht_op_ontladen =
                 is_state('input_text.zendure_2400_ac_moduswissel_aanvraag',
                 'Ontladen') and aanvraag_sinds > 0 and (as_timestamp(now()) -
-                aanvraag_sinds) < vertraging %} {{ ([beperkt, 30] | max if
+                aanvraag_sinds) < vertraging %} {% set minimaal =
+                states('input_number.zendure_2400_ac_minimaal_vermogen_tijdens_moduswissel')
+                | float(30) %} {{ ([beperkt, minimaal] | max if
                 wacht_op_ontladen else beperkt) | int }}
             action: rest_command.zendure_x_laden_balanceren
           - action: logbook.log

@@ -163,6 +163,15 @@ input_number:
     mode: box
     unit_of_measurement: "s"
 
+  zendure_2400_ac_minimaal_vermogen_tijdens_moduswissel:
+    name: Zendure 2400 AC Minimaal Vermogen Tijdens Moduswissel
+    icon: mdi:flash-outline
+    min: 0
+    max: 250
+    step: 1
+    mode: box
+    unit_of_measurement: "W"
+
   zendure_2400_ac_oplaadmarge:
     name: Zendure 2400 AC Oplaadmarge
     icon: mdi:arrow-expand-vertical

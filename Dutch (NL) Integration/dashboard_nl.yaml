@@ -2668,6 +2668,11 @@ views:
               veroorzaken.
 
 
+              Bij **Min. Vermogen Tijdens Moduswissel⚙️** stel je in met welk
+              minimaal laad- of ontlaadvermogen de oude modus actief blijft
+              tijdens de wachttijd.
+
+
               Wil je niet te veel gedoe neem dan in eerste instantie de **Advies
               Instellingen⚙️** voor het gedrag in één keer over. Pas het daarna
               na eigen smaak aan.
@@ -2748,6 +2753,8 @@ views:
                 name: Ontladen Starten Bij
               - entity: input_number.zendure_2400_ac_moduswissel_vertraging
                 name: Moduswissel Vertraging
+              - entity: input_number.zendure_2400_ac_minimaal_vermogen_tijdens_moduswissel
+                name: Min. Vermogen Tijdens Moduswissel
               - entity: input_number.zendure_2400_ac_ontlaadmarge
                 name: Ontlaadmarge
       - type: grid

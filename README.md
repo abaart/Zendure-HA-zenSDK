@@ -10,6 +10,7 @@ Deze fork behoudt een paar lokale wijzigingen ten opzichte van `Gielz1986/Zendur
 - `dynamisch_minimale_spread` gebruikt een absolute spread in `ct/kWh`, geen percentage.
 - `sensor.dynamisch_spread_indicatie`, `sensor.dynamisch_spread_indicatie_nom`, `sensor.dynamisch_spread_indicatie_morgen`, en `sensor.dynamisch_spread_indicatie_nom_morgen` berekenen spread met `(gemiddelde dure prijs - gemiddelde goedkope prijs) * 100`, zodat de sensorwaarde past bij `unit_of_measurement: "ct/kWh"`.
 - `zendure_2400_ac_moduswissel_vertraging` bepaalt hoeveel seconden dezelfde vraag naar opladen of ontladen aanwezig moet blijven voordat de automatisering van modus wisselt. De advieswaarde is 45 seconden. Dit voorkomt dat korte verbruikspieken, bijvoorbeeld van een Quooker, veel relais-schakelingen veroorzaken.
+- `zendure_2400_ac_minimaal_vermogen_tijdens_moduswissel` bepaalt met welk minimaal vermogen de oude modus actief blijft tijdens de wachttijd voor een moduswissel. De advieswaarde is 30 watt.
 - `input_text.zendure_2400_ac_moduswissel_aanvraag` bewaart de gevraagde richting en `input_datetime.zendure_2400_ac_moduswissel_aangevraagd_sinds` bewaart sinds wanneer dezelfde richting wordt gevraagd.
 - `.DS_Store` bestanden worden genegeerd met `.gitignore`, zodat macOS metadata-bestanden buiten commits blijven.
 
@@ -88,6 +89,7 @@ homeassistant:
 | `zendure_2400_ac_max_ontlaadvermogen`    | **400 t/m 2400 watt** – Geef hier aan met hoeveel vermogen hij maximaal mag ontladen. Bij meerdere omvormers via Node-RED kan dit tot 7200 watt. |  
 | `zendure_2400_ac_ontladen_starten_bij` | **(Instellingsadvies: 100 watt) 80 t/m 500 watt** – hier geef je aan wanneer de batterij exact begint met ontladen. Daarna balanceert de batterij naar 0 - de extra ontlaadmarge. | 
 | `zendure_2400_ac_moduswissel_vertraging` | **(Instellingsadvies: 45 seconden) 0 t/m 300 seconden** – Hiermee geef je aan hoe lang dezelfde vraag naar opladen of ontladen aanwezig moet blijven voordat de automatisering van modus wisselt. Dit voorkomt dat korte verbruikspieken, bijvoorbeeld van een Quooker, veel relais-schakelingen veroorzaken. |
+| `zendure_2400_ac_minimaal_vermogen_tijdens_moduswissel` | **(Instellingsadvies: 30 watt) 0 t/m 250 watt** – Hiermee geef je aan met welk minimaal laad- of ontlaadvermogen de oude modus actief blijft tijdens de wachttijd voor een moduswissel. |
 | `zendure_2400_ac_ontlaadmarge` | **(Instellingsadvies: 5 watt) 0 t/m 250 watt** – Geef hier aan hoeveel je extra wilt meenemen tijdens ontladen. Als je wat meer wilt ontladen dan noodzakelijk is. |
 | **Configuratie (Laadpercentage)** |**Informatie**|  
 | `zendure_2400_ac_soc_bescherming_uitgeschakeld`    | Vink dit aan om de dubbele SOC bescherming uit te schakelen. Wanneer de batterij onder het minimaal toegestaan laadpercentage zakt zal er niet meer automatisch bijgeladen worden. Er word gewacht tot de BMS (batterij management systeem) zelf actie onderneemt. |  
