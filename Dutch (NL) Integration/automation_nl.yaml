@@ -848,7 +848,7 @@ actions:
             entity_id: sensor.zendure_2400_ac_vermogen_aansturing
             above: -30
             below: 30
-          - alias: Minstens 2 automatiseringen na opladen pas activeren
+          - alias: Na opladen pas na 45 seconden ontladen
             condition: or
             conditions:
               - condition: state
@@ -857,7 +857,7 @@ actions:
                 for:
                   hours: 0
                   minutes: 0
-                  seconds: 9
+                  seconds: 45
               - condition: state
                 entity_id: sensor.zendure_2400_ac_modus
                 state: Ontladen
