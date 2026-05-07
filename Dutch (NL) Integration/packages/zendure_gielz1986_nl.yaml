@@ -424,11 +424,11 @@ template:
         unique_id: zendure_2400_ac_moduswissel_aangevraagd_sinds
         icon: mdi:clock-start
         state: >-
-          {% set aanvraag = states('input_datetime.zendure_2400_ac_moduswissel_aangevraagd_sinds') %}
-          {% if aanvraag in ['unknown', 'unavailable', ''] %}
-            Nog niet aangevraagd
+          {% set status = states('sensor.zendure_2400_ac_moduswissel_status') %}
+          {% if status in ['Wacht op ontladen', 'Wacht op opladen'] %}
+            {{ as_local(states.sensor.zendure_2400_ac_moduswissel_status.last_changed).strftime('%d-%m-%Y %H:%M:%S') }}
           {% else %}
-            {{ as_local(as_datetime(aanvraag)).strftime('%d-%m-%Y %H:%M:%S') }}
+            Nog niet aangevraagd
           {% endif %}
 
       - name: "Zendure 2400 AC Laatste Kalibratie (Dagen)"
