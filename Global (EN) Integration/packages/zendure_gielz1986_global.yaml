@@ -142,6 +142,15 @@ input_number:
     mode: box
     unit_of_measurement: "Min"
 
+  zendure_setting_discharge_after_charge_delay:
+    name: Zendure Discharge After Charge Delay
+    icon: mdi:timer-outline
+    min: 0
+    max: 300
+    step: 1
+    mode: box
+    unit_of_measurement: "s"
+
   zendure_setting_charge_buffer:
     name: Zendure Charge Buffer
     icon: mdi:arrow-expand-vertical

@@ -11,7 +11,7 @@ This fork keeps a few local changes compared with `Gielz1986/Zendure-HA-zenSDK`:
 
 - `dynamic_setting_minimal_spread` uses an absolute spread in `ct/kWh`, not a percentage.
 - `sensor.dynamic_spread_indication`, `sensor.dynamic_spread_indication_dsc`, `sensor.dynamic_spread_indication_tomorrow`, and `sensor.dynamic_spread_indication_dsc_tomorrow` calculate spread with `(average highest price - average lowest price) * 100`, so the sensor value matches `unit_of_measurement: "ct/kWh"`.
-- The Dutch automation waits 45 seconds after charging before discharging starts. This change is in `Dutch (NL) Integration/automation_nl.yaml`.
+- `zendure_setting_discharge_after_charge_delay` controls how many seconds the automation waits after charging before discharging starts. The recommended value is 45 seconds.
 - `.DS_Store` files are ignored with `.gitignore`, so macOS metadata files stay out of commits.
 
 ![Preview](Images/Global-Dashboard-300326.gif) <br>
@@ -88,6 +88,7 @@ homeassistant:
 | **Configuration (Discharging)** | **Information** |
 | `zendure_setting_max_discharge_power` | **400–2400W** – Maximum discharge power (up to 7200W with multiple inverters via Node-RED). |
 | `zendure_setting_start_discharging_at` | **(Recommended: 100W) 80–500W** – Defines when discharging starts. |
+| `zendure_setting_discharge_after_charge_delay` | **(Recommended: 45 seconds) 0–300 seconds** – Defines how long the automation waits after charging before discharging may start. |
 | `zendure_setting_discharge_buffer` | **(Recommended: 5W) 0–250W** – Extra margin for discharging. |
 | **Configuration (State Of Charge)** |**Information**|  
 | `zendure_setting_soc_protection_disabled`    | Check this to disable the dual SOC protection. When the battery drops below the minimum allowed charge percentage, it will no longer automatically recharge. It will wait until the BMS (Battery Management System) takes action. |  

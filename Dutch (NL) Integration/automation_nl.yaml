@@ -518,11 +518,18 @@ actions:
               entity_id: input_number.zendure_2400_ac_standby_vertraging
             data:
               value: 15
+          - action: input_number.set_value
+            metadata: {}
+            target:
+              entity_id: input_number.zendure_2400_ac_ontladen_na_opladen_vertraging
+            data:
+              value: 45
           - action: logbook.log
             data:
               message: >-
                 ⚙️Advies instellingen overnemen — Standby vertraging ingesteld
-                op 15 minuten — 
+                op 15 minuten en ontladen na opladen vertraging ingesteld op 45
+                seconden — 
               entity_id: input_select.zendure_2400_ac_modus_selecteren
               name: " "
           - action: input_number.set_value
@@ -848,16 +855,17 @@ actions:
             entity_id: sensor.zendure_2400_ac_vermogen_aansturing
             above: -30
             below: 30
-          - alias: Na opladen pas na 45 seconden ontladen
+          - alias: Na opladen pas na ingestelde vertraging ontladen
             condition: or
             conditions:
-              - condition: state
-                entity_id: sensor.zendure_2400_ac_modus
-                state: Opladen
-                for:
-                  hours: 0
-                  minutes: 0
-                  seconds: 45
+              - condition: template
+                value_template: >-
+                  {% set vertraging =
+                  states('input_number.zendure_2400_ac_ontladen_na_opladen_vertraging')
+                  | int(45) %} {{ is_state('sensor.zendure_2400_ac_modus',
+                  'Opladen') and (as_timestamp(now()) -
+                  as_timestamp(states.sensor.zendure_2400_ac_modus.last_changed))
+                  >= vertraging }}
               - condition: state
                 entity_id: sensor.zendure_2400_ac_modus
                 state: Ontladen

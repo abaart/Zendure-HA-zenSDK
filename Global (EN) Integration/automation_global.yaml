@@ -515,9 +515,15 @@ actions:
               entity_id: input_number.zendure_setting_standby_delay
             data:
               value: 15
+          - action: input_number.set_value
+            metadata: {}
+            target:
+              entity_id: input_number.zendure_setting_discharge_after_charge_delay
+            data:
+              value: 45
           - action: logbook.log
             data:
-              message: "⚙️Set recommended settings — Standby delay set to 15 minutes — "
+              message: "⚙️Set recommended settings — Standby delay set to 15 minutes and discharge after charge delay set to 45 seconds — "
               entity_id: input_select.zendure_operation_mode
               name: " "
           - action: input_number.set_value
@@ -837,16 +843,17 @@ actions:
             entity_id: sensor.zendure_power
             above: -30
             below: 30
-          - alias: Minstens 2 automatiseringen na opladen pas activeren
+          - alias: Discharge only after the configured delay after charging
             condition: or
             conditions:
-              - condition: state
-                entity_id: sensor.zendure_charging_mode
-                state: Charging
-                for:
-                  hours: 0
-                  minutes: 0
-                  seconds: 9
+              - condition: template
+                value_template: >-
+                  {% set delay =
+                  states('input_number.zendure_setting_discharge_after_charge_delay')
+                  | int(45) %} {{ is_state('sensor.zendure_charging_mode',
+                  'Charging') and (as_timestamp(now()) -
+                  as_timestamp(states.sensor.zendure_charging_mode.last_changed))
+                  >= delay }}
               - condition: state
                 entity_id: sensor.zendure_charging_mode
                 state: Discharging

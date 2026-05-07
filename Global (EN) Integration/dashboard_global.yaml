@@ -2657,6 +2657,9 @@ views:
               active task, it will go fully into standby after the set period.
               The consumption is then approximately 0.2 kWh per day.
 
+              **Discharge After Charge Delay⚙️** sets how many seconds the
+              Zendure waits after charging before discharging may start.
+
               If you don’t want too much hassle, initially adopt the **Set
               Default Settings⚙️** for the behavior all at once. Afterwards,
               adjust them to your own preference.
@@ -2733,6 +2736,8 @@ views:
                 name: Max Discharge Power
               - entity: input_number.zendure_setting_start_discharging_at
                 name: Start Discharge At
+              - entity: input_number.zendure_setting_discharge_after_charge_delay
+                name: Discharge After Charge Delay
               - entity: input_number.zendure_setting_discharge_buffer
                 name: Discharge Buffer
       - type: grid
