@@ -2135,7 +2135,7 @@ actions:
               'slots') | default([]) %}
               {% set actie = namespace(val='rust') %}
               {% for s in slots %}
-                {% if as_datetime(s.start) <= now() and now() < as_datetime(s.end) %}
+                {% if as_timestamp(s.start) <= as_timestamp(now()) < as_timestamp(s.end) %}
                   {% set actie.val = s.actie %}
                 {% endif %}
               {% endfor %}
@@ -2161,7 +2161,7 @@ actions:
                 'slots') | default([]) %}
                 {% set vermogen = namespace(val=states('input_number.zendure_2400_ac_max_oplaadvermogen') | int) %}
                 {% for s in slots %}
-                  {% if as_datetime(s.start) <= now() and now() < as_datetime(s.end) %}
+                  {% if as_timestamp(s.start) <= as_timestamp(now()) < as_timestamp(s.end) %}
                     {% set vermogen.val = s.vermogen_w | int %}
                   {% endif %}
                 {% endfor %}
@@ -2174,7 +2174,7 @@ actions:
                 'slots') | default([]) %}
                 {% set vermogen = namespace(val=0) %}
                 {% for s in slots %}
-                  {% if as_datetime(s.start) <= now() and now() < as_datetime(s.end) %}
+                  {% if as_timestamp(s.start) <= as_timestamp(now()) < as_timestamp(s.end) %}
                     {% set vermogen.val = s.vermogen_w | int %}
                   {% endif %}
                 {% endfor %}
@@ -2189,7 +2189,7 @@ actions:
                   'slots') | default([]) %}
                   {% set actie = namespace(val='rust') %}
                   {% for s in slots %}
-                    {% if as_datetime(s.start) <= now() and now() < as_datetime(s.end) %}
+                    {% if as_timestamp(s.start) <= as_timestamp(now()) < as_timestamp(s.end) %}
                       {% set actie.val = s.actie %}
                     {% endif %}
                   {% endfor %}
@@ -2242,7 +2242,7 @@ actions:
               'slots') | default([]) %}
               {% set actie = namespace(val='rust') %}
               {% for s in slots %}
-                {% if as_datetime(s.start) <= now() and now() < as_datetime(s.end) %}
+                {% if as_timestamp(s.start) <= as_timestamp(now()) < as_timestamp(s.end) %}
                   {% set actie.val = s.actie %}
                 {% endif %}
               {% endfor %}
@@ -2268,7 +2268,7 @@ actions:
                 'slots') | default([]) %}
                 {% set vermogen = namespace(val=states('input_number.zendure_2400_ac_max_ontlaadvermogen') | int) %}
                 {% for s in slots %}
-                  {% if as_datetime(s.start) <= now() and now() < as_datetime(s.end) %}
+                  {% if as_timestamp(s.start) <= as_timestamp(now()) < as_timestamp(s.end) %}
                     {% set vermogen.val = s.vermogen_w | int %}
                   {% endif %}
                 {% endfor %}
@@ -2281,7 +2281,7 @@ actions:
                 'slots') | default([]) %}
                 {% set vermogen = namespace(val=0) %}
                 {% for s in slots %}
-                  {% if as_datetime(s.start) <= now() and now() < as_datetime(s.end) %}
+                  {% if as_timestamp(s.start) <= as_timestamp(now()) < as_timestamp(s.end) %}
                     {% set vermogen.val = s.vermogen_w | int %}
                   {% endif %}
                 {% endfor %}
@@ -2296,7 +2296,7 @@ actions:
                   'slots') | default([]) %}
                   {% set actie = namespace(val='rust') %}
                   {% for s in slots %}
-                    {% if as_datetime(s.start) <= now() and now() < as_datetime(s.end) %}
+                    {% if as_timestamp(s.start) <= as_timestamp(now()) < as_timestamp(s.end) %}
                       {% set actie.val = s.actie %}
                     {% endif %}
                   {% endfor %}
