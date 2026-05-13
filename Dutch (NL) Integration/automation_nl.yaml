@@ -773,6 +773,11 @@ actions:
           - condition: trigger
             id:
               - aansturing_trigger
+          - condition: not
+            conditions:
+              - condition: state
+                entity_id: input_select.zendure_2400_ac_modus_selecteren
+                state: "Dynamisch Handelen (DP)"
           - condition: template
             value_template: >-
               {{ states('sensor.zendure_2400_ac_ingesteld_oplaadvermogen') |
@@ -816,6 +821,11 @@ actions:
           - condition: trigger
             id:
               - aansturing_trigger
+          - condition: not
+            conditions:
+              - condition: state
+                entity_id: input_select.zendure_2400_ac_modus_selecteren
+                state: "Dynamisch Handelen (DP)"
           - condition: template
             value_template: >-
               {{ states('sensor.zendure_2400_ac_ingesteld_ontlaadvermogen') |
