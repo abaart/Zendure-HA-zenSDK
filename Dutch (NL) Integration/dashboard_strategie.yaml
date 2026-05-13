@@ -1,0 +1,385 @@
+views:
+  - type: sections
+    max_columns: 3
+    title: Strategie
+    path: strategie
+    icon: mdi:cash-plus
+    sections:
+      - type: grid
+        cards:
+          - type: heading
+            heading: Dynamisch Handelen — Strategie
+            heading_style: title
+            badges:
+              - type: entity
+                show_state: true
+                show_icon: true
+                entity: sensor.dynamisch_handelsstrategie
+                color: '#01a180'
+                tap_action:
+                  action: more-info
+              - type: entity
+                show_state: true
+                show_icon: true
+                entity: sensor.zendure_2400_ac_laadpercentage
+                color: '#01a180'
+                tap_action:
+                  action: more-info
+
+          - type: custom:apexcharts-card
+            experimental:
+              color_threshold: true
+            cache: false
+            update_interval: 5min
+            header:
+              show: true
+              show_states: true
+              title: Geplande SoC en prijzen
+            graph_span: 48h
+            span:
+              start: hour
+            now:
+              show: true
+              label: Nu
+              color: '#ef5350'
+            series:
+              - entity: sensor.dynamisch_handelsstrategie
+                name: SoC
+                type: area
+                curve: stepline
+                color: '#01a180'
+                opacity: 0.2
+                stroke_width: 2
+                float_precision: 0
+                unit: '%'
+                yaxis_id: percentage
+                show:
+                  in_chart: true
+                  in_header: true
+                  in_legend: true
+                data_generator: |
+                  const slots = entity.attributes.slots || [];
+                  const pts = slots.map(s => [new Date(s.start).getTime(), s.soc_voor_pct]);
+                  if (slots.length) {
+                    const last = slots[slots.length - 1];
+                    pts.push([new Date(last.end).getTime(), last.soc_na_pct]);
+                  }
+                  return pts;
+              - entity: sensor.dynamisch_handelsstrategie
+                name: Prijs
+                type: line
+                curve: stepline
+                color: '#ff9800'
+                stroke_width: 2
+                float_precision: 1
+                unit: 'ct/kWh'
+                yaxis_id: prijs
+                show:
+                  in_chart: true
+                  in_header: true
+                  in_legend: true
+                data_generator: |
+                  return (entity.attributes.slots || []).map(s => [
+                    new Date(s.start).getTime(),
+                    s.prijs_ct
+                  ]);
+            apex_config:
+              tooltip:
+                x:
+                  format: 'dd-MM HH:mm'
+              xaxis:
+                labels:
+                  style:
+                    colors: >-
+                      color-mix(in srgb, var(--primary-text-color) 75%,
+                      transparent)
+                axisTicks:
+                  show: false
+                axisBorder:
+                  color: >-
+                    color-mix(in srgb, var(--divider-color) 50%,
+                    transparent)
+              yaxis:
+                - id: percentage
+                  seriesName: SoC
+                  min: 0
+                  max: 105
+                  decimalsInFloat: 0
+                  labels:
+                    style:
+                      colors: >-
+                        color-mix(in srgb, var(--primary-text-color) 75%,
+                        transparent)
+                    formatter: |
+                      EVAL:function(v) { return v.toFixed(0) + ' %' }
+                - id: prijs
+                  seriesName: Prijs
+                  opposite: true
+                  decimalsInFloat: 0
+                  labels:
+                    style:
+                      colors: >-
+                        color-mix(in srgb, var(--primary-text-color) 75%,
+                        transparent)
+                    formatter: |
+                      EVAL:function(v) { return v.toFixed(0) + ' ct' }
+              grid:
+                strokeDashArray: 0
+                borderColor: >-
+                  color-mix(in srgb, var(--divider-color) 50%,
+                  transparent)
+                show: true
+              chart:
+                height: 300px
+                toolbar:
+                  show: false
+                zoom:
+                  enabled: false
+              legend:
+                show: true
+                floating: true
+                horizontalAlign: left
+                offsetX: 25
+                offsetY: 17
+              markers:
+                size: 0
+                hover:
+                  size: 0
+
+          - type: custom:apexcharts-card
+            experimental:
+              hidden_by_default: true
+              color_threshold: true
+            cache: false
+            update_interval: 5min
+            header:
+              show: true
+              show_states: false
+              title: Geplande acties (groen = laden, oranje = ontladen)
+            graph_span: 48h
+            span:
+              start: hour
+            now:
+              show: true
+              label: Nu
+              color: '#ef5350'
+            series:
+              - entity: sensor.dynamisch_handelsstrategie
+                name: Vermogen
+                type: column
+                float_precision: 0
+                unit: 'W'
+                color_threshold:
+                  - value: -9999
+                    color: '#ff7043'
+                  - value: 0
+                    color: '#66bb6a'
+                data_generator: |
+                  return (entity.attributes.slots || []).map(s => [
+                    new Date(s.start).getTime(),
+                    s.actie === 'laden'    ?  s.vermogen_w :
+                    s.actie === 'ontladen' ? -s.vermogen_w :
+                    null
+                  ]);
+            apex_config:
+              tooltip:
+                x:
+                  format: 'dd-MM HH:mm'
+              xaxis:
+                labels:
+                  style:
+                    colors: >-
+                      color-mix(in srgb, var(--primary-text-color) 75%,
+                      transparent)
+                axisTicks:
+                  show: false
+                axisBorder:
+                  color: >-
+                    color-mix(in srgb, var(--divider-color) 50%,
+                    transparent)
+              yaxis:
+                decimalsInFloat: 0
+                labels:
+                  style:
+                    colors: >-
+                      color-mix(in srgb, var(--primary-text-color) 75%,
+                      transparent)
+                  formatter: |
+                    EVAL:function(v) { return Math.abs(v).toFixed(0) + ' W' }
+              grid:
+                strokeDashArray: 0
+                borderColor: >-
+                  color-mix(in srgb, var(--divider-color) 50%,
+                  transparent)
+                show: true
+              chart:
+                height: 220px
+                toolbar:
+                  show: false
+                zoom:
+                  enabled: false
+              legend:
+                show: false
+              markers:
+                size: 0
+                hover:
+                  size: 0
+
+          - type: custom:apexcharts-card
+            experimental:
+              hidden_by_default: true
+              color_threshold: true
+            cache: false
+            update_interval: 5min
+            header:
+              show: true
+              show_states: false
+              title: Verwachte winst per slot (groen = opbrengst, rood = kosten)
+            graph_span: 48h
+            span:
+              start: hour
+            now:
+              show: true
+              label: Nu
+              color: '#ef5350'
+            series:
+              - entity: sensor.dynamisch_handelsstrategie
+                name: Winst
+                type: column
+                float_precision: 2
+                unit: 'ct'
+                color_threshold:
+                  - value: -9999
+                    color: '#ef5350'
+                  - value: 0
+                    color: '#66bb6a'
+                data_generator: |
+                  return (entity.attributes.slots || []).map(s => [
+                    new Date(s.start).getTime(),
+                    s.winst_eur !== 0
+                      ? parseFloat((s.winst_eur * 100).toFixed(2))
+                      : null
+                  ]);
+            apex_config:
+              tooltip:
+                x:
+                  format: 'dd-MM HH:mm'
+              xaxis:
+                labels:
+                  style:
+                    colors: >-
+                      color-mix(in srgb, var(--primary-text-color) 75%,
+                      transparent)
+                axisTicks:
+                  show: false
+                axisBorder:
+                  color: >-
+                    color-mix(in srgb, var(--divider-color) 50%,
+                    transparent)
+              yaxis:
+                decimalsInFloat: 1
+                labels:
+                  style:
+                    colors: >-
+                      color-mix(in srgb, var(--primary-text-color) 75%,
+                      transparent)
+                  formatter: |
+                    EVAL:function(v) { return v.toFixed(1) + ' ct' }
+              grid:
+                strokeDashArray: 0
+                borderColor: >-
+                  color-mix(in srgb, var(--divider-color) 50%,
+                  transparent)
+                show: true
+              chart:
+                height: 200px
+                toolbar:
+                  show: false
+                zoom:
+                  enabled: false
+              legend:
+                show: false
+              markers:
+                size: 0
+                hover:
+                  size: 0
+
+      - type: grid
+        column_span: 1
+        cards:
+          - type: heading
+            heading: Status
+            heading_style: title
+
+          - type: entities
+            entities:
+              - entity: sensor.dynamisch_handelsstrategie
+                name: Verwachte winst (horizon)
+                icon: mdi:cash-plus
+              - type: attribute
+                entity: sensor.dynamisch_handelsstrategie
+                attribute: volgende_actie
+                name: Volgende actie
+                icon: mdi:calendar-arrow-right
+              - type: attribute
+                entity: sensor.dynamisch_handelsstrategie
+                attribute: volgende_start
+                name: Volgende actie om
+                icon: mdi:clock-outline
+              - type: attribute
+                entity: sensor.dynamisch_handelsstrategie
+                attribute: laad_slots
+                name: Geplande laadslots
+                icon: mdi:battery-charging
+              - type: attribute
+                entity: sensor.dynamisch_handelsstrategie
+                attribute: ontlaad_slots
+                name: Geplande ontlaadslots
+                icon: mdi:battery-arrow-down
+              - type: attribute
+                entity: sensor.dynamisch_handelsstrategie
+                attribute: accu_huidig_kwh
+                name: Accu huidig (kWh)
+                icon: mdi:battery-50
+              - type: attribute
+                entity: sensor.dynamisch_handelsstrategie
+                attribute: accu_max_kwh
+                name: Accu bruikbaar (kWh)
+                icon: mdi:battery
+              - type: attribute
+                entity: sensor.dynamisch_handelsstrategie
+                attribute: eta
+                name: Rendement (eta)
+                icon: mdi:percent
+              - type: attribute
+                entity: sensor.dynamisch_handelsstrategie
+                attribute: min_spread_ct
+                name: Minimale spread (ct/kWh)
+                icon: mdi:arrow-expand-vertical
+              - type: attribute
+                entity: sensor.dynamisch_handelsstrategie
+                attribute: bijgewerkt
+                name: Bijgewerkt
+                icon: mdi:clock-check
+            show_header_toggle: false
+            state_color: false
+
+          - type: heading
+            heading: Vergelijking huidige aansturing
+            heading_style: subtitle
+
+          - type: entities
+            entities:
+              - entity: sensor.dynamisch_goedkoopste_periode
+                name: Goedkoop nu (huidig)?
+                icon: mdi:battery-charging-outline
+              - entity: sensor.dynamisch_duurste_periode
+                name: Duur nu (huidig)?
+                icon: mdi:battery-arrow-down-outline
+              - type: attribute
+                entity: sensor.dynamisch_handelsstrategie
+                attribute: volgende_actie
+                name: Volgende actie (nieuw)
+                icon: mdi:new-box
+            show_header_toggle: false
+            state_color: true

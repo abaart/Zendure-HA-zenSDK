@@ -205,6 +205,18 @@ actions:
             id: modus_trigger
           - condition: state
             entity_id: input_select.zendure_2400_ac_modus_selecteren
+            state:
+              - Dynamisch Handelen (DP)
+        sequence:
+          - action: rest_command.zendure_stop_met_alles
+            data:
+              sn: "{{ states('sensor.zendure_2400_ac_serienummer') }}"
+        alias: Dynamisch Handelen (DP)
+      - conditions:
+          - condition: trigger
+            id: modus_trigger
+          - condition: state
+            entity_id: input_select.zendure_2400_ac_modus_selecteren
             state: Alleen slim opladen
         sequence:
           - action: rest_command.zendure_stop_met_alles
@@ -2087,4 +2099,218 @@ actions:
               entity_id: input_select.zendure_2400_ac_modus_selecteren
               name: " "
         alias: Dynamisch duur ontladen
+      - conditions:
+          - condition: trigger
+            id:
+              - aansturing_trigger
+          - condition: state
+            entity_id: input_select.zendure_2400_ac_modus_selecteren
+            state:
+              - Dynamisch Handelen (DP)
+          - condition: state
+            entity_id: sensor.zendure_2400_ac_soc_limiet_status
+            state:
+              - Normale werking
+              - Ontlaadlimiet bereikt
+              - unknown
+          - alias: SOC lager dan maximaal ingestelde SOC
+            condition: template
+            value_template: |
+              {{ states('sensor.zendure_2400_ac_laadpercentage') | float(0) <
+                 states('sensor.zendure_2400_ac_maximale_laadpercentage') | float(0) }}
+          - alias: Huidig slot is laden
+            condition: template
+            value_template: >
+              {% set slots = state_attr('sensor.dynamisch_handelsstrategie',
+              'slots') | default([]) %}
+              {% set actie = namespace(val='rust') %}
+              {% for s in slots %}
+                {% if as_datetime(s.start) <= now() and now() < as_datetime(s.end) %}
+                  {% set actie.val = s.actie %}
+                {% endif %}
+              {% endfor %}
+              {{ actie.val == 'laden' }}
+          - condition: state
+            entity_id: input_boolean.dynamisch_laden_loopt
+            state:
+              - "off"
+        sequence:
+          - action: input_boolean.turn_on
+            data: {}
+            target:
+              entity_id:
+                - input_boolean.dynamisch_laden_loopt
+          - action: rest_command.zendure_opslaan_in_ram
+            data:
+              sn: "{{ states('sensor.zendure_2400_ac_serienummer') }}"
+          - action: rest_command.zendure_snel_laden
+            data:
+              sn: "{{ states('sensor.zendure_2400_ac_serienummer') }}"
+              inputLimit: >-
+                {% set slots = state_attr('sensor.dynamisch_handelsstrategie',
+                'slots') | default([]) %}
+                {% set vermogen = namespace(val=states('input_number.zendure_2400_ac_max_oplaadvermogen') | int) %}
+                {% for s in slots %}
+                  {% if as_datetime(s.start) <= now() and now() < as_datetime(s.end) %}
+                    {% set vermogen.val = s.vermogen_w | int %}
+                  {% endif %}
+                {% endfor %}
+                {{ vermogen.val }}
+          - action: logbook.log
+            data:
+              message: >-
+                💲DP laden gestart — gepland vermogen
+                {% set slots = state_attr('sensor.dynamisch_handelsstrategie',
+                'slots') | default([]) %}
+                {% set vermogen = namespace(val=0) %}
+                {% for s in slots %}
+                  {% if as_datetime(s.start) <= now() and now() < as_datetime(s.end) %}
+                    {% set vermogen.val = s.vermogen_w | int %}
+                  {% endif %}
+                {% endfor %}
+                {{ vermogen.val }} W —
+              entity_id: input_select.zendure_2400_ac_modus_selecteren
+              name: " "
+          - wait_for_trigger:
+              - alias: Huidig slot is niet meer laden
+                trigger: template
+                value_template: >
+                  {% set slots = state_attr('sensor.dynamisch_handelsstrategie',
+                  'slots') | default([]) %}
+                  {% set actie = namespace(val='rust') %}
+                  {% for s in slots %}
+                    {% if as_datetime(s.start) <= now() and now() < as_datetime(s.end) %}
+                      {% set actie.val = s.actie %}
+                    {% endif %}
+                  {% endfor %}
+                  {{ actie.val != 'laden' }}
+              - trigger: state
+                entity_id:
+                  - input_select.zendure_2400_ac_modus_selecteren
+              - trigger: state
+                entity_id:
+                  - input_number.dynamisch_minimale_spread
+            continue_on_timeout: false
+          - action: rest_command.zendure_stop_met_alles
+            data:
+              sn: "{{ states('sensor.zendure_2400_ac_serienummer') }}"
+          - action: input_boolean.turn_off
+            target:
+              entity_id:
+                - input_boolean.dynamisch_laden_loopt
+            data: {}
+          - action: logbook.log
+            data:
+              message: >-
+                💲DP laden voltooid —
+              entity_id: input_select.zendure_2400_ac_modus_selecteren
+              name: " "
+        alias: Dynamisch Handelen (DP) laden
+      - conditions:
+          - condition: trigger
+            id:
+              - aansturing_trigger
+          - condition: state
+            entity_id: input_select.zendure_2400_ac_modus_selecteren
+            state:
+              - Dynamisch Handelen (DP)
+          - condition: state
+            entity_id: sensor.zendure_2400_ac_soc_limiet_status
+            state:
+              - Normale werking
+              - Laadlimiet bereikt
+              - unknown
+          - alias: Tot de minimaal ingestelde SOC
+            condition: template
+            value_template: |
+              {{ states('sensor.zendure_2400_ac_laadpercentage') | float >
+                 states('sensor.zendure_2400_ac_minimale_laadpercentage') | float }}
+          - alias: Huidig slot is ontladen
+            condition: template
+            value_template: >
+              {% set slots = state_attr('sensor.dynamisch_handelsstrategie',
+              'slots') | default([]) %}
+              {% set actie = namespace(val='rust') %}
+              {% for s in slots %}
+                {% if as_datetime(s.start) <= now() and now() < as_datetime(s.end) %}
+                  {% set actie.val = s.actie %}
+                {% endif %}
+              {% endfor %}
+              {{ actie.val == 'ontladen' }}
+          - condition: state
+            entity_id: input_boolean.dynamisch_ontladen_loopt
+            state:
+              - "off"
+        sequence:
+          - action: input_boolean.turn_on
+            data: {}
+            target:
+              entity_id:
+                - input_boolean.dynamisch_ontladen_loopt
+          - action: rest_command.zendure_opslaan_in_ram
+            data:
+              sn: "{{ states('sensor.zendure_2400_ac_serienummer') }}"
+          - action: rest_command.zendure_snel_ontladen
+            data:
+              sn: "{{ states('sensor.zendure_2400_ac_serienummer') }}"
+              outputLimit: >-
+                {% set slots = state_attr('sensor.dynamisch_handelsstrategie',
+                'slots') | default([]) %}
+                {% set vermogen = namespace(val=states('input_number.zendure_2400_ac_max_ontlaadvermogen') | int) %}
+                {% for s in slots %}
+                  {% if as_datetime(s.start) <= now() and now() < as_datetime(s.end) %}
+                    {% set vermogen.val = s.vermogen_w | int %}
+                  {% endif %}
+                {% endfor %}
+                {{ vermogen.val }}
+          - action: logbook.log
+            data:
+              message: >-
+                💲DP ontladen gestart — gepland vermogen
+                {% set slots = state_attr('sensor.dynamisch_handelsstrategie',
+                'slots') | default([]) %}
+                {% set vermogen = namespace(val=0) %}
+                {% for s in slots %}
+                  {% if as_datetime(s.start) <= now() and now() < as_datetime(s.end) %}
+                    {% set vermogen.val = s.vermogen_w | int %}
+                  {% endif %}
+                {% endfor %}
+                {{ vermogen.val }} W —
+              entity_id: input_select.zendure_2400_ac_modus_selecteren
+              name: " "
+          - wait_for_trigger:
+              - alias: Huidig slot is niet meer ontladen
+                trigger: template
+                value_template: >
+                  {% set slots = state_attr('sensor.dynamisch_handelsstrategie',
+                  'slots') | default([]) %}
+                  {% set actie = namespace(val='rust') %}
+                  {% for s in slots %}
+                    {% if as_datetime(s.start) <= now() and now() < as_datetime(s.end) %}
+                      {% set actie.val = s.actie %}
+                    {% endif %}
+                  {% endfor %}
+                  {{ actie.val != 'ontladen' }}
+              - trigger: state
+                entity_id:
+                  - input_select.zendure_2400_ac_modus_selecteren
+              - trigger: state
+                entity_id:
+                  - input_number.dynamisch_minimale_spread
+            continue_on_timeout: false
+          - action: rest_command.zendure_stop_met_alles
+            data:
+              sn: "{{ states('sensor.zendure_2400_ac_serienummer') }}"
+          - action: input_boolean.turn_off
+            target:
+              entity_id:
+                - input_boolean.dynamisch_ontladen_loopt
+            data: {}
+          - action: logbook.log
+            data:
+              message: >-
+                💲DP ontladen voltooid —
+              entity_id: input_select.zendure_2400_ac_modus_selecteren
+              name: " "
+        alias: Dynamisch Handelen (DP) ontladen
 mode: parallel

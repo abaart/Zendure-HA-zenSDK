@@ -1,0 +1,3 @@
+dynamisch_handelen:
+  module: dynamisch_handelen
+  class: DynamischHandelen
