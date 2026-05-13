@@ -164,11 +164,12 @@ class DynamischHandelen(hass.Hass):
             if end <= nu:
                 continue
 
+            effectieve_start = max(start, nu)
             slots.append({
                 "start":      start,
                 "end":        end,
                 "price":      float(item["value"]),
-                "duration_h": (end - start).total_seconds() / 3600.0,
+                "duration_h": (end - effectieve_start).total_seconds() / 3600.0,
             })
 
         slots.sort(key=lambda s: s["start"])
