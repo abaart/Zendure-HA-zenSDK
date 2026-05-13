@@ -2127,7 +2127,11 @@ actions:
             entity_id: input_boolean.dynamisch_laden_loopt
             state:
               - "on"
-          - alias: Huidig slot is niet meer laden
+          - alias: >-
+              Huidig slot is niet meer laden — de actie is gewisseld naar rust of
+              ontladen, dus moeten we de Zendure stoppen. Als het volgende slot
+              ook laden is (maar met ander vermogen) valt dit NIET in deze branch
+              — dat wordt afgehandeld door de vermogen-bijstellen branch hieronder.
             condition: template
             value_template: >
               {% set slots = state_attr('sensor.dynamisch_handelsstrategie',
@@ -2150,7 +2154,7 @@ actions:
             data: {}
           - action: logbook.log
             data:
-              message: 💲DP laden gestopt — slot niet meer laden —
+              message: 💲DP laden gestopt — actie is niet meer laden —
               entity_id: input_select.zendure_2400_ac_modus_selecteren
               name: " "
         alias: Dynamisch Handelen (DP) laden stoppen
@@ -2166,7 +2170,11 @@ actions:
             entity_id: input_boolean.dynamisch_ontladen_loopt
             state:
               - "on"
-          - alias: Huidig slot is niet meer ontladen
+          - alias: >-
+              Huidig slot is niet meer ontladen — de actie is gewisseld naar rust
+              of laden, dus moeten we de Zendure stoppen. Als het volgende slot
+              ook ontladen is (maar met ander vermogen) valt dit NIET in deze
+              branch — dat wordt afgehandeld door de vermogen-bijstellen branch.
             condition: template
             value_template: >
               {% set slots = state_attr('sensor.dynamisch_handelsstrategie',
@@ -2189,10 +2197,128 @@ actions:
             data: {}
           - action: logbook.log
             data:
-              message: 💲DP ontladen gestopt — slot niet meer ontladen —
+              message: 💲DP ontladen gestopt — actie is niet meer ontladen —
               entity_id: input_select.zendure_2400_ac_modus_selecteren
               name: " "
         alias: Dynamisch Handelen (DP) ontladen stoppen
+      - conditions:
+          - condition: trigger
+            id:
+              - aansturing_trigger
+          - condition: state
+            entity_id: input_select.zendure_2400_ac_modus_selecteren
+            state:
+              - Dynamisch Handelen (DP)
+          - condition: state
+            entity_id: input_boolean.dynamisch_laden_loopt
+            state:
+              - "on"
+          - alias: >-
+              Het huidige slot is nog steeds laden, maar het geplande vermogen
+              wijkt af van wat de Zendure nu ingesteld heeft. Dit treedt op bij
+              aangrenzende laadslots met verschillend vermogen (bijv. door
+              derating bij hoge SoC). We sturen alleen een nieuw inputLimit —
+              geen stop/start, dus geen relay-schakelactie.
+            condition: template
+            value_template: >
+              {% set slots = state_attr('sensor.dynamisch_handelsstrategie',
+              'slots') | default([]) %}
+              {% set vermogen = namespace(val=-1) %}
+              {% for s in slots %}
+                {% if as_timestamp(s.start) <= as_timestamp(now()) < as_timestamp(s.end) %}
+                  {% set vermogen.val = s.vermogen_w | int %}
+                {% endif %}
+              {% endfor %}
+              {{ vermogen.val >= 0 and
+                 vermogen.val != states('sensor.zendure_2400_ac_ingesteld_oplaadvermogen') | int }}
+        sequence:
+          - action: rest_command.zendure_snel_laden
+            data:
+              sn: "{{ states('sensor.zendure_2400_ac_serienummer') }}"
+              inputLimit: >-
+                {% set slots = state_attr('sensor.dynamisch_handelsstrategie',
+                'slots') | default([]) %}
+                {% set vermogen = namespace(val=states('input_number.zendure_2400_ac_max_oplaadvermogen') | int) %}
+                {% for s in slots %}
+                  {% if as_timestamp(s.start) <= as_timestamp(now()) < as_timestamp(s.end) %}
+                    {% set vermogen.val = s.vermogen_w | int %}
+                  {% endif %}
+                {% endfor %}
+                {{ vermogen.val }}
+          - action: logbook.log
+            data:
+              message: >-
+                💲DP laadvermogen bijgesteld naar
+                {% set slots = state_attr('sensor.dynamisch_handelsstrategie',
+                'slots') | default([]) %}
+                {% set vermogen = namespace(val=0) %}
+                {% for s in slots %}
+                  {% if as_timestamp(s.start) <= as_timestamp(now()) < as_timestamp(s.end) %}
+                    {% set vermogen.val = s.vermogen_w | int %}
+                  {% endif %}
+                {% endfor %}
+                {{ vermogen.val }} W (geen relay-schakelactie) —
+              entity_id: input_select.zendure_2400_ac_modus_selecteren
+              name: " "
+        alias: Dynamisch Handelen (DP) laadvermogen bijstellen
+      - conditions:
+          - condition: trigger
+            id:
+              - aansturing_trigger
+          - condition: state
+            entity_id: input_select.zendure_2400_ac_modus_selecteren
+            state:
+              - Dynamisch Handelen (DP)
+          - condition: state
+            entity_id: input_boolean.dynamisch_ontladen_loopt
+            state:
+              - "on"
+          - alias: >-
+              Het huidige slot is nog steeds ontladen, maar het geplande vermogen
+              wijkt af van wat de Zendure nu ingesteld heeft. We sturen alleen
+              een nieuw outputLimit — geen stop/start, dus geen relay-schakelactie.
+            condition: template
+            value_template: >
+              {% set slots = state_attr('sensor.dynamisch_handelsstrategie',
+              'slots') | default([]) %}
+              {% set vermogen = namespace(val=-1) %}
+              {% for s in slots %}
+                {% if as_timestamp(s.start) <= as_timestamp(now()) < as_timestamp(s.end) %}
+                  {% set vermogen.val = s.vermogen_w | int %}
+                {% endif %}
+              {% endfor %}
+              {{ vermogen.val >= 0 and
+                 vermogen.val != states('sensor.zendure_2400_ac_ingesteld_ontlaadvermogen') | int }}
+        sequence:
+          - action: rest_command.zendure_snel_ontladen
+            data:
+              sn: "{{ states('sensor.zendure_2400_ac_serienummer') }}"
+              outputLimit: >-
+                {% set slots = state_attr('sensor.dynamisch_handelsstrategie',
+                'slots') | default([]) %}
+                {% set vermogen = namespace(val=states('input_number.zendure_2400_ac_max_ontlaadvermogen') | int) %}
+                {% for s in slots %}
+                  {% if as_timestamp(s.start) <= as_timestamp(now()) < as_timestamp(s.end) %}
+                    {% set vermogen.val = s.vermogen_w | int %}
+                  {% endif %}
+                {% endfor %}
+                {{ vermogen.val }}
+          - action: logbook.log
+            data:
+              message: >-
+                💲DP ontlaadvermogen bijgesteld naar
+                {% set slots = state_attr('sensor.dynamisch_handelsstrategie',
+                'slots') | default([]) %}
+                {% set vermogen = namespace(val=0) %}
+                {% for s in slots %}
+                  {% if as_timestamp(s.start) <= as_timestamp(now()) < as_timestamp(s.end) %}
+                    {% set vermogen.val = s.vermogen_w | int %}
+                  {% endif %}
+                {% endfor %}
+                {{ vermogen.val }} W (geen relay-schakelactie) —
+              entity_id: input_select.zendure_2400_ac_modus_selecteren
+              name: " "
+        alias: Dynamisch Handelen (DP) ontlaadvermogen bijstellen
       - conditions:
           - condition: trigger
             id:
@@ -2207,12 +2333,12 @@ actions:
               - Normale werking
               - Ontlaadlimiet bereikt
               - unknown
-          - alias: SOC lager dan maximaal ingestelde SOC
+          - alias: SoC is lager dan de maximaal ingestelde laadgrens
             condition: template
             value_template: |
               {{ states('sensor.zendure_2400_ac_laadpercentage') | float(0) <
                  states('sensor.zendure_2400_ac_maximale_laadpercentage') | float(0) }}
-          - alias: Huidig slot is laden
+          - alias: Huidig slot is laden en laden is nog niet actief
             condition: template
             value_template: >
               {% set slots = state_attr('sensor.dynamisch_handelsstrategie',
@@ -2280,12 +2406,12 @@ actions:
               - Normale werking
               - Laadlimiet bereikt
               - unknown
-          - alias: Tot de minimaal ingestelde SOC
+          - alias: SoC is hoger dan de minimaal ingestelde ontlaadgrens
             condition: template
             value_template: |
               {{ states('sensor.zendure_2400_ac_laadpercentage') | float >
                  states('sensor.zendure_2400_ac_minimale_laadpercentage') | float }}
-          - alias: Huidig slot is ontladen
+          - alias: Huidig slot is ontladen en ontladen is nog niet actief
             condition: template
             value_template: >
               {% set slots = state_attr('sensor.dynamisch_handelsstrategie',
