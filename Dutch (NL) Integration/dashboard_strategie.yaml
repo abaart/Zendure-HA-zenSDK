@@ -59,10 +59,10 @@ views:
                   in_legend: true
                 data_generator: |
                   const slots = entity.attributes.slots || [];
-                  const pts = slots.map(s => [new Date(s.start).getTime(), s.soc_voor_pct]);
+                  const pts = slots.map(s => [new Date(s.start).getTime(), s.soc_voor_pct ?? 0]);
                   if (slots.length) {
                     const last = slots[slots.length - 1];
-                    pts.push([new Date(last.end).getTime(), last.soc_na_pct]);
+                    pts.push([new Date(last.end).getTime(), last.soc_na_pct ?? 0]);
                   }
                   return pts;
               - entity: sensor.dynamisch_handelsstrategie
@@ -177,8 +177,8 @@ views:
                 data_generator: |
                   return (entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
-                    s.actie === 'laden'    ?  s.vermogen_w :
-                    s.actie === 'ontladen' ? -s.vermogen_w :
+                    s.actie === 'laden'    ?  (s.vermogen_w ?? 0) :
+                    s.actie === 'ontladen' ? -(s.vermogen_w ?? 0) :
                     null
                   ]);
             apex_config:
@@ -256,8 +256,8 @@ views:
                 data_generator: |
                   return (entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
-                    s.winst_eur !== 0
-                      ? parseFloat((s.winst_eur * 100).toFixed(2))
+                    (s.winst_eur ?? 0) !== 0
+                      ? parseFloat(((s.winst_eur ?? 0) * 100).toFixed(2))
                       : null
                   ]);
             apex_config:
