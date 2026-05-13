@@ -27,8 +27,6 @@ views:
                   action: more-info
 
           - type: custom:apexcharts-card
-            experimental:
-              color_threshold: true
             cache: false
             update_interval: 5min
             header:
@@ -83,10 +81,59 @@ views:
                     new Date(s.start).getTime(),
                     s.prijs_ct
                   ]);
+              - entity: sensor.dynamisch_handelsstrategie
+                name: Vermogen
+                type: line
+                stroke_width: 0
+                opacity: 0
+                yaxis_id: extra
+                show:
+                  in_chart: true
+                  in_header: false
+                  in_legend: false
+                data_generator: |
+                  return (entity.attributes.slots || []).map(s => [
+                    new Date(s.start).getTime(),
+                    s.actie !== 'rust' ? (s.vermogen_w ?? 0) : null
+                  ]);
+              - entity: sensor.dynamisch_handelsstrategie
+                name: Actie
+                type: line
+                stroke_width: 0
+                opacity: 0
+                yaxis_id: extra
+                show:
+                  in_chart: true
+                  in_header: false
+                  in_legend: false
+                data_generator: |
+                  return (entity.attributes.slots || []).map(s => [
+                    new Date(s.start).getTime(),
+                    s.actie === 'laden' ? 1 : s.actie === 'ontladen' ? 2 : 0
+                  ]);
             apex_config:
               tooltip:
-                x:
-                  format: 'dd-MM HH:mm'
+                custom: |
+                  EVAL:function({ series, seriesIndex, dataPointIndex, w }) {
+                    var soc = series[0][dataPointIndex];
+                    var prijs = series[1][dataPointIndex];
+                    var vermogen = series[2][dataPointIndex];
+                    var actieCode = series[3][dataPointIndex];
+                    var actieLabel = actieCode === 1 ? 'Laden' : actieCode === 2 ? 'Ontladen' : 'Rust';
+                    var ts = w.globals.seriesX[0] && w.globals.seriesX[0][dataPointIndex];
+                    if (!ts) return '';
+                    var d = new Date(ts);
+                    var pad = function(n) { return String(n).padStart(2, '0'); };
+                    var time = pad(d.getDate()) + '-' + pad(d.getMonth()+1) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+                    var html = '<div style="padding:8px 12px;font-size:0.85em;background:var(--card-background-color);border:1px solid var(--divider-color);border-radius:4px">';
+                    html += '<div style="margin-bottom:4px;font-weight:bold;color:var(--primary-text-color)">' + time + '</div>';
+                    html += '<div style="color:var(--secondary-text-color)">SoC&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;: <span style="color:var(--primary-text-color);font-weight:bold">' + (soc != null ? soc.toFixed(0) + ' %' : '\u2014') + '</span></div>';
+                    html += '<div style="color:var(--secondary-text-color)">Prijs&nbsp;&nbsp;&nbsp;&nbsp;: <span style="color:var(--primary-text-color);font-weight:bold">' + (prijs != null ? prijs.toFixed(1) + ' ct/kWh' : '\u2014') + '</span></div>';
+                    html += '<div style="color:var(--secondary-text-color)">Actie&nbsp;&nbsp;&nbsp;&nbsp;: <span style="color:var(--primary-text-color);font-weight:bold">' + actieLabel + '</span></div>';
+                    if (actieCode) { html += '<div style="color:var(--secondary-text-color)">Vermogen : <span style="color:var(--primary-text-color);font-weight:bold">' + (vermogen != null ? Math.round(vermogen) + ' W' : '\u2014') + '</span></div>'; }
+                    html += '</div>';
+                    return html;
+                  }
               xaxis:
                 labels:
                   style:
@@ -123,6 +170,9 @@ views:
                         transparent)
                     formatter: |
                       EVAL:function(v) { return v.toFixed(0) + ' ct' }
+                - id: extra
+                  seriesName: Vermogen
+                  show: false
               grid:
                 strokeDashArray: 0
                 borderColor: >-
