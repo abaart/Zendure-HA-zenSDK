@@ -123,6 +123,11 @@ SOC_DERATING: list[tuple[float, float]] = [
 # Bij 2.4 kWh accu en 2400 W × 15 min = 0.6 kWh per slot → 0.05 kWh is ruim voldoende.
 SOC_STAP_KWH: float = 0.05
 
+# Minimaal laad/ontlaadvermogen (W). Acties met vermogen < MIN_POWER_W
+# worden behandeld als rust. De batterij stopt automatisch laden/ontladen
+# wanneer vol of leeg.
+MIN_POWER_W: float = 400.0
+
 
 # ── DATATYPE ──────────────────────────────────────────────────────────────────
 
@@ -392,7 +397,12 @@ def los_dp_op(
             energie_van_net   = energie_naar_accu / eta_laad if eta_laad > 0 else 0.0
             winst             = -energie_van_net * prijs
             vermogen_w        = energie_van_net / duur_h * 1000.0 if duur_h > 0 else 0.0
-            actie             = "laden"
+
+            # Minimaal vermogen constraint: enforce MIN_POWER_W
+            if vermogen_w > 0 and vermogen_w < MIN_POWER_W:
+                vermogen_w = MIN_POWER_W
+
+            actie = "laden"
 
         elif actie_code == -1:  # Ontladen
             max_uit_accu      = max_ontlaad_w / 1000.0 * duur_h
@@ -403,7 +413,12 @@ def los_dp_op(
             energie_naar_net  = energie_uit_accu * eta_ontlaad
             winst             = energie_naar_net * prijs
             vermogen_w        = energie_naar_net / duur_h * 1000.0 if duur_h > 0 else 0.0
-            actie             = "ontladen"
+
+            # Minimaal vermogen constraint: enforce MIN_POWER_W
+            if vermogen_w > 0 and vermogen_w < MIN_POWER_W:
+                vermogen_w = MIN_POWER_W
+
+            actie = "ontladen"
 
         else:  # Rust
             nieuwe_s   = huidig_s
@@ -546,11 +561,17 @@ def los_dp_op(
                 q_na   = idx_naar_kwh(s_na)
                 e_uit  = q_voor - q_na
                 e_net  = e_uit * eta_ontlaad
+                vermogen_w = e_net / duur_h * 1000.0 if duur_h > 0 else 0
+
+                # Minimaal vermogen constraint: enforce MIN_POWER_W
+                if vermogen_w > 0 and vermogen_w < MIN_POWER_W:
+                    vermogen_w = MIN_POWER_W
+
                 s_r["soc_voor_kwh"] = round(q_voor, 3)
                 s_r["soc_na_kwh"]   = round(q_na, 3)
                 s_r["soc_voor_pct"] = round(q_voor / max_kwh * 100, 1) if max_kwh > 0 else 0.0
                 s_r["soc_na_pct"]   = round(q_na   / max_kwh * 100, 1) if max_kwh > 0 else 0.0
-                s_r["vermogen_w"]   = round(e_net / duur_h * 1000.0) if duur_h > 0 else 0
+                s_r["vermogen_w"]   = round(vermogen_w)
                 s_r["winst_eur"]    = round(e_net * prijs, 4)
                 huidig_soc = q_na
 
@@ -580,13 +601,19 @@ def los_dp_op(
                 q_na   = idx_naar_kwh(s_na)
                 e_naar = q_na - q_voor
                 e_net  = e_naar / eta_laad if eta_laad > 0 else 0.0
+                vermogen_w = e_net / duur_h * 1000.0 if duur_h > 0 else 0
+
+                # Minimaal vermogen constraint: enforce MIN_POWER_W
+                if e_naar > 0 and vermogen_w < MIN_POWER_W:
+                    vermogen_w = MIN_POWER_W
+
                 s_r["actie"]        = "laden" if e_naar > 0 else "rust"
                 s_r["soc_voor_kwh"] = round(q_voor, 3)
                 s_r["soc_na_kwh"]   = round(q_na, 3)
                 s_r["soc_voor_pct"] = round(q_voor / max_kwh * 100, 1) if max_kwh > 0 else 0.0
                 s_r["soc_na_pct"]   = round(q_na   / max_kwh * 100, 1) if max_kwh > 0 else 0.0
-                s_r["vermogen_w"]   = round(e_net / duur_h * 1000.0) if duur_h > 0 else 0
-                s_r["winst_eur"]    = round(-e_net * prijs, 4)
+                s_r["vermogen_w"]   = round(vermogen_w) if e_naar > 0 else 0
+                s_r["winst_eur"]    = round(-e_net * prijs, 4) if e_naar > 0 else 0.0
                 huidig_soc = q_na
 
         # Reset slots ná het geselecteerde venster naar rust (SoC na redistributie).
