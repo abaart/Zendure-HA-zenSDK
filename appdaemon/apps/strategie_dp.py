@@ -181,6 +181,8 @@ def los_dp_op(
     slots: list[dict[str, Any]],
     accu: Accustatus,
     min_spread_ct_per_kwh: float = 0.0,
+    plateau_drempel_ct: float = 2.0,
+    max_plateau_uren: int = 5,
 ) -> list[dict[str, Any]]:
     """
     Berekent de winstmaximaliserende laad/ontlaad strategie via DP.
@@ -225,10 +227,25 @@ def los_dp_op(
     je wilt zo snel mogelijk laden voor de piek. De SoC-capaciteitsgrens
     begrenst vanzelf de hoeveelheid energie als de accu bijna vol/leeg is.
 
+    PLATEAU SPREIDING
+    -----------------
+    Na de DP-extractie worden opeenvolgende slots met dezelfde actie en een
+    onderlinge prijsverschil ≤ plateau_drempel_ct herverdeeld via water-filling:
+    elke slot krijgt een gelijk deel van de totale energie, tenzij het slot zijn
+    vermogenslimiet bereikt. Het overschot gaat naar de overige slots.
+
+    Dit verlaagt het piekvermogen en vermindert thermische belasting van de batterij
+    zonder de winstgevendheid noemenswaardig te beïnvloeden.
+
     Args:
         slots:                   Tijdslots met 'start', 'end', 'price' (€/kWh), 'duration_h'
         accu:                    Accustatus snapshot
         min_spread_ct_per_kwh:   Minimale brutosspread (ct/kWh) om te handelen
+        plateau_drempel_ct:      Max prijsverschil (ct/kWh) binnen een plateau (standaard 2 ct)
+        max_plateau_uren:        Max aantal aaneengesloten uren per plateau (standaard 5).
+                                 Uit alle kandidaaturen worden de financieel beste N uren
+                                 gekozen via een sliding window (goedkoopste voor laden,
+                                 duurste voor ontladen).
 
     Returns:
         Lijst van slot-dicts met toegevoegde velden:
@@ -412,5 +429,170 @@ def los_dp_op(
         })
 
         huidig_s = nieuwe_s
+
+    # ── PLATEAU SPREIDING ─────────────────────────────────────────────────────
+    # Herverdeel energie gelijkmatig over aaneengesloten slots met dezelfde actie
+    # en een onderlinge prijsverschil ≤ plateau_drempel_ct. Water-filling zorgt
+    # ervoor dat slots die hun vermogenslimiet bereiken het overschot doorgeven.
+
+    def water_filling(totaal: float, maxima: list[float]) -> list[float]:
+        verdeling = [0.0] * len(maxima)
+        resterend = totaal
+        actief = set(range(len(maxima)))
+        while resterend > 1e-9 and actief:
+            gelijk = resterend / len(actief)
+            gecapped: set[int] = set()
+            for k in actief:
+                if maxima[k] < gelijk - 1e-9:
+                    verdeling[k] = maxima[k]
+                    resterend -= maxima[k]
+                    gecapped.add(k)
+            if not gecapped:
+                for k in actief:
+                    verdeling[k] = gelijk
+                break
+            actief -= gecapped
+        return verdeling
+
+    def reset_rust(k: int, soc: float) -> None:
+        """Zet slot k terug naar rust met ongewijzigde SoC."""
+        q = idx_naar_kwh(kwh_naar_idx(soc))
+        s = resultaat[k]
+        s["actie"] = "rust"; s["vermogen_w"] = 0; s["winst_eur"] = 0.0
+        s["soc_voor_kwh"] = round(q, 3); s["soc_na_kwh"] = round(q, 3)
+        s["soc_voor_pct"] = round(q / max_kwh * 100, 1) if max_kwh > 0 else 0.0
+        s["soc_na_pct"]   = s["soc_voor_pct"]
+
+    i = 0
+    while i < n:
+        actie_i = resultaat[i]["actie"]
+        if actie_i not in ("laden", "ontladen"):
+            i += 1
+            continue
+
+        # Stap 1: vind aaneengesloten actie-slots met vergelijkbare prijzen.
+        j = i + 1
+        p_min = p_max = resultaat[i]["prijs_ct"]
+        while j < n and resultaat[j]["actie"] == actie_i:
+            p = resultaat[j]["prijs_ct"]
+            if max(p_max, p) - min(p_min, p) > plateau_drempel_ct:
+                break
+            p_min = min(p_min, p); p_max = max(p_max, p)
+            j += 1
+        # j = eerste slot ná de actie-groep; cand_start..cand_end = kandidaatvenster
+
+        cand_start, cand_end = i, j
+
+        # Stap 2: breid ALLEEN voor laden uit naar aangrenzende rust-slots met
+        # vergelijkbare prijs. Voor ontladen heeft uitbreiden geen zin: aangrenzende
+        # rust-slots hebben altijd een lagere prijs dan de ontlaadpiek.
+        if actie_i == "laden":
+            while cand_start > 0 and resultaat[cand_start - 1]["actie"] == "rust":
+                p = resultaat[cand_start - 1]["prijs_ct"]
+                if max(p_max, p) - min(p_min, p) > plateau_drempel_ct:
+                    break
+                p_min = min(p_min, p); p_max = max(p_max, p)
+                cand_start -= 1
+            while cand_end < n and resultaat[cand_end]["actie"] == "rust":
+                p = resultaat[cand_end]["prijs_ct"]
+                if max(p_max, p) - min(p_min, p) > plateau_drempel_ct:
+                    break
+                p_min = min(p_min, p); p_max = max(p_max, p)
+                cand_end += 1
+
+        n_cand = cand_end - cand_start
+
+        # Stap 3: kies de financieel optimale max_plateau_uren aaneengesloten slots
+        # via een sliding window (goedkoopste voor laden, duurste voor ontladen).
+        w = min(max_plateau_uren, n_cand)
+        if n_cand <= w:
+            gs, ge = cand_start, cand_end
+        else:
+            pl = [resultaat[k]["prijs_ct"] for k in range(cand_start, cand_end)]
+            som = sum(pl[:w])
+            beste_som, beste_off = som, 0
+            for off in range(1, n_cand - w + 1):
+                som += pl[off + w - 1] - pl[off - 1]
+                beter = (som < beste_som) if actie_i == "laden" else (som > beste_som)
+                if beter:
+                    beste_som, beste_off = som, off
+            gs = cand_start + beste_off
+            ge = gs + w
+
+        if ge - gs < 2:
+            i = cand_end
+            continue
+
+        soc_start = resultaat[cand_start]["soc_voor_kwh"]
+        soc_eind  = resultaat[j - 1]["soc_na_kwh"]
+
+        # Reset slots vóór het geselecteerde venster naar rust (ongewijzigde SoC).
+        for k in range(cand_start, gs):
+            reset_rust(k, soc_start)
+
+        if actie_i == "ontladen":
+            totaal_delta = soc_start - soc_eind
+            maxima_groep = [max_ontlaad_w / 1000.0 * slots[k]["duration_h"] for k in range(gs, ge)]
+            verdeling    = water_filling(totaal_delta, maxima_groep)
+
+            huidig_soc = soc_start
+            for k, delta in zip(range(gs, ge), verdeling):
+                s_r    = resultaat[k]
+                prijs  = s_r["prijs_ct"] / 100.0
+                duur_h = slots[k]["duration_h"]
+                s_voor = kwh_naar_idx(huidig_soc)
+                s_na   = kwh_naar_idx(huidig_soc - delta)
+                q_voor = idx_naar_kwh(s_voor)
+                q_na   = idx_naar_kwh(s_na)
+                e_uit  = q_voor - q_na
+                e_net  = e_uit * eta_ontlaad
+                s_r["soc_voor_kwh"] = round(q_voor, 3)
+                s_r["soc_na_kwh"]   = round(q_na, 3)
+                s_r["soc_voor_pct"] = round(q_voor / max_kwh * 100, 1) if max_kwh > 0 else 0.0
+                s_r["soc_na_pct"]   = round(q_na   / max_kwh * 100, 1) if max_kwh > 0 else 0.0
+                s_r["vermogen_w"]   = round(e_net / duur_h * 1000.0) if duur_h > 0 else 0
+                s_r["winst_eur"]    = round(e_net * prijs, 4)
+                huidig_soc = q_na
+
+        else:  # laden
+            totaal_delta = soc_eind - soc_start
+            n_groep      = ge - gs
+            # Maxima op basis van gelijke verdeling: derating evalueren op de verwachte
+            # SoC bij gelijke verdeling, zodat latere slots niet kunstmatig vol lijken.
+            soc_ideaal_ps = totaal_delta / n_groep if n_groep > 0 else 0.0
+            maxima_groep  = []
+            for k_rel, k in enumerate(range(gs, ge)):
+                duur_h = slots[k]["duration_h"]
+                soc_bi = soc_start + k_rel * soc_ideaal_ps
+                derat  = bereken_derating(soc_bi, max_kwh)
+                cap    = min(max_laad_w * derat / 1000.0 * duur_h * eta_laad, max_kwh - soc_bi)
+                maxima_groep.append(max(0.0, cap))
+            verdeling = water_filling(totaal_delta, maxima_groep)
+
+            huidig_soc = soc_start
+            for k, delta in zip(range(gs, ge), verdeling):
+                s_r    = resultaat[k]
+                prijs  = s_r["prijs_ct"] / 100.0
+                duur_h = slots[k]["duration_h"]
+                s_voor = kwh_naar_idx(huidig_soc)
+                s_na   = kwh_naar_idx(huidig_soc + delta)
+                q_voor = idx_naar_kwh(s_voor)
+                q_na   = idx_naar_kwh(s_na)
+                e_naar = q_na - q_voor
+                e_net  = e_naar / eta_laad if eta_laad > 0 else 0.0
+                s_r["actie"]        = "laden" if e_naar > 0 else "rust"
+                s_r["soc_voor_kwh"] = round(q_voor, 3)
+                s_r["soc_na_kwh"]   = round(q_na, 3)
+                s_r["soc_voor_pct"] = round(q_voor / max_kwh * 100, 1) if max_kwh > 0 else 0.0
+                s_r["soc_na_pct"]   = round(q_na   / max_kwh * 100, 1) if max_kwh > 0 else 0.0
+                s_r["vermogen_w"]   = round(e_net / duur_h * 1000.0) if duur_h > 0 else 0
+                s_r["winst_eur"]    = round(-e_net * prijs, 4)
+                huidig_soc = q_na
+
+        # Reset slots ná het geselecteerde venster naar rust (SoC na redistributie).
+        for k in range(ge, cand_end):
+            reset_rust(k, huidig_soc)
+
+        i = cand_end
 
     return resultaat

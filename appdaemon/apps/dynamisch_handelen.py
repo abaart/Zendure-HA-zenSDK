@@ -2,7 +2,7 @@
 Dynamisch Handelen - Home Assistant integratie (AppDaemon)
 ==========================================================
 
-AppDaemon app die elke 5 minuten de optimale laad/ontlaad strategie
+AppDaemon app die elke minuut de optimale laad/ontlaad strategie
 berekent en publiceert als sensor.dynamisch_handelsstrategie.
 
 BESTANDSLOCATIES IN HA
@@ -42,11 +42,11 @@ class DynamischHandelen(hass.Hass):
     def initialize(self):
         """
         AppDaemon roept initialize() aan bij opstarten en na een reload.
-        We registreren hier één terugkerende taak: elke 5 minuten herberekenen.
+        We registreren hier één terugkerende taak: elke minuut herberekenen.
         'now' zorgt dat de eerste berekening meteen bij het opstarten plaatsvindt.
         """
-        self.log("Dynamisch Handelen: gestart, schema wordt elke 5 minuten herberekend")
-        self.run_every(self.bereken_strategie, "now", 5 * 60)
+        self.log("Dynamisch Handelen: gestart, schema wordt elke minuut herberekend")
+        self.run_every(self.bereken_strategie, "now", 60)
 
     # ── HOOFDFUNCTIE ─────────────────────────────────────────────────────────
 
