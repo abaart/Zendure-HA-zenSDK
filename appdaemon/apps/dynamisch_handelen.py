@@ -73,7 +73,7 @@ class DynamischHandelen(hass.Hass):
             return
 
         try:
-            accu = self._haal_accustatus()
+            accu, hw_min_pct, hw_max_pct = self._haal_accustatus()
         except Exception as exc:
             self.log(f"Dynamisch Handelen: fout bij ophalen accustatus: {exc}", level="ERROR")
             return
@@ -97,6 +97,13 @@ class DynamischHandelen(hass.Hass):
         )
 
         schema = los_dp_op(slots, accu, min_spread_ct_per_kwh=min_spread)
+
+        # Vertaal DP-interne SoC% (0–100% van hw-venster) naar echte battery-%
+        # zodat de grafiek overeenkomt met wat de Zendure rapporteert.
+        hw_range = hw_max_pct - hw_min_pct
+        for s in schema:
+            s["soc_voor_pct"] = round(hw_min_pct + s["soc_voor_pct"] / 100.0 * hw_range, 1)
+            s["soc_na_pct"]   = round(hw_min_pct + s["soc_na_pct"]   / 100.0 * hw_range, 1)
 
         verwachte_winst = sum(s["winst_eur"] for s in schema)
         laad_slots      = [s for s in schema if s["actie"] == "laden"]
@@ -175,17 +182,17 @@ class DynamischHandelen(hass.Hass):
         slots.sort(key=lambda s: s["start"])
         return slots
 
-    def _haal_accustatus(self) -> Accustatus:
+    def _haal_accustatus(self) -> tuple["Accustatus", float, float]:
         """
         Leest de actuele batterijstatus uit HA en converteert naar interne eenheden.
 
         DE TWEE ENERGIE-SENSOREN
         ------------------------
         beschikbare_energie (kWh): energie leverbaar naar net vanuit huidige SoC.
-            Berekend als: (soc - min_soc)% × totale_cap × η_ontlaad
+            Berekend als: (soc - hw_min)% × totale_cap × η_ontlaad
 
-        benodigde_energie (kWh): energie nodig van net om accu naar max_soc te laden.
-            Berekend als: (max_soc - soc)% × totale_cap / η_laad
+        benodigde_energie (kWh): energie nodig van net om accu naar hw_max te laden.
+            Berekend als: (hw_max - soc)% × totale_cap / η_laad
 
         Beide zijn neteenheden (al gecorrigeerd voor η). Voor het DP-algoritme
         converteren we naar opgeslagen kWh (batterij-intern):
@@ -194,12 +201,17 @@ class DynamischHandelen(hass.Hass):
             stored_ruimte  = benodigde × η       (verwijder de laadtoeslag)
 
         RTE: η_laad = η_ontlaad = √(RTE/100). Zie strategie_dp.py voor uitleg.
+
+        Geeft ook hw_min_pct en hw_max_pct terug zodat de DP-uitvoer vertaald
+        kan worden naar echte battery-SoC% (0–100 % van totale capaciteit).
         """
         beschikbaar_kwh = float(self.get_state("sensor.zendure_2400_ac_indicatie_beschikbare_energie") or 0)
         benodigde_kwh   = float(self.get_state("sensor.zendure_2400_ac_indicatie_benodigde_energie")   or 0)
         rte_pct         = float(self.get_state("sensor.zendure_2400_ac_rte_totaal")                    or 90)
         max_laad_w      = float(self.get_state("input_number.zendure_2400_ac_max_oplaadvermogen")       or 2400)
         max_ontlaad_w   = float(self.get_state("input_number.zendure_2400_ac_max_ontlaadvermogen")      or 2400)
+        hw_min_pct      = float(self.get_state("sensor.zendure_2400_ac_minimale_laadpercentage")        or 0)
+        hw_max_pct      = float(self.get_state("sensor.zendure_2400_ac_maximale_laadpercentage")        or 100)
 
         rte_pct = max(50.0, min(100.0, rte_pct))
         eta     = math.sqrt(rte_pct / 100.0)
@@ -214,7 +226,7 @@ class DynamischHandelen(hass.Hass):
             eta_ontlaad   = eta,
             max_laad_w    = max_laad_w,
             max_ontlaad_w = max_ontlaad_w,
-        )
+        ), hw_min_pct, hw_max_pct
 
     def _haal_minimale_spread(self) -> float:
         """
