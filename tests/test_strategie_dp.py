@@ -17,7 +17,14 @@ import pytest
 # Voeg pyscript/modules toe aan het Python-pad zodat we de module direct importeren
 sys.path.insert(0, str(Path(__file__).parent.parent / "appdaemon" / "apps"))
 
-from strategie_dp import Accustatus, SOC_STAP_KWH, bereken_derating, los_dp_op
+from strategie_dp import (
+    Accustatus,
+    SOC_STAP_KWH,
+    bereken_derating,
+    bereken_laadvermogen_voor_aansturing,
+    los_dp_op,
+    rond_vermogen_omhoog,
+)
 
 
 # ── TESTHELPERS ───────────────────────────────────────────────────────────────
@@ -65,6 +72,59 @@ def acties(schema: list[dict]) -> list[str]:
     return [s["actie"] for s in schema]
 
 
+def maak_slots_vanaf_iso(slot_prijzen_ct: list[tuple[str, str, float]]) -> list[dict]:
+    """Bouw prijsslots vanuit ISO-start, ISO-einde, en prijs in ct/kWh."""
+    slots = []
+    for start_iso, end_iso, prijs_ct in slot_prijzen_ct:
+        start = datetime.fromisoformat(start_iso)
+        end = datetime.fromisoformat(end_iso)
+        slots.append({
+            "start":      start,
+            "end":        end,
+            "price":      prijs_ct / 100.0,
+            "duration_h": (end - start).total_seconds() / 3600.0,
+        })
+    return slots
+
+
+SCENARIO_18_MEI_SLOTS_CT = [
+    ("2026-05-18T14:00:00+02:00", "2026-05-18T15:00:00+02:00", 24.663),
+    ("2026-05-18T15:00:00+02:00", "2026-05-18T16:00:00+02:00", 25.496),
+    ("2026-05-18T16:00:00+02:00", "2026-05-18T17:00:00+02:00", 26.300),
+    ("2026-05-18T17:00:00+02:00", "2026-05-18T18:00:00+02:00", 28.720),
+    ("2026-05-18T18:00:00+02:00", "2026-05-18T19:00:00+02:00", 30.868),
+    ("2026-05-18T19:00:00+02:00", "2026-05-18T20:00:00+02:00", 35.321),
+    ("2026-05-18T20:00:00+02:00", "2026-05-18T21:00:00+02:00", 41.322),
+    ("2026-05-18T21:00:00+02:00", "2026-05-18T22:00:00+02:00", 37.963),
+    ("2026-05-18T22:00:00+02:00", "2026-05-18T23:00:00+02:00", 32.392),
+    ("2026-05-18T23:00:00+02:00", "2026-05-19T00:00:00+02:00", 30.867),
+    ("2026-05-19T00:00:00+02:00", "2026-05-19T01:00:00+02:00", 30.652),
+    ("2026-05-19T01:00:00+02:00", "2026-05-19T02:00:00+02:00", 29.691),
+    ("2026-05-19T02:00:00+02:00", "2026-05-19T03:00:00+02:00", 29.269),
+    ("2026-05-19T03:00:00+02:00", "2026-05-19T04:00:00+02:00", 29.106),
+    ("2026-05-19T04:00:00+02:00", "2026-05-19T05:00:00+02:00", 29.247),
+    ("2026-05-19T05:00:00+02:00", "2026-05-19T06:00:00+02:00", 29.951),
+    ("2026-05-19T06:00:00+02:00", "2026-05-19T07:00:00+02:00", 31.775),
+    ("2026-05-19T07:00:00+02:00", "2026-05-19T08:00:00+02:00", 30.869),
+    ("2026-05-19T08:00:00+02:00", "2026-05-19T09:00:00+02:00", 28.636),
+    ("2026-05-19T09:00:00+02:00", "2026-05-19T10:00:00+02:00", 26.353),
+    ("2026-05-19T10:00:00+02:00", "2026-05-19T11:00:00+02:00", 24.150),
+    ("2026-05-19T11:00:00+02:00", "2026-05-19T12:00:00+02:00", 22.600),
+    ("2026-05-19T12:00:00+02:00", "2026-05-19T13:00:00+02:00", 21.499),
+    ("2026-05-19T13:00:00+02:00", "2026-05-19T14:00:00+02:00", 21.662),
+    ("2026-05-19T14:00:00+02:00", "2026-05-19T15:00:00+02:00", 21.873),
+    ("2026-05-19T15:00:00+02:00", "2026-05-19T16:00:00+02:00", 23.042),
+    ("2026-05-19T16:00:00+02:00", "2026-05-19T17:00:00+02:00", 24.421),
+    ("2026-05-19T17:00:00+02:00", "2026-05-19T18:00:00+02:00", 27.272),
+    ("2026-05-19T18:00:00+02:00", "2026-05-19T19:00:00+02:00", 29.216),
+    ("2026-05-19T19:00:00+02:00", "2026-05-19T20:00:00+02:00", 32.471),
+    ("2026-05-19T20:00:00+02:00", "2026-05-19T21:00:00+02:00", 33.808),
+    ("2026-05-19T21:00:00+02:00", "2026-05-19T22:00:00+02:00", 31.744),
+    ("2026-05-19T22:00:00+02:00", "2026-05-19T23:00:00+02:00", 30.268),
+    ("2026-05-19T23:00:00+02:00", "2026-05-20T00:00:00+02:00", 28.736),
+]
+
+
 # ── DERATING ─────────────────────────────────────────────────────────────────
 
 class TestDerating:
@@ -90,6 +150,25 @@ class TestDerating:
     def test_nul_capaciteit_geeft_nul(self):
         """Bescherming tegen deling-door-nul."""
         assert bereken_derating(1.0, 0.0) == 0.0
+
+
+class TestVermogenAfronding:
+    def test_rondt_omhoog_op_25_watt_stappen(self):
+        assert rond_vermogen_omhoog(1, 2400) == 25
+        assert rond_vermogen_omhoog(2397, 2400) == 2400
+        assert rond_vermogen_omhoog(2400, 2400) == 2400
+
+    def test_rondt_nooit_boven_maximum(self):
+        assert rond_vermogen_omhoog(2397, 2398) == 2398
+        assert rond_vermogen_omhoog(0, 2400) == 0
+
+    def test_bms_derating_verlaagt_alleen_verwacht_laadvermogen(self):
+        """
+        bereken_laadvermogen_voor_aansturing() stuurt max_laad_w naar Zendure
+        zodra bereken_derating() een factor lager dan 1.0 geeft.
+        """
+        assert bereken_laadvermogen_voor_aansturing(950, 2400, 0.40) == 2400
+        assert bereken_laadvermogen_voor_aansturing(950, 2400, 1.00) == 950
 
 
 # ── DP BASISGEDRAG ───────────────────────────────────────────────────────────
@@ -119,6 +198,22 @@ class TestDPBasis:
         schema = los_dp_op(maak_slots([0.50] * 12), maak_accu(huidig_kwh=1.0))
         for s in schema:
             assert s["soc_na_kwh"] >= -0.01  # kleine afrondingsmarge
+
+    def test_ontlaadvermogen_is_ac_outputlimiet(self):
+        """
+        max_ontlaad_w is het Zendure outputLimit in W en wordt niet met eta verlaagd.
+
+        Bij genoeg SoC moet het gerapporteerde vermogen dus 2400 W zijn, niet
+        2400 * eta. De SoC-daling is wel groter dan 2.4 kWh door ontlaadverlies.
+        """
+        schema = los_dp_op(
+            maak_slots([0.50]),
+            maak_accu(huidig_kwh=4.0, max_kwh=5.0, eta=0.90, max_ontlaad_w=2400),
+        )
+
+        assert schema[0]["actie"] == "ontladen"
+        assert schema[0]["vermogen_w"] == 2400
+        assert schema[0]["soc_na_kwh"] == pytest.approx(4.0 - 2.4 / 0.90, abs=SOC_STAP_KWH)
 
     def test_eerste_soc_is_huidig(self):
         """Het eerste slot begint bij de opgegeven huidige SoC."""
@@ -211,19 +306,87 @@ class TestMinimaleSpread:
         assert schema[0]["actie"] == "laden"
         assert schema[1]["actie"] == "ontladen"
 
+    def test_18_mei_scenario_laadt_19_mei_niet_bij_spread_acht_ct(self):
+        """
+        Met min_spread_ct_per_kwh=8 blijft laden op 19 mei onder de drempel.
+
+        De goedkoopste laadprijs op 19 mei is 21.499 ct/kWh en de hoogste
+        ontlaadprijs op 19 mei is 33.808 ct/kWh. Met eta=0.922 blijft de marge
+        lager dan 8 ct/kWh, dus los_dp_op() plant geen laadslot op 19 mei.
+        """
+        schema = los_dp_op(
+            maak_slots_vanaf_iso(SCENARIO_18_MEI_SLOTS_CT),
+            maak_accu(huidig_kwh=2.636, max_kwh=5.217, eta=0.922),
+            min_spread_ct_per_kwh=8.0,
+        )
+
+        laad_19_mei = [
+            s for s in schema
+            if s["start"].startswith("2026-05-19") and s["actie"] == "laden"
+        ]
+
+        assert laad_19_mei == []
+
+    def test_18_mei_scenario_laadt_19_mei_wel_bij_spread_twee_ct(self):
+        """
+        Met min_spread_ct_per_kwh=2 plant los_dp_op() wel laadslots op 19 mei.
+
+        Deze test gebruikt dezelfde prijzen, accu, eta, en start-SoC als
+        test_18_mei_scenario_laadt_19_mei_niet_bij_spread_acht_ct.
+        Alleen min_spread_ct_per_kwh verandert van 8 naar 2.
+        """
+        schema = los_dp_op(
+            maak_slots_vanaf_iso(SCENARIO_18_MEI_SLOTS_CT),
+            maak_accu(huidig_kwh=2.636, max_kwh=5.217, eta=0.922),
+            min_spread_ct_per_kwh=2.0,
+        )
+
+        laad_19_mei = [
+            s for s in schema
+            if s["start"].startswith("2026-05-19") and s["actie"] == "laden"
+        ]
+
+        assert len(laad_19_mei) >= 1
+
+    def test_18_mei_scenario_laadt_actief_gedeeltelijk_uur(self):
+        """
+        Bij een deels verstreken actief uur moet los_dp_op() nog laadruimte zien.
+
+        Dit scenario gebruikt de sensorwaarden van 18 mei om 14:39. Het eerste
+        slot heeft nog ongeveer 20,5 minuten. Als dat slot per ongeluk als
+        volledig uur wordt ingevoerd, kiest de strategie rust; met de resterende
+        duur kiest de strategie laden en benut zij het tweede dure uur.
+        """
+        slots = maak_slots_vanaf_iso(SCENARIO_18_MEI_SLOTS_CT)
+        slots[0]["duration_h"] = 20.5 / 60.0
+
+        schema = los_dp_op(
+            slots,
+            maak_accu(huidig_kwh=2.745, max_kwh=5.187, eta=0.922),
+            min_spread_ct_per_kwh=8.0,
+        )
+
+        assert schema[0]["actie"] == "laden"
+        assert schema[1]["actie"] == "laden"
+        assert schema[2]["actie"] == "laden"
+        assert schema[2]["soc_na_kwh"] == pytest.approx(3.5, abs=0.01)
+
 
 # ── DERATING EFFECT ───────────────────────────────────────────────────────────
 
 class TestDeratingEffect:
-    def test_derating_verlaagt_effectief_vermogen(self):
+    def test_derating_verlaagt_verwacht_vermogen_maar_niet_aansturing(self):
         """
-        Bij bijna volle accu (95 % SoC) is de derating-factor 0.40.
-        Het gerapporteerde laadvermogen moet dus lager zijn dan het maximum.
+        Bij bijna volle accu verlaagt bereken_derating() het verwachte
+        laadvermogen. De vermogensopdracht vermogen_w blijft max_laad_w, omdat
+        het BMS de werkelijke laadstroom zelf begrenst.
         """
         accu   = maak_accu(huidig_kwh=2.4 * 0.95, max_kwh=2.4)  # 95 % SoC
-        schema = los_dp_op(maak_slots([0.05, 0.30]), accu)
-        if schema[0]["actie"] == "laden":
-            assert schema[0]["vermogen_w"] < accu.max_laad_w
+        schema = los_dp_op(maak_slots([0.01, 1.00]), accu)
+
+        assert schema[0]["actie"] == "laden"
+        assert schema[0]["vermogen_w"] == accu.max_laad_w
+        assert schema[0]["verwacht_vermogen_w"] < accu.max_laad_w
 
     def test_derating_niet_actief_bij_lage_soc(self):
         """

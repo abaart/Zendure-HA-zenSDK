@@ -19,6 +19,7 @@ Ingangen:
   sensor.dynamisch_nordpool                              prijs vandaag + morgen
   sensor.zendure_2400_ac_indicatie_beschikbare_energie   kWh leverbaar naar net
   sensor.zendure_2400_ac_indicatie_benodigde_energie     kWh nodig van net om vol te laden
+  sensor.zendure_2400_ac_laadpercentage                  actuele SoC (%) voor actieve-slot-correctie
   sensor.zendure_2400_ac_rte_totaal                      round-trip efficiency (%)
   input_number.zendure_2400_ac_max_oplaadvermogen        max laadvermogen (W)
   input_number.zendure_2400_ac_max_ontlaadvermogen       max ontlaadvermogen (W)
@@ -34,7 +35,13 @@ from datetime import datetime
 import appdaemon.plugins.hass.hassapi as hass
 
 # strategie_dp.py staat in dezelfde apps-map; AppDaemon zet die map op sys.path.
-from strategie_dp import Accustatus, los_dp_op
+from strategie_dp import (
+    Accustatus,
+    bereken_derating,
+    bereken_laadvermogen_voor_aansturing,
+    los_dp_op,
+    rond_vermogen_omhoog,
+)
 
 
 class DynamischHandelen(hass.Hass):
@@ -97,6 +104,8 @@ class DynamischHandelen(hass.Hass):
         )
 
         schema = los_dp_op(slots, accu, min_spread_ct_per_kwh=min_spread)
+        self._corrigeer_actief_slot_vermogen(schema, accu, hw_min_pct, hw_max_pct)
+        spread_blokkades = self._markeer_spread_blokkades(schema, accu.eta_laad, min_spread)
 
         # Vertaal DP-interne SoC% (0–100% van hw-venster) naar echte battery-%
         # zodat de grafiek overeenkomt met wat de Zendure rapporteert.
@@ -129,6 +138,8 @@ class DynamischHandelen(hass.Hass):
                 "slots":               schema,
                 "laad_slots":          len(laad_slots),
                 "ontlaad_slots":       len(ontlaad_slots),
+                "spread_blokkades":    spread_blokkades,
+                "spread_blokkades_aantal": len(spread_blokkades),
                 "volgende_actie":      volgende["actie"] if volgende else "rust",
                 "volgende_start":      volgende["start"] if volgende else None,
                 "accu_huidig_kwh":     round(accu.huidig_kwh, 3),
@@ -181,6 +192,227 @@ class DynamischHandelen(hass.Hass):
 
         slots.sort(key=lambda s: s["start"])
         return slots
+
+    # ── SPREAD-UITLEG ────────────────────────────────────────────────────────
+
+    def _markeer_spread_blokkades(
+        self,
+        schema: list[dict],
+        eta: float,
+        min_spread_ct: float,
+    ) -> list[dict]:
+        """
+        Zet uitleg op rust-slots waar de ruwe spread wel zichtbaar is maar
+        min_spread_ct na rendement niet wordt gehaald.
+
+        Voor elk rust-slot zoekt de functie de hoogste toekomstige prijs in het
+        schema. Als beste_verkoop_ct hoger is dan prijs_ct maar lager dan de
+        benodigde verkoopprijs, krijgt het slot velden voor dashboard en debug.
+        """
+        blokkades: list[dict] = []
+        if eta <= 0:
+            return blokkades
+
+        spread_helft = min_spread_ct / 2.0
+        eta_kwadraat = eta * eta
+
+        for i, slot in enumerate(schema):
+            prijs_ct = slot.get("prijs_ct")
+            if slot.get("actie") != "rust" or prijs_ct is None:
+                continue
+
+            toekomstige_prijzen = [
+                s.get("prijs_ct")
+                for s in schema[i + 1:]
+                if isinstance(s.get("prijs_ct"), (int, float))
+            ]
+            if not toekomstige_prijzen:
+                continue
+
+            beste_verkoop_ct = max(toekomstige_prijzen)
+            bruto_spread_ct = beste_verkoop_ct - prijs_ct
+            benodigde_verkoop_ct = ((prijs_ct + spread_helft) / eta_kwadraat) + spread_helft
+
+            if bruto_spread_ct < min_spread_ct or beste_verkoop_ct >= benodigde_verkoop_ct:
+                continue
+
+            blokkade = {
+                "start": slot.get("start"),
+                "end": slot.get("end"),
+                "prijs_ct": round(prijs_ct, 3),
+                "beste_verkoop_ct": round(beste_verkoop_ct, 3),
+                "benodigde_verkoop_ct": round(benodigde_verkoop_ct, 3),
+                "bruto_spread_ct": round(bruto_spread_ct, 3),
+                "spread_tekort_ct": round(benodigde_verkoop_ct - beste_verkoop_ct, 3),
+                "min_spread_ct": round(min_spread_ct, 3),
+                "reden": "spread_te_klein",
+            }
+
+            slot["geen_laden_reden"] = "spread_te_klein"
+            slot["beste_verkoop_ct"] = blokkade["beste_verkoop_ct"]
+            slot["benodigde_verkoop_ct"] = blokkade["benodigde_verkoop_ct"]
+            slot["bruto_spread_ct"] = blokkade["bruto_spread_ct"]
+            slot["spread_tekort_ct"] = blokkade["spread_tekort_ct"]
+            slot["min_spread_ct"] = blokkade["min_spread_ct"]
+            blokkades.append(blokkade)
+
+        return blokkades
+
+    # ── ACTIEVE-SLOT-CORRECTIE ───────────────────────────────────────────────
+
+    def _corrigeer_actief_slot_vermogen(
+        self,
+        schema: list[dict],
+        accu: "Accustatus",
+        hw_min_pct: float,
+        hw_max_pct: float,
+    ) -> None:
+        """
+        Corrigeert alleen het lopende slot op basis van de actuele Zendure-SoC.
+
+        los_dp_op() maakt een target voor het einde van elk prijsslot. Binnen het
+        huidige slot gebruiken we die target als vaste opdracht. Bij laden met
+        bereken_derating(actuele_soc_kwh, accu.max_kwh) lager dan 1.0 blijft
+        vermogen_w gelijk aan accu.max_laad_w; verwacht_vermogen_w krijgt dan de
+        lagere verwachte BMS-opname.
+        """
+        nu = datetime.now().astimezone()
+        actief = None
+        for slot in schema:
+            try:
+                start = datetime.fromisoformat(str(slot["start"])).astimezone()
+                end = datetime.fromisoformat(str(slot["end"])).astimezone()
+            except (KeyError, ValueError, TypeError):
+                continue
+            if start <= nu < end:
+                actief = slot
+                break
+
+        if actief is None or actief.get("actie") not in ("laden", "ontladen"):
+            return
+
+        actuele_soc_kwh = self._haal_actuele_soc_kwh_via_laadpercentage(
+            accu.max_kwh,
+            hw_min_pct,
+            hw_max_pct,
+        )
+        if actuele_soc_kwh is None:
+            return
+
+        doel = self._haal_actief_slot_doel(actief, actuele_soc_kwh)
+        actie = doel["actie"]
+        target_kwh = doel["target_kwh"]
+        begin_kwh = doel["begin_kwh"]
+
+        try:
+            eindtijd = datetime.fromisoformat(str(actief["end"])).astimezone()
+        except (KeyError, ValueError, TypeError):
+            return
+
+        resterend_h = max(0.0, (eindtijd - nu).total_seconds() / 3600.0)
+        if resterend_h <= 0.0:
+            return
+
+        if actie == "laden":
+            delta_kwh = max(0.0, target_kwh - actuele_soc_kwh)
+            energie_net_kwh = delta_kwh / accu.eta_laad if accu.eta_laad > 0 else 0.0
+            verwacht_vermogen_w = min(
+                accu.max_laad_w,
+                energie_net_kwh / resterend_h * 1000.0 if resterend_h > 0 else 0.0,
+            )
+            derating = bereken_derating(actuele_soc_kwh, accu.max_kwh)
+            vermogen_w = bereken_laadvermogen_voor_aansturing(
+                verwacht_vermogen_w,
+                accu.max_laad_w,
+                derating,
+            )
+        else:
+            delta_kwh = max(0.0, actuele_soc_kwh - target_kwh)
+            energie_net_kwh = delta_kwh * accu.eta_ontlaad
+            verwacht_vermogen_w = min(
+                accu.max_ontlaad_w,
+                energie_net_kwh / resterend_h * 1000.0 if resterend_h > 0 else 0.0,
+            )
+            vermogen_w = rond_vermogen_omhoog(verwacht_vermogen_w, accu.max_ontlaad_w)
+
+        doel_bereikt = vermogen_w <= 0
+        actief["actie"] = "rust" if doel_bereikt else actie
+        actief["geplande_actie"] = actie
+        actief["vermogen_w"] = vermogen_w
+        actief["verwacht_vermogen_w"] = rond_vermogen_omhoog(
+            verwacht_vermogen_w,
+            accu.max_laad_w * derating if actie == "laden" else accu.max_ontlaad_w,
+        )
+        actief["actief_slot_begin_kwh"] = round(begin_kwh, 3)
+        actief["actuele_soc_kwh"] = round(actuele_soc_kwh, 3)
+        actief["doel_soc_kwh"] = round(target_kwh, 3)
+        actief["doel_bereikt"] = doel_bereikt
+
+    def _haal_actueel_slot_doel_uit_vorige_sensor(self, start: str, end: str) -> dict | None:
+        """Leest begin-SoC en target-SoC voor het actieve slot uit de vorige sensorstate."""
+        vorige_slots = self.get_state("sensor.dynamisch_handelsstrategie", attribute="slots") or []
+        for slot in vorige_slots:
+            if str(slot.get("start")) != start or str(slot.get("end")) != end:
+                continue
+            actie = slot.get("geplande_actie") or slot.get("actie")
+            if actie not in ("laden", "ontladen"):
+                return None
+            try:
+                return {
+                    "actie": actie,
+                    "begin_kwh": float(slot.get("actief_slot_begin_kwh", slot["soc_voor_kwh"])),
+                    "target_kwh": float(slot.get("doel_soc_kwh", slot["soc_na_kwh"])),
+                }
+            except (KeyError, TypeError, ValueError):
+                return None
+        return None
+
+    def _haal_actief_slot_doel(self, actief: dict, actuele_soc_kwh: float) -> dict:
+        """
+        Geeft de vaste opdracht voor het actieve slot terug.
+
+        De vorige sensorstate is de bron voor hetzelfde actieve slot. Als er nog
+        geen vorige sensorstate is, gebruikt de functie de nieuwe DP-uitkomst en
+        sensor.zendure_2400_ac_laadpercentage als begin-SoC.
+        """
+        start = str(actief["start"])
+        end = str(actief["end"])
+        actie = actief["actie"]
+
+        vorig = self._haal_actueel_slot_doel_uit_vorige_sensor(start, end)
+        if vorig is not None and vorig["actie"] == actie:
+            return vorig
+
+        return {
+            "actie": actie,
+            "begin_kwh": actuele_soc_kwh,
+            "target_kwh": float(actief["soc_na_kwh"]),
+        }
+
+    def _haal_actuele_soc_kwh_via_laadpercentage(
+        self,
+        max_kwh: float,
+        hw_min_pct: float,
+        hw_max_pct: float,
+    ) -> float | None:
+        """
+        Converteert sensor.zendure_2400_ac_laadpercentage naar DP-interne kWh.
+
+        De DP-interne schaal loopt van 0 kWh bij hw_min_pct naar max_kwh bij
+        hw_max_pct. De echte Zendure-SoC wordt daarom eerst naar dat venster
+        omgerekend en daarna begrensd op 0..max_kwh.
+        """
+        hw_range = hw_max_pct - hw_min_pct
+        if max_kwh <= 0 or hw_range <= 0:
+            return None
+
+        try:
+            soc_pct = float(self.get_state("sensor.zendure_2400_ac_laadpercentage"))
+        except (TypeError, ValueError):
+            return None
+
+        venster_pct = (soc_pct - hw_min_pct) / hw_range
+        return min(max_kwh, max(0.0, venster_pct * max_kwh))
 
     def _haal_accustatus(self) -> tuple["Accustatus", float, float]:
         """

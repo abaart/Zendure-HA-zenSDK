@@ -1082,6 +1082,12 @@ actions:
                   %} {{ is_state('sensor.zendure_2400_ac_modus', 'Ontladen') or
                   (is_state('input_text.zendure_2400_ac_moduswissel_aanvraag',
                   'Ontladen') and verstreken >= vertraging) }}
+          - alias: Alleen starten wanneer de batterij nog niet ontlaadt
+            condition: not
+            conditions:
+              - condition: state
+                entity_id: sensor.zendure_2400_ac_modus
+                state: Ontladen
           - condition: or
             conditions:
               - condition: or
@@ -1190,9 +1196,10 @@ actions:
             value_template: |-
               {% set factor = 1.00 %} {% set cap =
                 states('input_number.zendure_2400_ac_max_ontlaadvermogen') | float(0) %} {% set correctie = -1 * (states('input_number.zendure_2400_ac_ontlaadmarge') | float(0)) %} {% set p1 = states('sensor.p1_aansturing_vermogen') | float(0) %} {% set zendure = states('sensor.zendure_2400_ac_vermogen_aansturing') | float(0) %} {% set totaal = (p1 - zendure - correctie) * factor %} {% set beperkt = [ [totaal, 0] | max, cap ] | min %} {% set target = beperkt | int %} {% set huidig = states('sensor.zendure_2400_ac_ingesteld_ontlaadvermogen') | int(0) %} {{ huidig != target }}
-          - condition: numeric_state
-            entity_id: sensor.zendure_2400_ac_vermogen_aansturing
-            below: 0
+          - alias: Alleen bijsturen wanneer de batterij al ontlaadt
+            condition: state
+            entity_id: sensor.zendure_2400_ac_modus
+            state: Ontladen
           - condition: or
             conditions:
               - condition: or
@@ -1361,6 +1368,12 @@ actions:
                   %} {{ is_state('sensor.zendure_2400_ac_modus', 'Opladen') or
                   (is_state('input_text.zendure_2400_ac_moduswissel_aanvraag',
                   'Opladen') and verstreken >= vertraging) }}
+          - alias: Alleen starten wanneer de batterij nog niet oplaadt
+            condition: not
+            conditions:
+              - condition: state
+                entity_id: sensor.zendure_2400_ac_modus
+                state: Opladen
           - condition: and
             conditions:
               - condition: state
@@ -1456,9 +1469,10 @@ actions:
                        states('sensor.zendure_2400_ac_maximale_laadpercentage') | float(0) }}
           - condition: template
             value_template: "{{ this.attributes.current == 0 }}"
-          - condition: numeric_state
-            entity_id: sensor.zendure_2400_ac_vermogen_aansturing
-            above: 0
+          - alias: Alleen bijsturen wanneer de batterij al oplaadt
+            condition: state
+            entity_id: sensor.zendure_2400_ac_modus
+            state: Opladen
           - condition: or
             conditions:
               - condition: state
@@ -2224,12 +2238,14 @@ actions:
               {% set slots = state_attr('sensor.dynamisch_handelsstrategie',
               'slots') | default([]) %}
               {% set vermogen = namespace(val=-1) %}
+              {% set actie = namespace(val='rust') %}
               {% for s in slots %}
                 {% if as_timestamp(s.start) <= as_timestamp(now()) < as_timestamp(s.end) %}
                   {% set vermogen.val = s.vermogen_w | int %}
+                  {% set actie.val = s.actie %}
                 {% endif %}
               {% endfor %}
-              {{ vermogen.val >= 0 and
+              {{ actie.val == 'laden' and vermogen.val > 0 and
                  vermogen.val != states('sensor.zendure_2400_ac_ingesteld_oplaadvermogen') | int }}
         sequence:
           - action: rest_command.zendure_snel_laden
@@ -2282,12 +2298,14 @@ actions:
               {% set slots = state_attr('sensor.dynamisch_handelsstrategie',
               'slots') | default([]) %}
               {% set vermogen = namespace(val=-1) %}
+              {% set actie = namespace(val='rust') %}
               {% for s in slots %}
                 {% if as_timestamp(s.start) <= as_timestamp(now()) < as_timestamp(s.end) %}
                   {% set vermogen.val = s.vermogen_w | int %}
+                  {% set actie.val = s.actie %}
                 {% endif %}
               {% endfor %}
-              {{ vermogen.val >= 0 and
+              {{ actie.val == 'ontladen' and vermogen.val > 0 and
                  vermogen.val != states('sensor.zendure_2400_ac_ingesteld_ontlaadvermogen') | int }}
         sequence:
           - action: rest_command.zendure_snel_ontladen

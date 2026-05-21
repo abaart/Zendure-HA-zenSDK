@@ -111,6 +111,88 @@ views:
                     new Date(s.start).getTime(),
                     s.actie === 'laden' ? 1 : s.actie === 'ontladen' ? 2 : 0
                   ]);
+              - entity: sensor.dynamisch_handelsstrategie
+                name: Spread te klein
+                type: column
+                color: '#ef5350'
+                opacity: 0.45
+                yaxis_id: prijs
+                float_precision: 1
+                unit: 'ct/kWh'
+                show:
+                  in_chart: true
+                  in_header: false
+                  in_legend: true
+                data_generator: |
+                  const slots = entity.attributes.slots || [];
+                  return slots.map(s => {
+                    const ts = new Date(s.start).getTime();
+                    const prijs = Number(s.prijs_ct);
+                    if (s.geen_laden_reden !== 'spread_te_klein' || !Number.isFinite(prijs)) {
+                      return [ts, null];
+                    }
+                    return [ts, prijs];
+                  });
+              - entity: sensor.dynamisch_handelsstrategie
+                name: Beste verkoop
+                type: line
+                stroke_width: 0
+                opacity: 0
+                yaxis_id: extra
+                show:
+                  in_chart: true
+                  in_header: false
+                  in_legend: false
+                data_generator: |
+                  return (entity.attributes.slots || []).map(s => [
+                    new Date(s.start).getTime(),
+                    s.geen_laden_reden === 'spread_te_klein' ? s.beste_verkoop_ct : null
+                  ]);
+              - entity: sensor.dynamisch_handelsstrategie
+                name: Nodig bij drempel
+                type: line
+                stroke_width: 0
+                opacity: 0
+                yaxis_id: extra
+                show:
+                  in_chart: true
+                  in_header: false
+                  in_legend: false
+                data_generator: |
+                  return (entity.attributes.slots || []).map(s => [
+                    new Date(s.start).getTime(),
+                    s.geen_laden_reden === 'spread_te_klein' ? s.benodigde_verkoop_ct : null
+                  ]);
+              - entity: sensor.dynamisch_handelsstrategie
+                name: Min spread
+                type: line
+                stroke_width: 0
+                opacity: 0
+                yaxis_id: extra
+                show:
+                  in_chart: true
+                  in_header: false
+                  in_legend: false
+                data_generator: |
+                  return (entity.attributes.slots || []).map(s => [
+                    new Date(s.start).getTime(),
+                    s.geen_laden_reden === 'spread_te_klein' ? s.min_spread_ct : null
+                  ]);
+              - entity: sensor.dynamisch_handelsstrategie
+                name: Spread tekort
+                type: line
+                stroke_width: 0
+                opacity: 0
+                yaxis_id: extra
+                show:
+                  in_chart: true
+                  in_header: false
+                  in_legend: false
+                data_generator: |
+                  return (entity.attributes.slots || []).map(s => [
+                    new Date(s.start).getTime(),
+                    s.geen_laden_reden === 'spread_te_klein' ? s.spread_tekort_ct : null
+                  ]);
             apex_config:
               tooltip:
                 custom: |
@@ -119,6 +201,11 @@ views:
                     var prijs = series[1][dataPointIndex];
                     var vermogen = series[2][dataPointIndex];
                     var actieCode = series[3][dataPointIndex];
+                    var spreadBlokkade = series[4][dataPointIndex];
+                    var besteVerkoop = series[5][dataPointIndex];
+                    var nodigeVerkoop = series[6][dataPointIndex];
+                    var minSpread = series[7][dataPointIndex];
+                    var spreadTekort = series[8][dataPointIndex];
                     var actieLabel = actieCode === 1 ? 'Laden' : actieCode === 2 ? 'Ontladen' : 'Rust';
                     var ts = w.globals.seriesX[0] && w.globals.seriesX[0][dataPointIndex];
                     if (!ts) return '';
@@ -131,6 +218,13 @@ views:
                     html += '<div style="color:var(--secondary-text-color)">Prijs&nbsp;&nbsp;&nbsp;&nbsp;: <span style="color:var(--primary-text-color);font-weight:bold">' + (prijs != null ? prijs.toFixed(1) + ' ct/kWh' : '\u2014') + '</span></div>';
                     html += '<div style="color:var(--secondary-text-color)">Actie&nbsp;&nbsp;&nbsp;&nbsp;: <span style="color:var(--primary-text-color);font-weight:bold">' + actieLabel + '</span></div>';
                     if (actieCode) { html += '<div style="color:var(--secondary-text-color)">Vermogen : <span style="color:var(--primary-text-color);font-weight:bold">' + (vermogen != null ? Math.round(vermogen) + ' W' : '\u2014') + '</span></div>'; }
+                    if (spreadBlokkade != null && besteVerkoop != null && nodigeVerkoop != null && minSpread != null && spreadTekort != null) {
+                      html += '<div style="margin-top:4px;color:#ef5350;font-weight:bold">Niet laden: spread te klein</div>';
+                      html += '<div style="color:var(--secondary-text-color)">Beste verkoop&nbsp;: <span style="color:var(--primary-text-color);font-weight:bold">' + besteVerkoop.toFixed(1) + ' ct</span></div>';
+                      html += '<div style="color:var(--secondary-text-color)">Nodig bij drempel: <span style="color:var(--primary-text-color);font-weight:bold">' + nodigeVerkoop.toFixed(1) + ' ct</span></div>';
+                      html += '<div style="color:var(--secondary-text-color)">Min. spread&nbsp;&nbsp;&nbsp;: <span style="color:var(--primary-text-color);font-weight:bold">' + minSpread.toFixed(1) + ' ct</span></div>';
+                      html += '<div style="color:var(--secondary-text-color)">Tekort&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;: <span style="color:var(--primary-text-color);font-weight:bold">' + spreadTekort.toFixed(1) + ' ct</span></div>';
+                    }
                     html += '</div>';
                     return html;
                   }
