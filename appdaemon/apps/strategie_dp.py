@@ -234,6 +234,8 @@ def corrigeer_actief_slot_vermogen(
 
     Als de actuele SoC al voorloopt en toekomstige laadslots niet goedkoper zijn,
     mag het lopende laadslot extra energie uit die latere laadslots naar voren
+    halen. Als het lopende ontlaadslot duurder is dan latere ontlaadslots, mag
+    het lopende ontlaadslot extra energie uit die latere ontlaadslots naar voren
     halen. De functie past alleen het actieve slot aan en laat toekomstige slots
     ongewijzigd.
     """
@@ -265,6 +267,27 @@ def corrigeer_actief_slot_vermogen(
 
             try:
                 doel = max(doel, float(volgend["soc_na_kwh"]))
+            except (KeyError, TypeError, ValueError):
+                break
+
+        return doel
+
+    def ontlaadblok_doel_soc_kwh(actief_index: int, basis_doel_kwh: float) -> float:
+        doel = basis_doel_kwh
+        actieve_prijs = prijs_ct(schema[actief_index])
+        if actieve_prijs is None:
+            return doel
+
+        for volgend in schema[actief_index + 1:]:
+            if volgend.get("actie") != "ontladen":
+                break
+
+            volgende_prijs = prijs_ct(volgend)
+            if volgende_prijs is None or volgende_prijs > actieve_prijs:
+                break
+
+            try:
+                doel = min(doel, float(volgend["soc_na_kwh"]))
             except (KeyError, TypeError, ValueError):
                 break
 
@@ -324,6 +347,19 @@ def corrigeer_actief_slot_vermogen(
             gevraagd_w = delta_kwh / accu.eta_laad / resterende_uren * 1000.0
             slot["vermogen_w"] = round(min(accu.max_laad_w, max(0.0, gevraagd_w)))
             return schema
+
+        if accu.eta_ontlaad <= 0:
+            slot["actie"] = "rust"
+            slot["vermogen_w"] = 0
+            return schema
+
+        ontlaadblok_doel_kwh = ontlaadblok_doel_soc_kwh(actief_index, doel_soc_kwh)
+        maximaal_haalbaar_kwh = (
+            accu.huidig_kwh
+            - accu.max_ontlaad_w / 1000.0 * resterende_uren / accu.eta_ontlaad
+        )
+        doel_soc_kwh = max(ontlaadblok_doel_kwh, maximaal_haalbaar_kwh)
+        slot["doel_soc_kwh"] = round(doel_soc_kwh, 3)
 
         delta_kwh = accu.huidig_kwh - doel_soc_kwh
         if delta_kwh <= 0:

@@ -523,6 +523,78 @@ class TestActiefSlotVermogen:
         assert schema[0]["vermogen_w"] == 1518
         assert schema[0]["doel_soc_kwh"] == 4.7
 
+    def test_lopend_ontlaadslot_verlaagt_doel_bij_duurder_actief_slot(self):
+        """
+        Als het actieve ontlaadslot duurder is dan het volgende ontlaadslot, mag
+        het actieve slot extra energie naar voren halen.
+        """
+        nu = datetime.fromisoformat("2026-05-21T20:06:28.030751+02:00")
+        schema = [
+            {
+                "start": "2026-05-21T20:00:00+02:00",
+                "end": "2026-05-21T21:00:00+02:00",
+                "prijs_ct": 37.08,
+                "actie": "ontladen",
+                "vermogen_w": 1994,
+                "soc_voor_kwh": 3.95,
+                "soc_na_kwh": 2.0,
+                "winst_eur": 0.6655,
+            },
+            {
+                "start": "2026-05-21T21:00:00+02:00",
+                "end": "2026-05-21T22:00:00+02:00",
+                "prijs_ct": 35.607,
+                "actie": "ontladen",
+                "vermogen_w": 1841,
+                "soc_voor_kwh": 2.0,
+                "soc_na_kwh": 0.35,
+                "winst_eur": 0.6554,
+            },
+        ]
+        accu = maak_accu(huidig_kwh=3.933, max_kwh=5.13, eta=0.92)
+
+        corrigeer_actief_slot_vermogen(schema, accu, nu)
+
+        assert schema[0]["actie"] == "ontladen"
+        assert schema[0]["vermogen_w"] == 2400
+        assert schema[0]["doel_soc_kwh"] == pytest.approx(1.605, abs=0.001)
+
+    def test_lopend_ontlaadslot_verlaagt_doel_niet_als_vervolg_duurder_is(self):
+        """
+        Als het volgende ontlaadslot duurder is, blijft het actieve slot bij het
+        eigen soc_na_kwh-doel.
+        """
+        nu = datetime.fromisoformat("2026-05-21T20:00:00+02:00")
+        schema = [
+            {
+                "start": "2026-05-21T20:00:00+02:00",
+                "end": "2026-05-21T21:00:00+02:00",
+                "prijs_ct": 35.0,
+                "actie": "ontladen",
+                "vermogen_w": 1840,
+                "soc_voor_kwh": 4.0,
+                "soc_na_kwh": 2.0,
+                "winst_eur": 0.64,
+            },
+            {
+                "start": "2026-05-21T21:00:00+02:00",
+                "end": "2026-05-21T22:00:00+02:00",
+                "prijs_ct": 37.0,
+                "actie": "ontladen",
+                "vermogen_w": 1840,
+                "soc_voor_kwh": 2.0,
+                "soc_na_kwh": 0.35,
+                "winst_eur": 0.68,
+            },
+        ]
+        accu = maak_accu(huidig_kwh=4.0, max_kwh=5.13, eta=0.92)
+
+        corrigeer_actief_slot_vermogen(schema, accu, nu)
+
+        assert schema[0]["actie"] == "ontladen"
+        assert schema[0]["vermogen_w"] == 1840
+        assert schema[0]["doel_soc_kwh"] == 2.0
+
 
 # ── 15-MINUTEN SLOTS ─────────────────────────────────────────────────────────
 
