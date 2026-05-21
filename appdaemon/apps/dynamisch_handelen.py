@@ -34,7 +34,7 @@ from datetime import datetime
 import appdaemon.plugins.hass.hassapi as hass
 
 # strategie_dp.py staat in dezelfde apps-map; AppDaemon zet die map op sys.path.
-from strategie_dp import Accustatus, los_dp_op
+from strategie_dp import Accustatus, corrigeer_actief_slot_vermogen, los_dp_op
 
 
 class DynamischHandelen(hass.Hass):
@@ -97,6 +97,7 @@ class DynamischHandelen(hass.Hass):
         )
 
         schema = los_dp_op(slots, accu, min_spread_ct_per_kwh=min_spread)
+        schema = corrigeer_actief_slot_vermogen(schema, accu, datetime.now().astimezone())
 
         # Vertaal DP-interne SoC% (0–100% van hw-venster) naar echte battery-%
         # zodat de grafiek overeenkomt met wat de Zendure rapporteert.
