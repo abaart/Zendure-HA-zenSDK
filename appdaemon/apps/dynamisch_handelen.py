@@ -278,7 +278,8 @@ class DynamischHandelen(hass.Hass):
         """
         nu = datetime.now().astimezone()
         actief = None
-        for slot in schema:
+        actief_index = None
+        for index, slot in enumerate(schema):
             try:
                 start = datetime.fromisoformat(str(slot["start"])).astimezone()
                 end = datetime.fromisoformat(str(slot["end"])).astimezone()
@@ -286,9 +287,10 @@ class DynamischHandelen(hass.Hass):
                 continue
             if start <= nu < end:
                 actief = slot
+                actief_index = index
                 break
 
-        if actief is None or actief.get("actie") not in ("laden", "ontladen"):
+        if actief is None or actief_index is None or actief.get("actie") not in ("laden", "ontladen"):
             return
 
         actuele_soc_kwh = self._haal_actuele_soc_kwh_via_laadpercentage(
@@ -314,6 +316,14 @@ class DynamischHandelen(hass.Hass):
             return
 
         if actie == "laden":
+            target_kwh = self._verhoog_actief_laadslot_doel(
+                schema,
+                actief_index,
+                target_kwh,
+                actuele_soc_kwh,
+                accu,
+                resterend_h,
+            )
             delta_kwh = max(0.0, target_kwh - actuele_soc_kwh)
             energie_net_kwh = delta_kwh / accu.eta_laad if accu.eta_laad > 0 else 0.0
             verwacht_vermogen_w = min(
@@ -347,6 +357,53 @@ class DynamischHandelen(hass.Hass):
         actief["actuele_soc_kwh"] = round(actuele_soc_kwh, 3)
         actief["doel_soc_kwh"] = round(target_kwh, 3)
         actief["doel_bereikt"] = doel_bereikt
+
+    def _verhoog_actief_laadslot_doel(
+        self,
+        schema: list[dict],
+        actief_index: int,
+        basis_doel_kwh: float,
+        actuele_soc_kwh: float,
+        accu: "Accustatus",
+        resterend_h: float,
+    ) -> float:
+        """
+        Verhoogt het actieve laadslotdoel als latere laadslots niet goedkoper zijn.
+
+        Het actieve slot mag energie uit latere aaneengesloten laadslots naar
+        voren halen wanneer die latere slots dezelfde of een hogere prijs hebben.
+        Een goedkoper volgend laadslot stopt de verhoging.
+        """
+        actieve_prijs = self._prijs_ct(schema[actief_index])
+        if actieve_prijs is None:
+            return basis_doel_kwh
+
+        doel_kwh = basis_doel_kwh
+        for volgend in schema[actief_index + 1:]:
+            if volgend.get("actie") != "laden":
+                break
+
+            volgende_prijs = self._prijs_ct(volgend)
+            if volgende_prijs is None or volgende_prijs < actieve_prijs:
+                break
+
+            try:
+                doel_kwh = max(doel_kwh, float(volgend["soc_na_kwh"]))
+            except (KeyError, TypeError, ValueError):
+                break
+
+        maximaal_haalbaar_kwh = (
+            actuele_soc_kwh
+            + accu.max_laad_w / 1000.0 * resterend_h * accu.eta_laad
+        )
+        return min(doel_kwh, max(basis_doel_kwh, maximaal_haalbaar_kwh))
+
+    def _prijs_ct(self, slot: dict) -> float | None:
+        """Leest prijs_ct als getal uit een schema-slot."""
+        try:
+            return float(slot["prijs_ct"])
+        except (KeyError, TypeError, ValueError):
+            return None
 
     def _haal_actueel_slot_doel_uit_vorige_sensor(self, start: str, end: str) -> dict | None:
         """Leest begin-SoC en target-SoC voor het actieve slot uit de vorige sensorstate."""

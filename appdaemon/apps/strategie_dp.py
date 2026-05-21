@@ -96,6 +96,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 
@@ -216,6 +217,124 @@ def bereken_laadvermogen_voor_aansturing(
         return rond_vermogen_omhoog(max_laad_w, max_laad_w)
 
     return rond_vermogen_omhoog(verwacht_vermogen_w, max_laad_w)
+
+
+def corrigeer_actief_slot_vermogen(
+    schema: list[dict[str, Any]],
+    accu: Accustatus,
+    nu: datetime,
+) -> list[dict[str, Any]]:
+    """
+    Bereken `vermogen_w` voor het lopende slot vanuit `accu.huidig_kwh`.
+
+    Het DP-schema bewaart `soc_na_kwh` als einddoel van elk slot. Voor het
+    lopende slot moet de Zendure daarom minimaal sturen op:
+
+        actuele SoC -> soc_na_kwh binnen de resterende slottijd
+
+    Als de actuele SoC al voorloopt en toekomstige laadslots niet goedkoper zijn,
+    mag het lopende laadslot extra energie uit die latere laadslots naar voren
+    halen. De functie past alleen het actieve slot aan en laat toekomstige slots
+    ongewijzigd.
+    """
+
+    def naar_datetime(waarde: Any) -> datetime:
+        if isinstance(waarde, datetime):
+            return waarde
+        return datetime.fromisoformat(str(waarde))
+
+    def prijs_ct(slot: dict[str, Any]) -> float | None:
+        try:
+            return float(slot["prijs_ct"])
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    def laadblok_doel_soc_kwh(actief_index: int, basis_doel_kwh: float) -> float:
+        doel = basis_doel_kwh
+        actieve_prijs = prijs_ct(schema[actief_index])
+        if actieve_prijs is None:
+            return doel
+
+        for volgend in schema[actief_index + 1:]:
+            if volgend.get("actie") != "laden":
+                break
+
+            volgende_prijs = prijs_ct(volgend)
+            if volgende_prijs is None or volgende_prijs < actieve_prijs:
+                break
+
+            try:
+                doel = max(doel, float(volgend["soc_na_kwh"]))
+            except (KeyError, TypeError, ValueError):
+                break
+
+        return doel
+
+    for actief_index, slot in enumerate(schema):
+        try:
+            start = naar_datetime(slot["start"])
+            end = naar_datetime(slot["end"])
+        except (KeyError, TypeError, ValueError):
+            continue
+
+        nu_slot = nu
+        if start.tzinfo is not None and nu.tzinfo is not None:
+            nu_slot = nu.astimezone(start.tzinfo)
+
+        if not (start <= nu_slot < end):
+            continue
+
+        actie = slot.get("actie")
+        if actie not in ("laden", "ontladen"):
+            return schema
+
+        try:
+            doel_soc_kwh = float(slot["soc_na_kwh"])
+        except (KeyError, TypeError, ValueError):
+            return schema
+
+        resterende_uren = (end - nu_slot).total_seconds() / 3600.0
+        slot["geplande_actie"] = actie
+        slot["verwacht_vermogen_w"] = slot.get("vermogen_w", 0)
+        slot["actuele_soc_kwh"] = round(accu.huidig_kwh, 3)
+        slot["doel_soc_kwh"] = round(doel_soc_kwh, 3)
+
+        if resterende_uren <= 0:
+            slot["actie"] = "rust"
+            slot["vermogen_w"] = 0
+            return schema
+
+        if actie == "laden":
+            laadblok_doel_kwh = laadblok_doel_soc_kwh(actief_index, doel_soc_kwh)
+            maximaal_haalbaar_kwh = (
+                accu.huidig_kwh
+                + accu.max_laad_w / 1000.0 * resterende_uren * accu.eta_laad
+            )
+            doel_soc_kwh = min(
+                laadblok_doel_kwh,
+                max(doel_soc_kwh, maximaal_haalbaar_kwh),
+            )
+            slot["doel_soc_kwh"] = round(doel_soc_kwh, 3)
+
+            delta_kwh = doel_soc_kwh - accu.huidig_kwh
+            if delta_kwh <= 0 or accu.eta_laad <= 0:
+                slot["actie"] = "rust"
+                slot["vermogen_w"] = 0
+                return schema
+            gevraagd_w = delta_kwh / accu.eta_laad / resterende_uren * 1000.0
+            slot["vermogen_w"] = round(min(accu.max_laad_w, max(0.0, gevraagd_w)))
+            return schema
+
+        delta_kwh = accu.huidig_kwh - doel_soc_kwh
+        if delta_kwh <= 0:
+            slot["actie"] = "rust"
+            slot["vermogen_w"] = 0
+            return schema
+        gevraagd_w = delta_kwh * accu.eta_ontlaad / resterende_uren * 1000.0
+        slot["vermogen_w"] = round(min(accu.max_ontlaad_w, max(0.0, gevraagd_w)))
+        return schema
+
+    return schema
 
 
 # ── DYNAMIC PROGRAMMING ───────────────────────────────────────────────────────

@@ -22,6 +22,7 @@ from strategie_dp import (
     SOC_STAP_KWH,
     bereken_derating,
     bereken_laadvermogen_voor_aansturing,
+    corrigeer_actief_slot_vermogen,
     los_dp_op,
     rond_vermogen_omhoog,
 )
@@ -395,6 +396,132 @@ class TestDeratingEffect:
         """
         assert bereken_derating(2.4 * 0.50, 2.4) == pytest.approx(1.0)
         assert bereken_derating(2.4 * 0.75, 2.4) == pytest.approx(1.0)
+
+
+# ── ACTIEF SLOT ───────────────────────────────────────────────────────────────
+
+class TestActiefSlotVermogen:
+    def test_lopend_laadslot_gebruikt_soc_na_als_doel(self):
+        """
+        Om 14:11 moet het 14:00-slot naar soc_na_kwh=4.7 sturen.
+        Het lagere tussendoel 4.05 mag het laadvermogen niet beperken.
+        """
+        nu = datetime.fromisoformat("2026-05-21T14:11:42.812815+02:00")
+        schema = [{
+            "start": "2026-05-21T14:00:00+02:00",
+            "end": "2026-05-21T15:00:00+02:00",
+            "prijs_ct": 14.467,
+            "actie": "laden",
+            "vermogen_w": 1550,
+            "soc_voor_kwh": 2.9,
+            "soc_na_kwh": 4.7,
+            "winst_eur": -0.2825,
+        }]
+        accu = maak_accu(huidig_kwh=2.916, max_kwh=5.146, eta=0.922)
+
+        corrigeer_actief_slot_vermogen(schema, accu, nu)
+
+        assert schema[0]["actie"] == "laden"
+        assert schema[0]["vermogen_w"] == 2400
+        assert schema[0]["doel_soc_kwh"] == 4.7
+        assert schema[0]["actuele_soc_kwh"] == 2.916
+        assert schema[0]["geplande_actie"] == "laden"
+
+    def test_lopend_laadslot_beperkt_vermogen_als_doel_lager_is(self):
+        """
+        Als soc_na_kwh haalbaar is met minder dan max_laad_w, gebruikt het actieve
+        slot het berekende vermogen in plaats van altijd max_laad_w.
+        """
+        nu = datetime.fromisoformat("2026-05-21T15:00:00+02:00")
+        schema = [{
+            "start": "2026-05-21T15:00:00+02:00",
+            "end": "2026-05-21T16:00:00+02:00",
+            "prijs_ct": 17.289,
+            "actie": "laden",
+            "vermogen_w": 2400,
+            "soc_voor_kwh": 4.7,
+            "soc_na_kwh": 5.15,
+            "winst_eur": -0.0844,
+        }]
+        accu = maak_accu(huidig_kwh=4.7, max_kwh=5.146, eta=0.922)
+
+        corrigeer_actief_slot_vermogen(schema, accu, nu)
+
+        assert schema[0]["actie"] == "laden"
+        assert schema[0]["vermogen_w"] == 488
+        assert schema[0]["doel_soc_kwh"] == 5.15
+
+    def test_lopend_laadslot_verhoogt_doel_bij_voorsprong_en_duurder_vervolg(self):
+        """
+        Als de actuele SoC voorloopt en het volgende laadslot duurder is, mag het
+        actieve slot extra energie naar voren halen.
+        """
+        nu = datetime.fromisoformat("2026-05-21T14:30:00+02:00")
+        schema = [
+            {
+                "start": "2026-05-21T14:00:00+02:00",
+                "end": "2026-05-21T15:00:00+02:00",
+                "prijs_ct": 14.467,
+                "actie": "laden",
+                "vermogen_w": 1550,
+                "soc_voor_kwh": 2.9,
+                "soc_na_kwh": 4.7,
+                "winst_eur": -0.2825,
+            },
+            {
+                "start": "2026-05-21T15:00:00+02:00",
+                "end": "2026-05-21T16:00:00+02:00",
+                "prijs_ct": 17.289,
+                "actie": "laden",
+                "vermogen_w": 488,
+                "soc_voor_kwh": 4.7,
+                "soc_na_kwh": 5.15,
+                "winst_eur": -0.0844,
+            },
+        ]
+        accu = maak_accu(huidig_kwh=4.0, max_kwh=5.146, eta=0.922)
+
+        corrigeer_actief_slot_vermogen(schema, accu, nu)
+
+        assert schema[0]["actie"] == "laden"
+        assert schema[0]["vermogen_w"] == 2400
+        assert schema[0]["doel_soc_kwh"] == pytest.approx(5.106, abs=0.001)
+
+    def test_lopend_laadslot_verhoogt_doel_niet_als_vervolg_goedkoper_is(self):
+        """
+        Als het volgende laadslot goedkoper is, blijft het actieve slot bij het
+        eigen soc_na_kwh-doel.
+        """
+        nu = datetime.fromisoformat("2026-05-21T14:30:00+02:00")
+        schema = [
+            {
+                "start": "2026-05-21T14:00:00+02:00",
+                "end": "2026-05-21T15:00:00+02:00",
+                "prijs_ct": 15.0,
+                "actie": "laden",
+                "vermogen_w": 1550,
+                "soc_voor_kwh": 2.9,
+                "soc_na_kwh": 4.7,
+                "winst_eur": -0.2825,
+            },
+            {
+                "start": "2026-05-21T15:00:00+02:00",
+                "end": "2026-05-21T16:00:00+02:00",
+                "prijs_ct": 13.0,
+                "actie": "laden",
+                "vermogen_w": 488,
+                "soc_voor_kwh": 4.7,
+                "soc_na_kwh": 5.15,
+                "winst_eur": -0.0844,
+            },
+        ]
+        accu = maak_accu(huidig_kwh=4.0, max_kwh=5.146, eta=0.922)
+
+        corrigeer_actief_slot_vermogen(schema, accu, nu)
+
+        assert schema[0]["actie"] == "laden"
+        assert schema[0]["vermogen_w"] == 1518
+        assert schema[0]["doel_soc_kwh"] == 4.7
 
 
 # ── 15-MINUTEN SLOTS ─────────────────────────────────────────────────────────
