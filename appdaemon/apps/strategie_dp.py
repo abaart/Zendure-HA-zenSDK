@@ -96,30 +96,10 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Any
 
 
 # ── CONFIGURATIE ──────────────────────────────────────────────────────────────
-
-# BMS-derating curve: bij welke SoC% verwachten we minder opgenomen laadvermogen?
-# Formaat: lijst van (soc_procent, vermogensfactor), gesorteerd op soc_procent.
-# Lineair geïnterpoleerd tussen opeenvolgende punten.
-#
-# Achtergrond: lithiumaccu's laden in twee fasen (CC/CV laadprofiel):
-#   - Constant Current (CC): tot ±80% SoC laadt de accu op vol vermogen
-#   - Constant Voltage (CV): daarboven daalt de stroom om cellen te sparen
-#
-# Pas deze waarden aan op basis van de werkelijke specs van jouw accu.
-# los_dp_op() gebruikt SOC_DERATING alleen voor de verwachte SoC-verandering.
-# De vermogensopdracht aan Zendure blijft max_laad_w zodra BMS-derating actief is.
-SOC_DERATING: list[tuple[float, float]] = [
-    (0.0,   1.00),  # 0–80 %: vol vermogen
-    (80.0,  1.00),
-    (90.0,  0.70),  # bij 90 % SoC: 70 % van max laadvermogen
-    (95.0,  0.40),  # bij 95 % SoC: 40 % van max laadvermogen
-    (100.0, 0.10),  # bij 100 % SoC: trickle charge (10 %)
-]
 
 # Stapgrootte voor SoC-discretisatie (kWh per DP-tabelrij).
 # Kleiner = nauwkeuriger maar meer geheugen en rekentijd.
@@ -152,37 +132,6 @@ class Accustatus:
 
 # ── HULPFUNCTIES ──────────────────────────────────────────────────────────────
 
-def bereken_derating(soc_kwh: float, max_kwh: float) -> float:
-    """
-    Geeft de vermogensfactor (0–1) voor het laadvermogen op basis van de huidige SoC.
-
-    De CC/CV-curve verschilt per fabrikant; pas SOC_DERATING aan naar de specs.
-    We gebruiken lineaire interpolatie tussen de geconfigureerde drempelwaarden.
-
-    Args:
-        soc_kwh: Huidige opgeslagen energie (kWh, boven min-SoC)
-        max_kwh: Totale bruikbare capaciteit (kWh)
-
-    Returns:
-        Factor tussen 0 en 1; 1.0 = vol vermogen, 0.1 = trickle charge
-    """
-    if max_kwh <= 0:
-        return 0.0
-
-    soc_pct = (soc_kwh / max_kwh) * 100.0
-
-    for i in range(len(SOC_DERATING) - 1):
-        lo_pct, lo_factor = SOC_DERATING[i]
-        hi_pct, hi_factor = SOC_DERATING[i + 1]
-        if lo_pct <= soc_pct <= hi_pct:
-            # Lineaire interpolatie
-            t = (soc_pct - lo_pct) / (hi_pct - lo_pct)
-            return lo_factor + t * (hi_factor - lo_factor)
-
-    # Buiten het geconfigureerde bereik: gebruik de waarde van het laatste punt
-    return SOC_DERATING[-1][1]
-
-
 def rond_vermogen_omhoog(vermogen_w: float, maximum_w: float) -> int:
     """
     Rondt een vermogensopdracht naar boven af op VERMOGEN_STAP_W.
@@ -193,184 +142,9 @@ def rond_vermogen_omhoog(vermogen_w: float, maximum_w: float) -> int:
     if vermogen_w <= 0 or maximum_w <= 0:
         return 0
 
-    stappen = math.ceil(vermogen_w / VERMOGEN_STAP_W)
+    stappen = math.ceil((vermogen_w - 1e-9) / VERMOGEN_STAP_W)
     afgerond = stappen * VERMOGEN_STAP_W
     return int(min(maximum_w, afgerond))
-
-
-def bereken_laadvermogen_voor_aansturing(
-    verwacht_vermogen_w: float,
-    max_laad_w: float,
-    derating_factor: float,
-) -> int:
-    """
-    Geeft de laadopdracht voor Zendure.
-
-    bereken_derating() beschrijft wat het BMS naar verwachting opneemt. Zodra
-    die factor lager is dan 1.0 sturen we max_laad_w aan en laten we het BMS
-    de werkelijke laadstroom begrenzen.
-    """
-    if verwacht_vermogen_w <= 0 or max_laad_w <= 0:
-        return 0
-
-    if derating_factor < 1.0:
-        return rond_vermogen_omhoog(max_laad_w, max_laad_w)
-
-    return rond_vermogen_omhoog(verwacht_vermogen_w, max_laad_w)
-
-
-def corrigeer_actief_slot_vermogen(
-    schema: list[dict[str, Any]],
-    accu: Accustatus,
-    nu: datetime,
-) -> list[dict[str, Any]]:
-    """
-    Bereken `vermogen_w` voor het lopende slot vanuit `accu.huidig_kwh`.
-
-    Het DP-schema bewaart `soc_na_kwh` als einddoel van elk slot. Voor het
-    lopende slot moet de Zendure daarom minimaal sturen op:
-
-        actuele SoC -> soc_na_kwh binnen de resterende slottijd
-
-    Als de actuele SoC al voorloopt en toekomstige laadslots niet goedkoper zijn,
-    mag het lopende laadslot extra energie uit die latere laadslots naar voren
-    halen. Als het lopende ontlaadslot duurder is dan latere ontlaadslots, mag
-    het lopende ontlaadslot extra energie uit die latere ontlaadslots naar voren
-    halen. De functie past alleen het actieve slot aan en laat toekomstige slots
-    ongewijzigd.
-    """
-
-    def naar_datetime(waarde: Any) -> datetime:
-        if isinstance(waarde, datetime):
-            return waarde
-        return datetime.fromisoformat(str(waarde))
-
-    def prijs_ct(slot: dict[str, Any]) -> float | None:
-        try:
-            return float(slot["prijs_ct"])
-        except (KeyError, TypeError, ValueError):
-            return None
-
-    def laadblok_doel_soc_kwh(actief_index: int, basis_doel_kwh: float) -> float:
-        doel = basis_doel_kwh
-        actieve_prijs = prijs_ct(schema[actief_index])
-        if actieve_prijs is None:
-            return doel
-
-        for volgend in schema[actief_index + 1:]:
-            if volgend.get("actie") != "laden":
-                break
-
-            volgende_prijs = prijs_ct(volgend)
-            if volgende_prijs is None or volgende_prijs < actieve_prijs:
-                break
-
-            try:
-                doel = max(doel, float(volgend["soc_na_kwh"]))
-            except (KeyError, TypeError, ValueError):
-                break
-
-        return doel
-
-    def ontlaadblok_doel_soc_kwh(actief_index: int, basis_doel_kwh: float) -> float:
-        doel = basis_doel_kwh
-        actieve_prijs = prijs_ct(schema[actief_index])
-        if actieve_prijs is None:
-            return doel
-
-        for volgend in schema[actief_index + 1:]:
-            if volgend.get("actie") != "ontladen":
-                break
-
-            volgende_prijs = prijs_ct(volgend)
-            if volgende_prijs is None or volgende_prijs > actieve_prijs:
-                break
-
-            try:
-                doel = min(doel, float(volgend["soc_na_kwh"]))
-            except (KeyError, TypeError, ValueError):
-                break
-
-        return doel
-
-    for actief_index, slot in enumerate(schema):
-        try:
-            start = naar_datetime(slot["start"])
-            end = naar_datetime(slot["end"])
-        except (KeyError, TypeError, ValueError):
-            continue
-
-        nu_slot = nu
-        if start.tzinfo is not None and nu.tzinfo is not None:
-            nu_slot = nu.astimezone(start.tzinfo)
-
-        if not (start <= nu_slot < end):
-            continue
-
-        actie = slot.get("actie")
-        if actie not in ("laden", "ontladen"):
-            return schema
-
-        try:
-            doel_soc_kwh = float(slot["soc_na_kwh"])
-        except (KeyError, TypeError, ValueError):
-            return schema
-
-        resterende_uren = (end - nu_slot).total_seconds() / 3600.0
-        slot["geplande_actie"] = actie
-        slot["verwacht_vermogen_w"] = slot.get("vermogen_w", 0)
-        slot["actuele_soc_kwh"] = round(accu.huidig_kwh, 3)
-        slot["doel_soc_kwh"] = round(doel_soc_kwh, 3)
-
-        if resterende_uren <= 0:
-            slot["actie"] = "rust"
-            slot["vermogen_w"] = 0
-            return schema
-
-        if actie == "laden":
-            laadblok_doel_kwh = laadblok_doel_soc_kwh(actief_index, doel_soc_kwh)
-            maximaal_haalbaar_kwh = (
-                accu.huidig_kwh
-                + accu.max_laad_w / 1000.0 * resterende_uren * accu.eta_laad
-            )
-            doel_soc_kwh = min(
-                laadblok_doel_kwh,
-                max(doel_soc_kwh, maximaal_haalbaar_kwh),
-            )
-            slot["doel_soc_kwh"] = round(doel_soc_kwh, 3)
-
-            delta_kwh = doel_soc_kwh - accu.huidig_kwh
-            if delta_kwh <= 0 or accu.eta_laad <= 0:
-                slot["actie"] = "rust"
-                slot["vermogen_w"] = 0
-                return schema
-            gevraagd_w = delta_kwh / accu.eta_laad / resterende_uren * 1000.0
-            slot["vermogen_w"] = round(min(accu.max_laad_w, max(0.0, gevraagd_w)))
-            return schema
-
-        if accu.eta_ontlaad <= 0:
-            slot["actie"] = "rust"
-            slot["vermogen_w"] = 0
-            return schema
-
-        ontlaadblok_doel_kwh = ontlaadblok_doel_soc_kwh(actief_index, doel_soc_kwh)
-        maximaal_haalbaar_kwh = (
-            accu.huidig_kwh
-            - accu.max_ontlaad_w / 1000.0 * resterende_uren / accu.eta_ontlaad
-        )
-        doel_soc_kwh = max(ontlaadblok_doel_kwh, maximaal_haalbaar_kwh)
-        slot["doel_soc_kwh"] = round(doel_soc_kwh, 3)
-
-        delta_kwh = accu.huidig_kwh - doel_soc_kwh
-        if delta_kwh <= 0:
-            slot["actie"] = "rust"
-            slot["vermogen_w"] = 0
-            return schema
-        gevraagd_w = delta_kwh * accu.eta_ontlaad / resterende_uren * 1000.0
-        slot["vermogen_w"] = round(min(accu.max_ontlaad_w, max(0.0, gevraagd_w)))
-        return schema
-
-    return schema
 
 
 # ── DYNAMIC PROGRAMMING ───────────────────────────────────────────────────────
@@ -420,10 +194,9 @@ def los_dp_op(
 
     VERMOGENSVEREENVOUDIGING
     ------------------------
-    Per slot evalueren we alleen maximaal beschikbaar verwacht vermogen.
-    Bij laden gebruikt de SoC-inschatting de BMS-derating uit
-    bereken_derating(). De vermogensopdracht in vermogen_w blijft max_laad_w
-    zodra die BMS-derating actief is.
+    Per slot evalueren we alleen maximaal ingesteld vermogen. Het algoritme
+    voorspelt geen BMS-begrenzing; alleen de resterende accuruimte en
+    max_laad_w/max_ontlaad_w begrenzen de SoC-verandering.
 
     PLATEAU SPREIDING
     -----------------
@@ -498,15 +271,8 @@ def los_dp_op(
             val_rust = V[t + 1][s]
 
             # ── Optie: LADEN ──────────────────────────────────────────────────
-            # Derating op basis van de SoC aan het begin van dit slot.
-            # We benaderen de gemiddelde derating over het slot door de beginwaarde
-            # te gebruiken. Dit is conservatief: de werkelijke derating neemt toe
-            # naarmate de accu voller wordt tijdens het laden.
-            derating   = bereken_derating(soc_kwh, max_kwh)
-            eff_laad_w = max_laad_w * derating
-
             # Ideale energie naar de accu (continu), begrensd door ruimte.
-            max_naar_accu_kwh = eff_laad_w / 1000.0 * duur_h * eta_laad
+            max_naar_accu_kwh = max_laad_w / 1000.0 * duur_h * eta_laad
             ruimte_kwh        = max_kwh - soc_kwh
             energie_ideaal    = min(max_naar_accu_kwh, ruimte_kwh)
 
@@ -524,7 +290,7 @@ def los_dp_op(
             kosten_laden = energie_van_net * (prijs + spread_helft)
 
             # Laden is alleen zinvol als de SoC daadwerkelijk stijgt (s_laden > s).
-            # Dit filtert ook micro-cycli bij een bijna-volle accu of extreme derating.
+            # Dit filtert ook micro-cycli bij een bijna-volle accu.
             if s_laden <= s:
                 val_laden = NEG_INF
             else:
@@ -558,12 +324,12 @@ def los_dp_op(
             V[t][s] = beste
 
             # Bij gelijke waarden: prefereer rust (voorkom onnodige cycli)
-            if val_ontladen == beste:
-                P[t][s] = -1
+            if val_rust == beste:
+                P[t][s] = 0
             elif val_laden == beste:
                 P[t][s] = 1
             else:
-                P[t][s] = 0
+                P[t][s] = -1
 
     # ── VOORWAARTSE EXTRACTIE ─────────────────────────────────────────────────
     # Volg de optimale acties voorwaarts vanaf de huidige SoC.
@@ -583,9 +349,7 @@ def los_dp_op(
         duur_h     = slot["duration_h"]
 
         if actie_code == 1:  # Laden
-            derating          = bereken_derating(soc_kwh, max_kwh)
-            eff_laad_w        = max_laad_w * derating
-            max_naar_accu     = eff_laad_w / 1000.0 * duur_h * eta_laad
+            max_naar_accu     = max_laad_w / 1000.0 * duur_h * eta_laad
             energie_ideaal    = min(max_naar_accu, max_kwh - soc_kwh)
             nieuwe_s          = kwh_naar_idx(soc_kwh + energie_ideaal)
             # Gekwantiseerde SoC-sprong → consistente kosten (zie backwards pass)
@@ -593,11 +357,7 @@ def los_dp_op(
             energie_van_net   = energie_naar_accu / eta_laad if eta_laad > 0 else 0.0
             winst             = -energie_van_net * prijs
             verwacht_vermogen_w = energie_van_net / duur_h * 1000.0 if duur_h > 0 else 0.0
-            vermogen_w = bereken_laadvermogen_voor_aansturing(
-                verwacht_vermogen_w,
-                max_laad_w,
-                derating,
-            )
+            vermogen_w = rond_vermogen_omhoog(verwacht_vermogen_w, max_laad_w)
             actie             = "laden"
 
         elif actie_code == -1:  # Ontladen
@@ -632,7 +392,7 @@ def los_dp_op(
             "vermogen_w":   vermogen_w,
             "verwacht_vermogen_w": rond_vermogen_omhoog(
                 verwacht_vermogen_w,
-                eff_laad_w if actie == "laden" else max_ontlaad_w if actie == "ontladen" else 0.0,
+                max_laad_w if actie == "laden" else max_ontlaad_w if actie == "ontladen" else 0.0,
             ),
             "soc_voor_kwh": round(soc_kwh,    3),
             "soc_na_kwh":   round(soc_na_kwh, 3),
@@ -697,22 +457,21 @@ def los_dp_op(
 
         cand_start, cand_end = i, j
 
-        # Stap 2: breid ALLEEN voor laden uit naar aangrenzende rust-slots met
-        # vergelijkbare prijs. Voor ontladen heeft uitbreiden geen zin: aangrenzende
-        # rust-slots hebben altijd een lagere prijs dan de ontlaadpiek.
-        if actie_i == "laden":
-            while cand_start > 0 and resultaat[cand_start - 1]["actie"] == "rust":
-                p = resultaat[cand_start - 1]["prijs_ct"]
-                if max(p_max, p) - min(p_min, p) > plateau_drempel_ct:
-                    break
-                p_min = min(p_min, p); p_max = max(p_max, p)
-                cand_start -= 1
-            while cand_end < n and resultaat[cand_end]["actie"] == "rust":
-                p = resultaat[cand_end]["prijs_ct"]
-                if max(p_max, p) - min(p_min, p) > plateau_drempel_ct:
-                    break
-                p_min = min(p_min, p); p_max = max(p_max, p)
-                cand_end += 1
+        # Stap 2: breid uit naar aangrenzende rust-slots met vergelijkbare prijs.
+        # Laden gebruikt bijna even goedkope rust-slots; ontladen gebruikt bijna
+        # even dure rust-slots. Het doel is lager vermogen bij kleine prijsverschillen.
+        while cand_start > 0 and resultaat[cand_start - 1]["actie"] == "rust":
+            p = resultaat[cand_start - 1]["prijs_ct"]
+            if max(p_max, p) - min(p_min, p) > plateau_drempel_ct:
+                break
+            p_min = min(p_min, p); p_max = max(p_max, p)
+            cand_start -= 1
+        while cand_end < n and resultaat[cand_end]["actie"] == "rust":
+            p = resultaat[cand_end]["prijs_ct"]
+            if max(p_max, p) - min(p_min, p) > plateau_drempel_ct:
+                break
+            p_min = min(p_min, p); p_max = max(p_max, p)
+            cand_end += 1
 
         n_cand = cand_end - cand_start
 
@@ -764,6 +523,7 @@ def los_dp_op(
                 q_na   = idx_naar_kwh(s_na)
                 e_uit  = q_voor - q_na
                 e_net  = e_uit * eta_ontlaad
+                s_r["actie"]        = "ontladen" if e_uit > 0 else "rust"
                 s_r["soc_voor_kwh"] = round(q_voor, 3)
                 s_r["soc_na_kwh"]   = round(q_na, 3)
                 s_r["soc_voor_pct"] = round(q_voor / max_kwh * 100, 1) if max_kwh > 0 else 0.0
@@ -777,15 +537,12 @@ def los_dp_op(
         else:  # laden
             totaal_delta = soc_eind - soc_start
             n_groep      = ge - gs
-            # Maxima op basis van gelijke verdeling: derating evalueren op de verwachte
-            # SoC bij gelijke verdeling, zodat latere slots niet kunstmatig vol lijken.
             soc_ideaal_ps = totaal_delta / n_groep if n_groep > 0 else 0.0
             maxima_groep  = []
             for k_rel, k in enumerate(range(gs, ge)):
                 duur_h = slots[k]["duration_h"]
                 soc_bi = soc_start + k_rel * soc_ideaal_ps
-                derat  = bereken_derating(soc_bi, max_kwh)
-                cap    = min(max_laad_w * derat / 1000.0 * duur_h * eta_laad, max_kwh - soc_bi)
+                cap    = min(max_laad_w / 1000.0 * duur_h * eta_laad, max_kwh - soc_bi)
                 maxima_groep.append(max(0.0, cap))
             verdeling = water_filling(totaal_delta, maxima_groep)
 
@@ -806,15 +563,10 @@ def los_dp_op(
                 s_r["soc_voor_pct"] = round(q_voor / max_kwh * 100, 1) if max_kwh > 0 else 0.0
                 s_r["soc_na_pct"]   = round(q_na   / max_kwh * 100, 1) if max_kwh > 0 else 0.0
                 verwacht_vermogen = e_net / duur_h * 1000.0 if duur_h > 0 else 0.0
-                derat = bereken_derating(q_voor, max_kwh)
-                s_r["vermogen_w"] = bereken_laadvermogen_voor_aansturing(
-                    verwacht_vermogen,
-                    max_laad_w,
-                    derat,
-                )
+                s_r["vermogen_w"] = rond_vermogen_omhoog(verwacht_vermogen, max_laad_w)
                 s_r["verwacht_vermogen_w"] = rond_vermogen_omhoog(
                     verwacht_vermogen,
-                    max_laad_w * derat,
+                    max_laad_w,
                 )
                 s_r["winst_eur"]    = round(-e_net * prijs, 4)
                 huidig_soc = q_na

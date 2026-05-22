@@ -37,8 +37,6 @@ import appdaemon.plugins.hass.hassapi as hass
 # strategie_dp.py staat in dezelfde apps-map; AppDaemon zet die map op sys.path.
 from strategie_dp import (
     Accustatus,
-    bereken_derating,
-    bereken_laadvermogen_voor_aansturing,
     los_dp_op,
     rond_vermogen_omhoog,
 )
@@ -271,10 +269,9 @@ class DynamischHandelen(hass.Hass):
         Corrigeert alleen het lopende slot op basis van de actuele Zendure-SoC.
 
         los_dp_op() maakt een target voor het einde van elk prijsslot. Binnen het
-        huidige slot gebruiken we die target als vaste opdracht. Bij laden met
-        bereken_derating(actuele_soc_kwh, accu.max_kwh) lager dan 1.0 blijft
-        vermogen_w gelijk aan accu.max_laad_w; verwacht_vermogen_w krijgt dan de
-        lagere verwachte BMS-opname.
+        huidige slot gebruiken we die target als vaste opdracht. Het algoritme
+        voorspelt geen BMS-begrenzing; max_laad_w en de resterende slottijd bepalen
+        het hoogste laadvermogen.
         """
         nu = datetime.now().astimezone()
         actief = None
@@ -324,39 +321,167 @@ class DynamischHandelen(hass.Hass):
                 accu,
                 resterend_h,
             )
-            delta_kwh = max(0.0, target_kwh - actuele_soc_kwh)
-            energie_net_kwh = delta_kwh / accu.eta_laad if accu.eta_laad > 0 else 0.0
-            verwacht_vermogen_w = min(
-                accu.max_laad_w,
-                energie_net_kwh / resterend_h * 1000.0 if resterend_h > 0 else 0.0,
-            )
-            derating = bereken_derating(actuele_soc_kwh, accu.max_kwh)
-            vermogen_w = bereken_laadvermogen_voor_aansturing(
-                verwacht_vermogen_w,
-                accu.max_laad_w,
-                derating,
-            )
         else:
-            delta_kwh = max(0.0, actuele_soc_kwh - target_kwh)
-            energie_net_kwh = delta_kwh * accu.eta_ontlaad
-            verwacht_vermogen_w = min(
-                accu.max_ontlaad_w,
-                energie_net_kwh / resterend_h * 1000.0 if resterend_h > 0 else 0.0,
+            target_kwh = self._verlaag_actief_ontlaadslot_doel(
+                schema,
+                actief_index,
+                target_kwh,
+                actuele_soc_kwh,
+                accu,
+                resterend_h,
             )
-            vermogen_w = rond_vermogen_omhoog(verwacht_vermogen_w, accu.max_ontlaad_w)
 
-        doel_bereikt = vermogen_w <= 0
-        actief["actie"] = "rust" if doel_bereikt else actie
-        actief["geplande_actie"] = actie
-        actief["vermogen_w"] = vermogen_w
-        actief["verwacht_vermogen_w"] = rond_vermogen_omhoog(
-            verwacht_vermogen_w,
-            accu.max_laad_w * derating if actie == "laden" else accu.max_ontlaad_w,
+        soc_na_kwh = self._werk_slot_bij_voor_soc_doel(
+            actief,
+            actie,
+            actuele_soc_kwh,
+            target_kwh,
+            accu,
+            resterend_h,
         )
+        doel_bereikt = actief["vermogen_w"] <= 0
+        self._werk_toekomstige_slots_bij_na_actief_slot(
+            schema,
+            actief_index + 1,
+            soc_na_kwh,
+            accu,
+        )
+
+        actief["geplande_actie"] = actie
         actief["actief_slot_begin_kwh"] = round(begin_kwh, 3)
         actief["actuele_soc_kwh"] = round(actuele_soc_kwh, 3)
-        actief["doel_soc_kwh"] = round(target_kwh, 3)
+        actief["doel_soc_kwh"] = round(soc_na_kwh, 3)
         actief["doel_bereikt"] = doel_bereikt
+
+    def _werk_slot_bij_voor_soc_doel(
+        self,
+        slot: dict,
+        actie: str,
+        soc_voor_kwh: float,
+        doel_soc_kwh: float,
+        accu: "Accustatus",
+        duur_h: float,
+    ) -> float:
+        """
+        Werkt één slot bij vanuit een begin-SoC en einddoel.
+
+        De functie schrijft actie, vermogen_w, verwacht_vermogen_w, SoC-velden
+        en winst_eur opnieuw. Als het einddoel al is bereikt, wordt het slot rust.
+        """
+        soc_voor_kwh = min(accu.max_kwh, max(0.0, soc_voor_kwh))
+        doel_soc_kwh = min(accu.max_kwh, max(0.0, doel_soc_kwh))
+        prijs_ct = self._prijs_ct(slot) or 0.0
+        prijs_eur = prijs_ct / 100.0
+
+        soc_na_kwh = soc_voor_kwh
+        energie_net_kwh = 0.0
+        verwacht_vermogen_w = 0.0
+        maximum_w = 0.0
+        slot_actie = "rust"
+
+        if actie == "laden" and accu.eta_laad > 0 and duur_h > 0:
+            maximaal_doel_kwh = min(
+                accu.max_kwh,
+                soc_voor_kwh + accu.max_laad_w / 1000.0 * duur_h * accu.eta_laad,
+            )
+            soc_na_kwh = min(max(doel_soc_kwh, soc_voor_kwh), maximaal_doel_kwh)
+            delta_kwh = max(0.0, soc_na_kwh - soc_voor_kwh)
+            if delta_kwh > 1e-9:
+                energie_net_kwh = delta_kwh / accu.eta_laad
+                verwacht_vermogen_w = min(
+                    accu.max_laad_w,
+                    energie_net_kwh / duur_h * 1000.0,
+                )
+                maximum_w = accu.max_laad_w
+                slot_actie = "laden"
+
+        elif actie == "ontladen" and accu.eta_ontlaad > 0 and duur_h > 0:
+            minimaal_doel_kwh = max(
+                0.0,
+                soc_voor_kwh - accu.max_ontlaad_w / 1000.0 * duur_h / accu.eta_ontlaad,
+            )
+            soc_na_kwh = max(min(doel_soc_kwh, soc_voor_kwh), minimaal_doel_kwh)
+            delta_kwh = max(0.0, soc_voor_kwh - soc_na_kwh)
+            if delta_kwh > 1e-9:
+                energie_net_kwh = delta_kwh * accu.eta_ontlaad
+                verwacht_vermogen_w = min(
+                    accu.max_ontlaad_w,
+                    energie_net_kwh / duur_h * 1000.0,
+                )
+                maximum_w = accu.max_ontlaad_w
+                slot_actie = "ontladen"
+
+        vermogen_w = rond_vermogen_omhoog(verwacht_vermogen_w, maximum_w)
+        slot["actie"] = slot_actie
+        slot["vermogen_w"] = vermogen_w
+        slot["verwacht_vermogen_w"] = rond_vermogen_omhoog(verwacht_vermogen_w, maximum_w)
+        self._werk_soc_velden_bij(slot, soc_voor_kwh, soc_na_kwh, accu.max_kwh)
+
+        if slot_actie == "laden":
+            slot["winst_eur"] = round(-energie_net_kwh * prijs_eur, 4)
+        elif slot_actie == "ontladen":
+            slot["winst_eur"] = round(energie_net_kwh * prijs_eur, 4)
+        else:
+            slot["winst_eur"] = 0.0
+
+        return soc_na_kwh
+
+    def _werk_toekomstige_slots_bij_na_actief_slot(
+        self,
+        schema: list[dict],
+        eerste_index: int,
+        start_soc_kwh: float,
+        accu: "Accustatus",
+    ) -> None:
+        """
+        Maakt soc_na[t] en soc_voor[t+1] weer consistent na actieve correctie.
+
+        Latere slots houden hun DP-einddoel als dat doel nog haalbaar is. Als het
+        actieve slot al energie naar voren haalde, wordt latere energie automatisch
+        kleiner of rust.
+        """
+        huidig_soc_kwh = start_soc_kwh
+        for slot in schema[eerste_index:]:
+            actie = slot.get("actie")
+            if actie not in ("laden", "ontladen"):
+                actie = "rust"
+
+            try:
+                doel_soc_kwh = float(slot.get("soc_na_kwh", huidig_soc_kwh))
+            except (TypeError, ValueError):
+                doel_soc_kwh = huidig_soc_kwh
+
+            duur_h = self._slot_duur_h(slot)
+            huidig_soc_kwh = self._werk_slot_bij_voor_soc_doel(
+                slot,
+                actie,
+                huidig_soc_kwh,
+                doel_soc_kwh,
+                accu,
+                duur_h,
+            )
+
+    def _slot_duur_h(self, slot: dict) -> float:
+        """Leest de duur van een schema-slot in uren."""
+        try:
+            start = datetime.fromisoformat(str(slot["start"])).astimezone()
+            end = datetime.fromisoformat(str(slot["end"])).astimezone()
+        except (KeyError, ValueError, TypeError):
+            return 0.0
+        return max(0.0, (end - start).total_seconds() / 3600.0)
+
+    def _werk_soc_velden_bij(
+        self,
+        slot: dict,
+        soc_voor_kwh: float,
+        soc_na_kwh: float,
+        max_kwh: float,
+    ) -> None:
+        """Schrijft kWh- en procentvelden voor één schema-slot."""
+        slot["soc_voor_kwh"] = round(soc_voor_kwh, 3)
+        slot["soc_na_kwh"] = round(soc_na_kwh, 3)
+        slot["soc_voor_pct"] = round(soc_voor_kwh / max_kwh * 100, 1) if max_kwh > 0 else 0.0
+        slot["soc_na_pct"] = round(soc_na_kwh / max_kwh * 100, 1) if max_kwh > 0 else 0.0
 
     def _verhoog_actief_laadslot_doel(
         self,
@@ -398,6 +523,46 @@ class DynamischHandelen(hass.Hass):
         )
         return min(doel_kwh, max(basis_doel_kwh, maximaal_haalbaar_kwh))
 
+    def _verlaag_actief_ontlaadslot_doel(
+        self,
+        schema: list[dict],
+        actief_index: int,
+        basis_doel_kwh: float,
+        actuele_soc_kwh: float,
+        accu: "Accustatus",
+        resterend_h: float,
+    ) -> float:
+        """
+        Verlaagt het actieve ontlaadslotdoel als latere ontlaadslots niet duurder zijn.
+
+        Het actieve slot mag energie uit latere aaneengesloten ontlaadslots naar
+        voren halen wanneer die latere slots dezelfde of een lagere prijs hebben.
+        Een duurder volgend ontlaadslot stopt de verlaging.
+        """
+        actieve_prijs = self._prijs_ct(schema[actief_index])
+        if actieve_prijs is None or accu.eta_ontlaad <= 0:
+            return basis_doel_kwh
+
+        doel_kwh = basis_doel_kwh
+        for volgend in schema[actief_index + 1:]:
+            if volgend.get("actie") != "ontladen":
+                break
+
+            volgende_prijs = self._prijs_ct(volgend)
+            if volgende_prijs is None or volgende_prijs > actieve_prijs:
+                break
+
+            try:
+                doel_kwh = min(doel_kwh, float(volgend["soc_na_kwh"]))
+            except (KeyError, TypeError, ValueError):
+                break
+
+        maximaal_haalbaar_kwh = (
+            actuele_soc_kwh
+            - accu.max_ontlaad_w / 1000.0 * resterend_h / accu.eta_ontlaad
+        )
+        return max(doel_kwh, maximaal_haalbaar_kwh)
+
     def _prijs_ct(self, slot: dict) -> float | None:
         """Leest prijs_ct als getal uit een schema-slot."""
         try:
@@ -405,40 +570,15 @@ class DynamischHandelen(hass.Hass):
         except (KeyError, TypeError, ValueError):
             return None
 
-    def _haal_actueel_slot_doel_uit_vorige_sensor(self, start: str, end: str) -> dict | None:
-        """Leest begin-SoC en target-SoC voor het actieve slot uit de vorige sensorstate."""
-        vorige_slots = self.get_state("sensor.dynamisch_handelsstrategie", attribute="slots") or []
-        for slot in vorige_slots:
-            if str(slot.get("start")) != start or str(slot.get("end")) != end:
-                continue
-            actie = slot.get("geplande_actie") or slot.get("actie")
-            if actie not in ("laden", "ontladen"):
-                return None
-            try:
-                return {
-                    "actie": actie,
-                    "begin_kwh": float(slot.get("actief_slot_begin_kwh", slot["soc_voor_kwh"])),
-                    "target_kwh": float(slot.get("doel_soc_kwh", slot["soc_na_kwh"])),
-                }
-            except (KeyError, TypeError, ValueError):
-                return None
-        return None
-
     def _haal_actief_slot_doel(self, actief: dict, actuele_soc_kwh: float) -> dict:
         """
         Geeft de vaste opdracht voor het actieve slot terug.
 
-        De vorige sensorstate is de bron voor hetzelfde actieve slot. Als er nog
-        geen vorige sensorstate is, gebruikt de functie de nieuwe DP-uitkomst en
-        sensor.zendure_2400_ac_laadpercentage als begin-SoC.
+        De nieuwe DP-uitkomst is de bron voor hetzelfde actieve slot. De vorige
+        sensorstate wordt niet hergebruikt, omdat een oud doel na een nieuwe
+        prijs- of SoC-berekening het vermogen kan verlagen.
         """
-        start = str(actief["start"])
-        end = str(actief["end"])
         actie = actief["actie"]
-
-        vorig = self._haal_actueel_slot_doel_uit_vorige_sensor(start, end)
-        if vorig is not None and vorig["actie"] == actie:
-            return vorig
 
         return {
             "actie": actie,
