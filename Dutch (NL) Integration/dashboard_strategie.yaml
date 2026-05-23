@@ -28,7 +28,7 @@ views:
 
           - type: custom:apexcharts-card
             cache: false
-            update_interval: 5min
+            update_delay: 2s
             header:
               show: true
               show_states: true
@@ -295,7 +295,7 @@ views:
               hidden_by_default: true
               color_threshold: true
             cache: false
-            update_interval: 5min
+            update_delay: 2s
             header:
               show: true
               show_states: false
@@ -374,7 +374,7 @@ views:
               hidden_by_default: true
               color_threshold: true
             cache: false
-            update_interval: 5min
+            update_delay: 2s
             header:
               show: true
               show_states: false
@@ -457,8 +457,10 @@ views:
 
           - type: entities
             entities:
-              - entity: input_number.dynamisch_warmte_penalty_factor
-                name: Warmte penalty factor
+              - entity: input_number.dynamisch_warmte_penalty_laden_factor
+                name: Warmte penalty laden factor
+              - entity: input_number.dynamisch_warmte_penalty_ontladen_factor
+                name: Warmte penalty ontladen factor
               - entity: input_button.dynamisch_handelsstrategie_herberekenen
                 name: Strategie herberekenen
             show_header_toggle: false

@@ -373,10 +373,10 @@ class TestMinimaleSpread:
         assert schema[0]["vermogen_w"] >= 100
         assert schema[0]["soc_na_kwh"] > schema[0]["soc_voor_kwh"]
 
-    def test_warmte_penalty_factor_nul_houdt_oude_maximaal_vermogen_keuze(self):
+    def test_warmte_penalty_factoren_nul_houden_oude_maximaal_vermogen_keuze(self):
         """
-        Met warmte_penalty_factor=0 kiest los_dp_op() dezelfde agressieve
-        laadstap als voor de C-waarde penalty.
+        Met beide warmtefactoren op 0 kiest los_dp_op() dezelfde agressieve
+        laadstap als voor de C-waarde penalties.
         """
         slots = maak_slots_vanaf_iso(SCENARIO_18_MEI_SLOTS_CT)
         slots[0]["duration_h"] = 20.5 / 60.0
@@ -386,7 +386,8 @@ class TestMinimaleSpread:
             maak_accu(huidig_kwh=2.745, max_kwh=5.187, eta=0.922),
             min_spread_ct_per_kwh=8.0,
             plateau_spreiding=False,
-            warmte_penalty_factor=0.0,
+            warmte_penalty_laden_factor=0.0,
+            warmte_penalty_ontladen_factor=0.0,
         )
 
         assert schema[0]["actie"] == "laden"
@@ -449,6 +450,27 @@ class TestMinimaleSpread:
 
         for slot in schema:
             assert slot["vermogen_w"] == 0 or slot["vermogen_w"] >= 100
+
+    def test_warmte_penalty_ontladen_factor_nul_schakelt_ontladen_uit(self):
+        accu = maak_accu(huidig_kwh=2.4, max_kwh=2.4)
+
+        met_penalty = los_dp_op(
+            maak_slots([1.00]),
+            accu,
+            plateau_spreiding=False,
+            warmte_penalty_ontladen_factor=1.0,
+        )
+        zonder_penalty = los_dp_op(
+            maak_slots([1.00]),
+            accu,
+            plateau_spreiding=False,
+            warmte_penalty_ontladen_factor=0.0,
+        )
+
+        assert met_penalty[0]["actie"] == "ontladen"
+        assert zonder_penalty[0]["actie"] == "ontladen"
+        assert met_penalty[0]["warmte_penalty_eur"] > 0
+        assert zonder_penalty[0]["warmte_penalty_eur"] == 0.0
 
 
 # ── DERATING EFFECT ───────────────────────────────────────────────────────────

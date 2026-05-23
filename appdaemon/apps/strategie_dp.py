@@ -139,7 +139,6 @@ MINIMUM_VERMOGEN_W: int = 100
 # De factor komt uit Home Assistant; deze basis houdt factor=1 bewust mild.
 WARMTE_PENALTY_EUR_PER_KWH_C2: float = 0.05
 
-
 # ── DATATYPE ──────────────────────────────────────────────────────────────────
 
 @dataclass
@@ -390,7 +389,8 @@ def los_dp_op(
     plateau_drempel_ct: float = 2.0,
     max_plateau_uren: int = 5,
     plateau_spreiding: bool = True,
-    warmte_penalty_factor: float = 1.0,
+    warmte_penalty_laden_factor: float = 1.0,
+    warmte_penalty_ontladen_factor: float = 1.0,
     minimum_vermogen_w: int = MINIMUM_VERMOGEN_W,
 ) -> list[dict[str, Any]]:
     """
@@ -436,10 +436,10 @@ def los_dp_op(
     minimum_vermogen_w in stappen van VERMOGEN_STAP_W. De DP-keuze bepaalt
     dus zowel actie als vermogen_w.
 
-    Voor laden en ontladen telt los_dp_op() een C-waarde penalty mee:
-    warmte_penalty_factor × WARMTE_PENALTY_EUR_PER_KWH_C2 × kWh × C².
-    Een hogere warmte_penalty_factor maakt snel laden en snel ontladen duurder
-    in de optimalisatie. Met factor 0 is de penalty uitgeschakeld.
+    Voor laden en ontladen telt los_dp_op() aparte C-waarde penalties mee:
+    factor × WARMTE_PENALTY_EUR_PER_KWH_C2 × kWh × C².
+    warmte_penalty_laden_factor weegt snel laden. warmte_penalty_ontladen_factor
+    weegt snel ontladen. Met factor 0 is de penalty voor die richting uit.
 
     PLATEAU SPREIDING
     -----------------
@@ -459,7 +459,8 @@ def los_dp_op(
         max_plateau_uren:        Max duur van één plateau in uren. Bij kwartierprijzen
                                  telt elk kwartierslot als 0,25 uur.
         plateau_spreiding:       Schakelt de plateau-nabewerking aan of uit.
-        warmte_penalty_factor:   Gewicht van de C-waarde penalty; 0 schakelt de penalty uit.
+        warmte_penalty_laden_factor: Gewicht van de C-waarde penalty bij laden.
+        warmte_penalty_ontladen_factor: Gewicht van de C-waarde penalty bij ontladen.
         minimum_vermogen_w:      Laagste vermogensopdracht die DP evalueert; rust blijft apart.
 
     Returns:
@@ -476,7 +477,8 @@ def los_dp_op(
     eta_ontlaad = accu.eta_ontlaad
     max_laad_w  = accu.max_laad_w
     max_ontlaad_w = accu.max_ontlaad_w
-    warmte_penalty_factor = max(0.0, float(warmte_penalty_factor))
+    warmte_penalty_laden_factor = max(0.0, float(warmte_penalty_laden_factor))
+    warmte_penalty_ontladen_factor = max(0.0, float(warmte_penalty_ontladen_factor))
     minimum_vermogen_w = max(0, int(minimum_vermogen_w))
 
     # Transactiekosten in €/kWh (gesplitst over laden en ontladen).
@@ -515,12 +517,12 @@ def los_dp_op(
             stappen.append(afgerond_max)
         return stappen
 
-    def warmte_penalty_eur(energie_accu_kwh: float, duur_h: float) -> float:
-        if warmte_penalty_factor <= 0 or energie_accu_kwh <= 0 or duur_h <= 0 or max_kwh <= 0:
+    def warmte_penalty_eur(energie_accu_kwh: float, duur_h: float, factor: float) -> float:
+        if factor <= 0 or energie_accu_kwh <= 0 or duur_h <= 0 or max_kwh <= 0:
             return 0.0
 
         c_waarde = (energie_accu_kwh / duur_h) / max_kwh
-        return warmte_penalty_factor * WARMTE_PENALTY_EUR_PER_KWH_C2 * energie_accu_kwh * c_waarde * c_waarde
+        return factor * WARMTE_PENALTY_EUR_PER_KWH_C2 * energie_accu_kwh * c_waarde * c_waarde
 
     NEG_INF = float("-inf")
 
@@ -561,7 +563,11 @@ def los_dp_op(
                 energie_naar_accu_q = idx_naar_kwh(s_laden) - soc_kwh
                 energie_van_net = energie_naar_accu_q / eta_laad if eta_laad > 0 else 0.0
                 kosten_laden = energie_van_net * (prijs + spread_helft)
-                kosten_warmte = warmte_penalty_eur(energie_naar_accu_q, duur_h)
+                kosten_warmte = warmte_penalty_eur(
+                    energie_naar_accu_q,
+                    duur_h,
+                    warmte_penalty_laden_factor,
+                )
                 waarde = -kosten_laden - kosten_warmte + V[t + 1][s_laden]
 
                 if waarde > beste + 1e-12:
@@ -581,7 +587,11 @@ def los_dp_op(
                 energie_uit_accu_q = soc_kwh - idx_naar_kwh(s_ontladen)
                 energie_naar_net = energie_uit_accu_q * eta_ontlaad
                 opbrengst_ontladen = energie_naar_net * (prijs - spread_helft)
-                kosten_warmte = warmte_penalty_eur(energie_uit_accu_q, duur_h)
+                kosten_warmte = warmte_penalty_eur(
+                    energie_uit_accu_q,
+                    duur_h,
+                    warmte_penalty_ontladen_factor,
+                )
                 waarde = opbrengst_ontladen - kosten_warmte + V[t + 1][s_ontladen]
 
                 if waarde > beste + 1e-12:
@@ -617,7 +627,11 @@ def los_dp_op(
             winst             = -energie_van_net * prijs
             verwacht_vermogen_w = energie_van_net / duur_h * 1000.0 if duur_h > 0 else 0.0
             vermogen_w = gekozen_vermogen_w
-            warmte_penalty = warmte_penalty_eur(energie_naar_accu, duur_h)
+            warmte_penalty = warmte_penalty_eur(
+                energie_naar_accu,
+                duur_h,
+                warmte_penalty_laden_factor,
+            )
             actie             = "laden"
 
         elif actie_code == -1:  # Ontladen
@@ -627,7 +641,11 @@ def los_dp_op(
             winst             = energie_naar_net * prijs
             verwacht_vermogen_w = energie_naar_net / duur_h * 1000.0 if duur_h > 0 else 0.0
             vermogen_w        = gekozen_vermogen_w
-            warmte_penalty    = warmte_penalty_eur(energie_uit_accu, duur_h)
+            warmte_penalty    = warmte_penalty_eur(
+                energie_uit_accu,
+                duur_h,
+                warmte_penalty_ontladen_factor,
+            )
             actie             = "ontladen"
 
         else:  # Rust

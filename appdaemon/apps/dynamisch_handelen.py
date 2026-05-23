@@ -24,7 +24,8 @@ Ingangen:
   input_number.zendure_2400_ac_max_oplaadvermogen        max laadvermogen (W)
   input_number.zendure_2400_ac_max_ontlaadvermogen       max ontlaadvermogen (W)
   input_number.dynamisch_minimale_spread                 minimale spread (ct/kWh)
-  input_number.dynamisch_warmte_penalty_factor           gewicht voor warmteverlies in DP
+  input_number.dynamisch_warmte_penalty_laden_factor     gewicht voor warmteverlies bij laden
+  input_number.dynamisch_warmte_penalty_ontladen_factor  gewicht voor warmteverlies bij ontladen
   input_button.dynamisch_handelsstrategie_herberekenen   knop voor handmatige herberekening
 
 Uitgang:
@@ -58,12 +59,28 @@ class DynamischHandelen(hass.Hass):
             self._herbereken_op_knop,
             "input_button.dynamisch_handelsstrategie_herberekenen",
         )
+        self.listen_state(
+            self._herbereken_op_config,
+            "input_number.dynamisch_warmte_penalty_laden_factor",
+        )
+        self.listen_state(
+            self._herbereken_op_config,
+            "input_number.dynamisch_warmte_penalty_ontladen_factor",
+        )
 
     # ── HOOFDFUNCTIE ─────────────────────────────────────────────────────────
 
     def _herbereken_op_knop(self, entity, attribute, old, new, kwargs):
         """Herberekent de strategie na een druk op de HA-knop."""
         self.log("Dynamisch Handelen: handmatige herberekening gestart via HA-knop")
+        self.bereken_strategie({"trigger": entity})
+
+    def _herbereken_op_config(self, entity, attribute, old, new, kwargs):
+        """Herberekent de strategie wanneer een DP-configuratie wijzigt."""
+        self.log(
+            f"Dynamisch Handelen: herberekening gestart door wijziging van {entity}",
+            level="INFO",
+        )
         self.bereken_strategie({"trigger": entity})
 
     def bereken_strategie(self, kwargs):
@@ -102,7 +119,8 @@ class DynamischHandelen(hass.Hass):
             return
 
         min_spread = self._haal_minimale_spread()
-        warmte_penalty_factor = self._haal_warmte_penalty_factor()
+        warmte_penalty_laden_factor = self._haal_warmte_penalty_laden_factor()
+        warmte_penalty_ontladen_factor = self._haal_warmte_penalty_ontladen_factor()
         plateau_spreiding = self._haal_plateau_spreiding()
 
         self.log(
@@ -111,7 +129,8 @@ class DynamischHandelen(hass.Hass):
             f"eta={accu.eta_laad:.3f} | "
             f"laad {accu.max_laad_w:.0f} W / ontlaad {accu.max_ontlaad_w:.0f} W | "
             f"min spread {min_spread:.1f} ct/kWh | "
-            f"warmtefactor {warmte_penalty_factor:.2f} | "
+            f"warmte laden {warmte_penalty_laden_factor:.2f} | "
+            f"warmte ontladen {warmte_penalty_ontladen_factor:.2f} | "
             f"plateau {'aan' if plateau_spreiding else 'uit'}",
             level="INFO",
         )
@@ -121,7 +140,8 @@ class DynamischHandelen(hass.Hass):
             accu,
             min_spread_ct_per_kwh=min_spread,
             plateau_spreiding=plateau_spreiding,
-            warmte_penalty_factor=warmte_penalty_factor,
+            warmte_penalty_laden_factor=warmte_penalty_laden_factor,
+            warmte_penalty_ontladen_factor=warmte_penalty_ontladen_factor,
         )
         self._corrigeer_actief_slot_vermogen(schema, accu, hw_min_pct, hw_max_pct)
         spread_blokkades = self._markeer_spread_blokkades(schema, accu.eta_laad, min_spread)
@@ -165,9 +185,10 @@ class DynamischHandelen(hass.Hass):
                 "accu_max_kwh":        round(accu.max_kwh,    3),
                 "eta":                 round(accu.eta_laad,   3),
                 "min_spread_ct":       min_spread,
-                "warmte_penalty_factor": warmte_penalty_factor,
+                "warmte_penalty_laden_factor": warmte_penalty_laden_factor,
+                "warmte_penalty_ontladen_factor": warmte_penalty_ontladen_factor,
                 "plateau_spreiding":   plateau_spreiding,
-                "bijgewerkt":          datetime.now().isoformat(),
+                "bijgewerkt":          datetime.now().astimezone().isoformat(),
             },
         )
 
@@ -625,11 +646,23 @@ class DynamischHandelen(hass.Hass):
         """
         return float(self.get_state("input_number.dynamisch_minimale_spread") or 0)
 
-    def _haal_warmte_penalty_factor(self) -> float:
+    def _haal_warmte_penalty_laden_factor(self) -> float:
         """
-        Leest hoeveel gewicht de DP aan C-waarde warmteverlies moet geven.
+        Leest hoeveel gewicht de DP aan C-waarde warmteverlies bij laden moet geven.
         """
-        waarde = self.get_state("input_number.dynamisch_warmte_penalty_factor")
+        waarde = self.get_state("input_number.dynamisch_warmte_penalty_laden_factor")
+        if waarde in (None, "unknown", "unavailable"):
+            waarde = self.get_state("input_number.dynamisch_warmte_penalty_factor")
+        try:
+            return max(0.0, float(waarde))
+        except (TypeError, ValueError):
+            return 1.0
+
+    def _haal_warmte_penalty_ontladen_factor(self) -> float:
+        """
+        Leest hoeveel gewicht de DP aan C-waarde warmteverlies bij ontladen moet geven.
+        """
+        waarde = self.get_state("input_number.dynamisch_warmte_penalty_ontladen_factor")
         try:
             return max(0.0, float(waarde))
         except (TypeError, ValueError):

@@ -4,11 +4,18 @@ input_button:
     icon: mdi:calculator-variant
 
 input_number:
-  dynamisch_warmte_penalty_factor:
-    name: Dynamisch Warmte Penalty Factor
+  dynamisch_warmte_penalty_laden_factor:
+    name: Dynamisch Warmte Penalty Laden Factor
     icon: mdi:thermometer-lines
     min: 0
     max: 10
     step: 0.1
     mode: slider
-    initial: 1
+
+  dynamisch_warmte_penalty_ontladen_factor:
+    name: Dynamisch Warmte Penalty Ontladen Factor
+    icon: mdi:thermometer-chevron-down
+    min: 0
+    max: 10
+    step: 0.1
+    mode: slider
