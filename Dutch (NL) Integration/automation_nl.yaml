@@ -71,6 +71,398 @@ triggers:
     id: systeem_instelling_zendure_ip
 conditions: []
 actions:
+  - alias: Harde SoC-bescherming buiten Dynamisch Handelen (DP)
+    choose:
+      - conditions:
+          - condition: not
+            conditions:
+              - condition: state
+                entity_id: input_select.zendure_2400_ac_modus_selecteren
+                state:
+                  - Dynamisch Handelen (DP)
+          - alias: SoC is lager dan 10%
+            condition: template
+            value_template: >
+              {{ states('sensor.zendure_2400_ac_laadpercentage') | float(100)
+              < 10 }}
+          - alias: Geselecteerde modus laadt niet al expliciet
+            condition: or
+            conditions:
+              - condition: template
+                value_template: >
+                  {{ states('sensor.zendure_2400_ac_ingesteld_oplaadvermogen')
+                  | float(0) < 1 }}
+              - condition: not
+                conditions:
+                  - condition: or
+                    conditions:
+                      - condition: state
+                        entity_id: input_select.zendure_2400_ac_modus_selecteren
+                        state:
+                          - Snel opladen
+                          - Alleen slim opladen
+                      - condition: and
+                        conditions:
+                          - condition: state
+                            entity_id: input_select.zendure_2400_ac_modus_selecteren
+                            state: Handmatig
+                          - condition: template
+                            value_template: >
+                              {{
+                              states('input_number.zendure_2400_ac_handmatig_vermogen')
+                              | float(0) > 0 }}
+          - alias: Bijladen is niet correct ingesteld
+            condition: template
+            value_template: >
+              {% set doel = [
+                states('input_number.zendure_2400_ac_max_oplaadvermogen') | int(400),
+                1200
+              ] | min %}
+              {{ states('sensor.zendure_2400_ac_ingesteld_oplaadvermogen') |
+              int(0) != doel or
+              states('sensor.zendure_2400_ac_ingesteld_ontlaadvermogen') |
+              float(0) > 0 }}
+        sequence:
+          - action: input_boolean.turn_off
+            target:
+              entity_id:
+                - input_boolean.dynamisch_ontladen_loopt
+            data: {}
+          - action: rest_command.zendure_x_laden
+            data:
+              sn: "{{ states('sensor.zendure_2400_ac_serienummer') }}"
+              inputLimit: >
+                {% set doel = [
+                  states('input_number.zendure_2400_ac_max_oplaadvermogen') | int(400),
+                  1200
+                ] | min %}
+                {{ doel }}
+          - action: logbook.log
+            data:
+              message: >
+                ⚠️Harde SoC-bescherming — SoC lager dan 10%, bijladen met
+                {% set doel = [
+                  states('input_number.zendure_2400_ac_max_oplaadvermogen') | int(400),
+                  1200
+                ] | min %}
+                {{ doel }} watt —
+              entity_id: input_select.zendure_2400_ac_modus_selecteren
+              name: " "
+          - wait_for_trigger:
+              - alias: SoC is 10% of hoger
+                trigger: template
+                value_template: >
+                  {{ states('sensor.zendure_2400_ac_laadpercentage') |
+                  float(0) >= 10 }}
+              - trigger: state
+                entity_id:
+                  - input_select.zendure_2400_ac_modus_selecteren
+                to:
+                  - Dynamisch Handelen (DP)
+            continue_on_timeout: false
+          - choose:
+              - conditions:
+                  - condition: not
+                    conditions:
+                      - condition: state
+                        entity_id: input_select.zendure_2400_ac_modus_selecteren
+                        state:
+                          - Dynamisch Handelen (DP)
+                  - alias: Geselecteerde modus vraagt niet expliciet laden
+                    condition: not
+                    conditions:
+                      - condition: or
+                        conditions:
+                          - condition: state
+                            entity_id: input_select.zendure_2400_ac_modus_selecteren
+                            state:
+                              - Snel opladen
+                              - Alleen slim opladen
+                          - condition: and
+                            conditions:
+                              - condition: state
+                                entity_id: >-
+                                  input_select.zendure_2400_ac_modus_selecteren
+                                state: Handmatig
+                              - condition: template
+                                value_template: >
+                                  {{
+                                  states('input_number.zendure_2400_ac_handmatig_vermogen')
+                                  | float(0) > 0 }}
+                sequence:
+                  - action: rest_command.zendure_stop_met_alles
+                    data:
+                      sn: "{{ states('sensor.zendure_2400_ac_serienummer') }}"
+                  - action: logbook.log
+                    data:
+                      message: >-
+                        ⚠️Harde SoC-bescherming — bijladen op 10% of hoger
+                        gestopt —
+                      entity_id: input_select.zendure_2400_ac_modus_selecteren
+                      name: " "
+        alias: Onder 10% bijladen starten
+      - conditions:
+          - condition: not
+            conditions:
+              - condition: state
+                entity_id: input_select.zendure_2400_ac_modus_selecteren
+                state:
+                  - Dynamisch Handelen (DP)
+          - alias: SoC is lager dan 10%
+            condition: template
+            value_template: >
+              {{ states('sensor.zendure_2400_ac_laadpercentage') | float(100)
+              < 10 }}
+        sequence:
+          - stop: Harde SoC-bescherming houdt bijladen onder 10% actief.
+        alias: Onder 10% bijladen actief houden
+      - conditions:
+          - condition: not
+            conditions:
+              - condition: state
+                entity_id: input_select.zendure_2400_ac_modus_selecteren
+                state:
+                  - Dynamisch Handelen (DP)
+          - alias: SoC is hoger dan 90%
+            condition: template
+            value_template: >
+              {{ states('sensor.zendure_2400_ac_laadpercentage') | float(0)
+              > 90 }}
+          - alias: Geselecteerde modus ontlaadt niet al expliciet
+            condition: or
+            conditions:
+              - condition: template
+                value_template: >
+                  {{ states('sensor.zendure_2400_ac_ingesteld_ontlaadvermogen')
+                  | float(0) < 1 }}
+              - condition: not
+                conditions:
+                  - condition: or
+                    conditions:
+                      - condition: state
+                        entity_id: input_select.zendure_2400_ac_modus_selecteren
+                        state:
+                          - Snel ontladen
+                          - Alleen slim ontladen
+                      - condition: and
+                        conditions:
+                          - condition: state
+                            entity_id: input_select.zendure_2400_ac_modus_selecteren
+                            state: Handmatig
+                          - condition: template
+                            value_template: >
+                              {{
+                              states('input_number.zendure_2400_ac_handmatig_vermogen')
+                              | float(0) < 0 }}
+          - alias: Ontladen is niet correct ingesteld
+            condition: template
+            value_template: >
+              {% set doel = [
+                states('input_number.zendure_2400_ac_max_ontlaadvermogen') | int(400),
+                1200
+              ] | min %}
+              {{ states('sensor.zendure_2400_ac_ingesteld_ontlaadvermogen') |
+              int(0) != doel or
+              states('sensor.zendure_2400_ac_ingesteld_oplaadvermogen') |
+              float(0) > 0 }}
+        sequence:
+          - action: input_boolean.turn_off
+            target:
+              entity_id:
+                - input_boolean.dynamisch_laden_loopt
+            data: {}
+          - action: rest_command.zendure_x_ontladen
+            data:
+              sn: "{{ states('sensor.zendure_2400_ac_serienummer') }}"
+              outputLimit: >
+                {% set doel = [
+                  states('input_number.zendure_2400_ac_max_ontlaadvermogen') | int(400),
+                  1200
+                ] | min %}
+                {{ doel }}
+          - action: logbook.log
+            data:
+              message: >
+                ⚠️Harde SoC-bescherming — SoC hoger dan 90%, ontladen met
+                {% set doel = [
+                  states('input_number.zendure_2400_ac_max_ontlaadvermogen') | int(400),
+                  1200
+                ] | min %}
+                {{ doel }} watt —
+              entity_id: input_select.zendure_2400_ac_modus_selecteren
+              name: " "
+          - wait_for_trigger:
+              - alias: SoC is 90% of lager
+                trigger: template
+                value_template: >
+                  {{ states('sensor.zendure_2400_ac_laadpercentage') |
+                  float(100) <= 90 }}
+              - trigger: state
+                entity_id:
+                  - input_select.zendure_2400_ac_modus_selecteren
+                to:
+                  - Dynamisch Handelen (DP)
+            continue_on_timeout: false
+          - choose:
+              - conditions:
+                  - condition: not
+                    conditions:
+                      - condition: state
+                        entity_id: input_select.zendure_2400_ac_modus_selecteren
+                        state:
+                          - Dynamisch Handelen (DP)
+                  - alias: Geselecteerde modus vraagt niet expliciet ontladen
+                    condition: not
+                    conditions:
+                      - condition: or
+                        conditions:
+                          - condition: state
+                            entity_id: input_select.zendure_2400_ac_modus_selecteren
+                            state:
+                              - Snel ontladen
+                              - Alleen slim ontladen
+                          - condition: and
+                            conditions:
+                              - condition: state
+                                entity_id: >-
+                                  input_select.zendure_2400_ac_modus_selecteren
+                                state: Handmatig
+                              - condition: template
+                                value_template: >
+                                  {{
+                                  states('input_number.zendure_2400_ac_handmatig_vermogen')
+                                  | float(0) < 0 }}
+                sequence:
+                  - action: rest_command.zendure_stop_met_alles
+                    data:
+                      sn: "{{ states('sensor.zendure_2400_ac_serienummer') }}"
+                  - action: logbook.log
+                    data:
+                      message: >-
+                        ⚠️Harde SoC-bescherming — ontladen op 90% of lager
+                        gestopt —
+                      entity_id: input_select.zendure_2400_ac_modus_selecteren
+                      name: " "
+        alias: Boven 90% ontladen starten
+      - conditions:
+          - condition: not
+            conditions:
+              - condition: state
+                entity_id: input_select.zendure_2400_ac_modus_selecteren
+                state:
+                  - Dynamisch Handelen (DP)
+          - alias: SoC is hoger dan 90%
+            condition: template
+            value_template: >
+              {{ states('sensor.zendure_2400_ac_laadpercentage') | float(0)
+              > 90 }}
+        sequence:
+          - stop: Harde SoC-bescherming houdt ontladen boven 90% actief.
+        alias: Boven 90% ontladen actief houden
+      - conditions:
+          - condition: not
+            conditions:
+              - condition: state
+                entity_id: input_select.zendure_2400_ac_modus_selecteren
+                state:
+                  - Dynamisch Handelen (DP)
+          - alias: SoC is 10% of lager
+            condition: template
+            value_template: >
+              {{ states('sensor.zendure_2400_ac_laadpercentage') | float(100)
+              <= 10 }}
+          - alias: Ontladen is nog actief
+            condition: template
+            value_template: >
+              {{ states('sensor.zendure_2400_ac_ingesteld_ontlaadvermogen') |
+              float(0) > 0 }}
+          - alias: Geselecteerde modus vraagt niet expliciet laden
+            condition: not
+            conditions:
+              - condition: or
+                conditions:
+                  - condition: state
+                    entity_id: input_select.zendure_2400_ac_modus_selecteren
+                    state:
+                      - Snel opladen
+                      - Alleen slim opladen
+                  - condition: and
+                    conditions:
+                      - condition: state
+                        entity_id: input_select.zendure_2400_ac_modus_selecteren
+                        state: Handmatig
+                      - condition: template
+                        value_template: >
+                          {{ states('input_number.zendure_2400_ac_handmatig_vermogen')
+                          | float(0) > 0 }}
+        sequence:
+          - action: input_boolean.turn_off
+            target:
+              entity_id:
+                - input_boolean.dynamisch_ontladen_loopt
+            data: {}
+          - action: rest_command.zendure_stop_met_alles
+            data:
+              sn: "{{ states('sensor.zendure_2400_ac_serienummer') }}"
+          - action: logbook.log
+            data:
+              message: ⚠️Harde SoC-bescherming — ontladen op 10% of lager geblokkeerd —
+              entity_id: input_select.zendure_2400_ac_modus_selecteren
+              name: " "
+          - stop: Harde SoC-bescherming heeft ontladen op 10% of lager geblokkeerd.
+        alias: Ontladen op 10% of lager blokkeren
+      - conditions:
+          - condition: not
+            conditions:
+              - condition: state
+                entity_id: input_select.zendure_2400_ac_modus_selecteren
+                state:
+                  - Dynamisch Handelen (DP)
+          - alias: SoC is 90% of hoger
+            condition: template
+            value_template: >
+              {{ states('sensor.zendure_2400_ac_laadpercentage') | float(0)
+              >= 90 }}
+          - alias: Laden is nog actief
+            condition: template
+            value_template: >
+              {{ states('sensor.zendure_2400_ac_ingesteld_oplaadvermogen') |
+              float(0) > 0 }}
+          - alias: Geselecteerde modus vraagt niet expliciet ontladen
+            condition: not
+            conditions:
+              - condition: or
+                conditions:
+                  - condition: state
+                    entity_id: input_select.zendure_2400_ac_modus_selecteren
+                    state:
+                      - Snel ontladen
+                      - Alleen slim ontladen
+                  - condition: and
+                    conditions:
+                      - condition: state
+                        entity_id: input_select.zendure_2400_ac_modus_selecteren
+                        state: Handmatig
+                      - condition: template
+                        value_template: >
+                          {{ states('input_number.zendure_2400_ac_handmatig_vermogen')
+                          | float(0) < 0 }}
+        sequence:
+          - action: input_boolean.turn_off
+            target:
+              entity_id:
+                - input_boolean.dynamisch_laden_loopt
+            data: {}
+          - action: rest_command.zendure_stop_met_alles
+            data:
+              sn: "{{ states('sensor.zendure_2400_ac_serienummer') }}"
+          - action: logbook.log
+            data:
+              message: ⚠️Harde SoC-bescherming — laden op 90% of hoger geblokkeerd —
+              entity_id: input_select.zendure_2400_ac_modus_selecteren
+              name: " "
+          - stop: Harde SoC-bescherming heeft laden op 90% of hoger geblokkeerd.
+        alias: Laden op 90% of hoger blokkeren
   - alias: Modus Selecteren
     choose:
       - conditions:
