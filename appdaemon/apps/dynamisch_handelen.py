@@ -27,6 +27,7 @@ Ingangen:
   input_number.dynamisch_warmte_penalty_laden_factor     gewicht voor warmteverlies bij laden
   input_number.dynamisch_warmte_penalty_ontladen_factor  gewicht voor warmteverlies bij ontladen
   input_number.dynamisch_warmte_afkoeling_halveringstijd_uren  afkoeling richting buitentemperatuur
+  input_number.dynamisch_warmte_stijging_c_per_c2h        packtemperatuurstijging door C² × uur actie
   input_number.dynamisch_max_temp_boven_80_soc            packtemperatuurlimiet boven 80% SoC
   input_number.dynamisch_temp_penalty_factor              gewicht voor temperatuur-overschrijding
   input_text.dynamisch_buitentemperatuur_sensor           optionele sensor met actuele buitentemperatuur
@@ -36,16 +37,19 @@ Ingangen:
 
 Uitgang:
   sensor.dynamisch_handelsstrategie   verwachte winst (€) + volledig schema als attribuut
+  sensor.dynamisch_handelsstrategie_berekening_duur  duur van de laatste bereken-run
 """
 
 import math
 from datetime import datetime, time
+from time import monotonic
 
 import appdaemon.plugins.hass.hassapi as hass
 
 # strategie_dp.py staat in dezelfde apps-map; AppDaemon zet die map op sys.path.
 from strategie_dp import (
     Accustatus,
+    StrategieBerekeningGeannuleerd,
     bereken_derating,
     bereken_laadvermogen_voor_aansturing,
     los_dp_op,
@@ -62,7 +66,10 @@ class DynamischHandelen(hass.Hass):
         self.log("Dynamisch Handelen: gestart, schema wordt dagelijks om 14:35 herberekend")
         self._berekening_bezig = False
         self._herberekening_gepland = False
+        self._laatste_herberekening_kwargs = None
+        self._berekening_generatie = 0
         self._zet_berekening_bezig(False)
+        self._initialiseer_berekening_duur_sensor()
         self.run_daily(self.bereken_strategie, time(14, 35, 0))
         self.listen_state(
             self._herbereken_op_knop,
@@ -78,6 +85,7 @@ class DynamischHandelen(hass.Hass):
         )
         for entity in (
             "input_number.dynamisch_warmte_afkoeling_halveringstijd_uren",
+            "input_number.dynamisch_warmte_stijging_c_per_c2h",
             "input_number.dynamisch_max_temp_boven_80_soc",
             "input_number.dynamisch_temp_penalty_factor",
             "input_text.dynamisch_buitentemperatuur_sensor",
@@ -103,57 +111,173 @@ class DynamischHandelen(hass.Hass):
     def bereken_strategie(self, kwargs):
         """
         Zet de dashboardknop op loading terwijl _bereken_strategie_impl() rekent.
-        Extra triggers tijdens een lopende berekening plannen één nieuwe run.
+        Extra triggers tijdens een lopende berekening annuleren die run en
+        starten daarna één nieuwe run met de laatste trigger.
         """
         if self._berekening_bezig:
+            self._berekening_generatie += 1
             self._herberekening_gepland = True
+            self._laatste_herberekening_kwargs = kwargs or {}
+            self._zet_berekening_bezig(False)
+            self._zet_berekening_bezig(True)
             self.log(
-                "Dynamisch Handelen: berekening loopt al; extra herberekening ingepland",
+                "Dynamisch Handelen: berekening loopt al; huidige run wordt geannuleerd en opnieuw gestart",
                 level="INFO",
             )
             return
 
         self._berekening_bezig = True
+        self._berekening_generatie += 1
+        berekening_generatie = self._berekening_generatie
+        berekening_start = monotonic()
+        berekening_status = "voltooid"
         self._zet_berekening_bezig(True)
         try:
-            self._bereken_strategie_impl(kwargs)
+            self._bereken_strategie_impl(kwargs, berekening_generatie)
+        except StrategieBerekeningGeannuleerd:
+            berekening_status = "geannuleerd"
+            self.log(
+                "Dynamisch Handelen: strategie berekening geannuleerd door nieuwere input",
+                level="INFO",
+            )
+        except Exception:
+            berekening_status = "fout"
+            raise
         finally:
+            self._publiceer_berekening_duur(
+                berekening_start,
+                berekening_status,
+                kwargs,
+                berekening_generatie,
+            )
             self._berekening_bezig = False
             self._zet_berekening_bezig(False)
             if self._herberekening_gepland:
+                geplande_kwargs = self._laatste_herberekening_kwargs or {
+                    "trigger": "geplande_herberekening",
+                }
                 self._herberekening_gepland = False
-                self.run_in(self._voer_geplande_herberekening_uit, 1)
+                self._laatste_herberekening_kwargs = None
+                self.run_in(
+                    self._voer_geplande_herberekening_uit,
+                    1,
+                    geplande_kwargs=geplande_kwargs,
+                )
+
+    def _initialiseer_berekening_duur_sensor(self) -> None:
+        """Maakt de duur-sensor direct aan zodat het dashboard geen entity-melding toont."""
+        if self.get_state("sensor.dynamisch_handelsstrategie_berekening_duur") is not None:
+            return
+
+        try:
+            self.set_state(
+                "sensor.dynamisch_handelsstrategie_berekening_duur",
+                state=0.0,
+                attributes={
+                    "unit_of_measurement": "s",
+                    "device_class": "duration",
+                    "state_class": "measurement",
+                    "friendly_name": "Dynamisch Strategie Berekening Duur",
+                    "icon": "mdi:timer-outline",
+                    "status": "nog_niet_berekend",
+                    "trigger": None,
+                    "generatie": self._berekening_generatie,
+                    "laatst_bijgewerkt": datetime.now().astimezone().isoformat(),
+                },
+            )
+        except Exception as exc:
+            self.log(
+                f"Dynamisch Handelen: kon berekening-duur sensor niet initialiseren: {exc}",
+                level="DEBUG",
+            )
+
+    def _publiceer_berekening_duur(
+        self,
+        start_monotonic: float,
+        status: str,
+        kwargs: dict | None,
+        berekening_generatie: int,
+    ) -> None:
+        """Publiceert hoe lang de laatste strategie-run duurde."""
+        duur_s = max(0.0, monotonic() - start_monotonic)
+        trigger = kwargs.get("trigger") if isinstance(kwargs, dict) else None
+        try:
+            self.set_state(
+                "sensor.dynamisch_handelsstrategie_berekening_duur",
+                state=round(duur_s, 2),
+                attributes={
+                    "unit_of_measurement": "s",
+                    "device_class": "duration",
+                    "state_class": "measurement",
+                    "friendly_name": "Dynamisch Strategie Berekening Duur",
+                    "icon": "mdi:timer-outline",
+                    "status": status,
+                    "trigger": trigger,
+                    "generatie": berekening_generatie,
+                    "laatst_bijgewerkt": datetime.now().astimezone().isoformat(),
+                },
+            )
+        except Exception as exc:
+            self.log(
+                f"Dynamisch Handelen: kon berekening-duur sensor niet bijwerken: {exc}",
+                level="DEBUG",
+            )
 
     def _voer_geplande_herberekening_uit(self, kwargs):
         """Voert één extra herberekening uit na triggers tijdens een lopende run."""
-        self.bereken_strategie({"trigger": "geplande_herberekening"})
+        geplande_kwargs = kwargs.get("geplande_kwargs") if isinstance(kwargs, dict) else None
+        self.bereken_strategie(geplande_kwargs or {"trigger": "geplande_herberekening"})
 
     def _zet_berekening_bezig(self, bezig: bool) -> None:
         """Stuurt de dashboard-helper voor de loading state van de refreshknop."""
+        entity_id = "input_boolean.dynamisch_handelsstrategie_berekening_bezig"
+        state = "on" if bezig else "off"
         service = "input_boolean/turn_on" if bezig else "input_boolean/turn_off"
         try:
             self.call_service(
                 service,
-                entity_id="input_boolean.dynamisch_handelsstrategie_berekening_bezig",
+                entity_id=entity_id,
             )
         except Exception as exc:
             self.log(
                 f"Dynamisch Handelen: kon loading-helper niet bijwerken: {exc}",
                 level="DEBUG",
             )
+        try:
+            self.set_state(
+                entity_id,
+                state=state,
+                attributes={
+                    "friendly_name": "Dynamisch Strategie Berekening Bezig",
+                    "icon": "mdi:loading",
+                },
+            )
+        except Exception as exc:
+            self.log(
+                f"Dynamisch Handelen: kon loading-helper state niet bijwerken: {exc}",
+                level="DEBUG",
+            )
 
-    def _bereken_strategie_impl(self, kwargs):
+    def _bereken_strategie_impl(self, kwargs, berekening_generatie: int):
         """
         Haalt data op, berekent de strategie en publiceert het resultaat.
         Fouten worden gelogd maar laten AppDaemon verder draaien.
         """
         self.log("Dynamisch Handelen: strategie berekening gestart", level="DEBUG")
 
+        def is_geannuleerd() -> bool:
+            return berekening_generatie != self._berekening_generatie
+
+        def stop_als_geannuleerd() -> None:
+            if is_geannuleerd():
+                raise StrategieBerekeningGeannuleerd()
+
         try:
             slots = self._haal_prijsslots()
         except Exception as exc:
             self.log(f"Dynamisch Handelen: fout bij ophalen prijsslots: {exc}", level="ERROR")
             return
+        stop_als_geannuleerd()
 
         if not slots:
             self.log("Dynamisch Handelen: geen prijsslots beschikbaar", level="WARNING")
@@ -169,6 +293,7 @@ class DynamischHandelen(hass.Hass):
         except Exception as exc:
             self.log(f"Dynamisch Handelen: fout bij ophalen accustatus: {exc}", level="ERROR")
             return
+        stop_als_geannuleerd()
 
         if accu.max_kwh <= 0:
             self.log(
@@ -182,6 +307,7 @@ class DynamischHandelen(hass.Hass):
         warmte_penalty_ontladen_factor = self._haal_warmte_penalty_ontladen_factor()
         plateau_spreiding = self._haal_plateau_spreiding()
         thermisch = self._haal_thermische_config(slots)
+        stop_als_geannuleerd()
 
         self.log(
             f"Dynamisch Handelen: {len(slots)} slots | "
@@ -193,6 +319,7 @@ class DynamischHandelen(hass.Hass):
             f"warmte ontladen {warmte_penalty_ontladen_factor:.2f} | "
             f"plateau {'aan' if plateau_spreiding else 'uit'} | "
             f"packtemp {thermisch['batterij_temp_start_c'] if thermisch['batterij_temp_start_c'] is not None else '-'} °C | "
+            f"warmte stijging {thermisch['warmte_stijging_c_per_c2h']:.2f} °C/C²h | "
             f"forecast {thermisch['forecast_bron']}",
             level="INFO",
         )
@@ -206,11 +333,16 @@ class DynamischHandelen(hass.Hass):
             warmte_penalty_ontladen_factor=warmte_penalty_ontladen_factor,
             batterij_temp_start_c=thermisch["batterij_temp_start_c"],
             warmte_afkoeling_halveringstijd_h=thermisch["warmte_afkoeling_halveringstijd_h"],
+            warmte_stijging_c_per_c2h=thermisch["warmte_stijging_c_per_c2h"],
             temp_limiet_c=thermisch["temp_limiet_c"],
             temp_penalty_factor=thermisch["temp_penalty_factor"],
+            annuleer_check=is_geannuleerd,
         )
+        stop_als_geannuleerd()
         self._corrigeer_actief_slot_vermogen(schema, accu, hw_min_pct, hw_max_pct)
+        stop_als_geannuleerd()
         spread_blokkades = self._markeer_spread_blokkades(schema, accu.eta_laad, min_spread)
+        stop_als_geannuleerd()
 
         # Vertaal DP-interne SoC% (0–100% van hw-venster) naar echte battery-%
         # zodat de grafiek overeenkomt met wat de Zendure rapporteert.
@@ -218,6 +350,7 @@ class DynamischHandelen(hass.Hass):
         for s in schema:
             s["soc_voor_pct"] = round(hw_min_pct + s["soc_voor_pct"] / 100.0 * hw_range, 1)
             s["soc_na_pct"]   = round(hw_min_pct + s["soc_na_pct"]   / 100.0 * hw_range, 1)
+        stop_als_geannuleerd()
 
         verwachte_winst = sum(s["winst_eur"] for s in schema)
         laad_slots      = [s for s in schema if s["actie"] == "laden"]
@@ -260,6 +393,7 @@ class DynamischHandelen(hass.Hass):
                 "forecast_bron": thermisch["forecast_bron"],
                 "forecast_punten": thermisch["forecast_punten"],
                 "warmte_afkoeling_halveringstijd_h": thermisch["warmte_afkoeling_halveringstijd_h"],
+                "warmte_stijging_c_per_c2h": thermisch["warmte_stijging_c_per_c2h"],
                 "temp_limiet_c": thermisch["temp_limiet_c"],
                 "temp_penalty_factor": thermisch["temp_penalty_factor"],
                 "temp_soc_drempel_pct": 80.0,
@@ -922,6 +1056,11 @@ class DynamischHandelen(hass.Hass):
                 "input_number.dynamisch_warmte_afkoeling_halveringstijd_uren",
                 2.0,
                 minimum=0.05,
+            ),
+            "warmte_stijging_c_per_c2h": self._haal_float_met_default(
+                "input_number.dynamisch_warmte_stijging_c_per_c2h",
+                3.0,
+                minimum=0.0,
             ),
             "temp_limiet_c": self._haal_float_met_default(
                 "input_number.dynamisch_max_temp_boven_80_soc",

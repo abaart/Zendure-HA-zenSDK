@@ -19,7 +19,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "appdaemon" / "apps"))
 
 from strategie_dp import (
     Accustatus,
+    DP_VERMOGEN_STAP_W,
     SOC_STAP_KWH,
+    StrategieBerekeningGeannuleerd,
     bereken_derating,
     bereken_laadvermogen_voor_aansturing,
     corrigeer_actief_slot_vermogen,
@@ -221,6 +223,15 @@ class TestDPBasis:
         accu   = maak_accu(huidig_kwh=1.5)
         schema = los_dp_op(maak_slots([0.10]), accu)
         assert schema[0]["soc_voor_kwh"] == pytest.approx(accu.huidig_kwh, abs=SOC_STAP_KWH)
+
+    def test_annuleer_check_stopt_dp_run(self):
+        """AppDaemon kan een verouderde DP-run stoppen voordat die een schema teruggeeft."""
+        with pytest.raises(StrategieBerekeningGeannuleerd):
+            los_dp_op(
+                maak_slots([0.05, 0.30, 0.04, 0.32]),
+                maak_accu(huidig_kwh=0.0),
+                annuleer_check=lambda: True,
+            )
 
 
 # ── ARBITRAGE LOGICA ──────────────────────────────────────────────────────────
@@ -451,6 +462,32 @@ class TestMinimaleSpread:
         for slot in schema:
             assert slot["vermogen_w"] == 0 or slot["vermogen_w"] >= 100
 
+    def test_dp_gebruikt_minimum_grove_stappen_en_exact_maximum(self):
+        """
+        De DP-kandidaten bevatten 100W, grove stappen en de exacte max-limiet.
+        """
+        accu = maak_accu(
+            huidig_kwh=0.0,
+            max_kwh=4.65,
+            max_laad_w=1800,
+            max_ontlaad_w=2150,
+        )
+        schema = los_dp_op(
+            maak_slots([0.01, 1.00, 0.01, 1.00]),
+            accu,
+            plateau_spreiding=False,
+            warmte_penalty_laden_factor=0.0,
+            warmte_penalty_ontladen_factor=0.0,
+        )
+
+        geldige_laadwaarden = {100, 1800} | set(range(DP_VERMOGEN_STAP_W, 1801, DP_VERMOGEN_STAP_W))
+        geldige_ontlaadwaarden = {100, 2150} | set(range(DP_VERMOGEN_STAP_W, 2151, DP_VERMOGEN_STAP_W))
+        for slot in schema:
+            if slot["actie"] == "laden":
+                assert slot["vermogen_w"] in geldige_laadwaarden
+            if slot["actie"] == "ontladen":
+                assert slot["vermogen_w"] in geldige_ontlaadwaarden
+
     def test_warmte_penalty_ontladen_factor_nul_schakelt_ontladen_uit(self):
         accu = maak_accu(huidig_kwh=2.4, max_kwh=2.4)
 
@@ -492,6 +529,82 @@ class TestMinimaleSpread:
         assert "c_waarde" in eerste
         assert "temp_penalty_eur" in eerste
         assert "temp_limiet_actief" in eerste
+
+    def test_thermisch_model_koelt_alleen_tijdens_rust(self):
+        slots = maak_slots([0.01, 1.00])
+        for slot in slots:
+            slot["buiten_temp_c"] = 0.0
+
+        schema = los_dp_op(
+            slots,
+            maak_accu(huidig_kwh=0.0),
+            plateau_spreiding=False,
+            batterij_temp_start_c=30.0,
+            warmte_afkoeling_halveringstijd_h=1.0,
+            warmte_stijging_c_per_c2h=0.0,
+            temp_penalty_factor=0.0,
+        )
+
+        assert schema[0]["actie"] == "laden"
+        assert schema[0]["batterij_temp_na_c"] == pytest.approx(30.0)
+
+    def test_thermisch_model_rustslot_koelt_richting_buitenlucht(self):
+        slots = maak_slots([0.10])
+        slots[0]["buiten_temp_c"] = 10.0
+
+        schema = los_dp_op(
+            slots,
+            maak_accu(huidig_kwh=0.0),
+            plateau_spreiding=False,
+            batterij_temp_start_c=30.0,
+            warmte_afkoeling_halveringstijd_h=1.0,
+            warmte_stijging_c_per_c2h=20.0,
+        )
+
+        assert schema[0]["actie"] == "rust"
+        assert schema[0]["batterij_temp_na_c"] == pytest.approx(20.0)
+
+    def test_thermisch_model_rustslot_kruist_buitenlucht_niet(self):
+        slots = maak_slots([0.10], duur_h=10.0)
+        slots[0]["buiten_temp_c"] = 20.0
+
+        schema = los_dp_op(
+            slots,
+            maak_accu(huidig_kwh=0.0),
+            plateau_spreiding=False,
+            batterij_temp_start_c=30.0,
+            warmte_afkoeling_halveringstijd_h=0.05,
+        )
+
+        assert schema[0]["actie"] == "rust"
+        assert 20.0 <= schema[0]["batterij_temp_na_c"] <= 30.0
+
+    def test_thermisch_model_warmte_stijging_factor_verhoogt_actietemperatuur(self):
+        slots_zonder_stijging = maak_slots([0.01, 1.00])
+        slots_met_stijging = maak_slots([0.01, 1.00])
+        for slot in slots_zonder_stijging + slots_met_stijging:
+            slot["buiten_temp_c"] = 0.0
+
+        accu = maak_accu(huidig_kwh=0.0)
+        zonder_stijging = los_dp_op(
+            slots_zonder_stijging,
+            accu,
+            plateau_spreiding=False,
+            batterij_temp_start_c=30.0,
+            warmte_stijging_c_per_c2h=0.0,
+            temp_penalty_factor=0.0,
+        )
+        met_stijging = los_dp_op(
+            slots_met_stijging,
+            accu,
+            plateau_spreiding=False,
+            batterij_temp_start_c=30.0,
+            warmte_stijging_c_per_c2h=10.0,
+            temp_penalty_factor=0.0,
+        )
+
+        assert met_stijging[0]["actie"] == "laden"
+        assert met_stijging[0]["batterij_temp_na_c"] > zonder_stijging[0]["batterij_temp_na_c"]
 
     def test_thermisch_model_beperkt_laden_bij_warme_hoge_soc(self):
         slots_zonder_penalty = maak_slots([0.01, 1.00])

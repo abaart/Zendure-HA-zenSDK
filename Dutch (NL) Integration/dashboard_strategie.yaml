@@ -485,38 +485,42 @@ views:
           - type: entities
             entities:
               - entity: input_number.dynamisch_warmte_penalty_laden_factor
-                name: Warmte penalty laden factor
+                name: C-waarde penalty laden factor
               - entity: input_number.dynamisch_warmte_penalty_ontladen_factor
-                name: Warmte penalty ontladen factor
+                name: C-waarde penalty ontladen factor
               - entity: input_number.dynamisch_warmte_afkoeling_halveringstijd_uren
-                name: Afkoeling halveringstijd (uren)
+                name: Packtemp afkoel halveringstijd
+              - entity: input_number.dynamisch_warmte_stijging_c_per_c2h
+                name: Packtemp warmte stijging per C²h
               - entity: input_number.dynamisch_max_temp_boven_80_soc
-                name: Max temp boven 80% SoC
+                name: Packtemp limiet boven 80% SoC
               - entity: input_number.dynamisch_temp_penalty_factor
-                name: Temperatuur penalty factor
+                name: Packtemp overschrijding penalty factor
               - entity: input_text.dynamisch_buitentemperatuur_sensor
-                name: Buitentemperatuur sensor
+                name: Actuele buitentemperatuur sensor
               - entity: input_text.dynamisch_weather_entity
-                name: Weather entity
+                name: Forecast weather entity
             show_header_toggle: false
             state_color: false
 
           - type: markdown
             title: Parameter uitleg
             content: |-
-              **Warmte penalty laden factor**: weegt C-waarde warmteverlies tijdens laden. Hoger betekent vaker lager laadvermogen.
+              **C-waarde penalty laden factor**: weegt warmteverlies door hoge C-waarde tijdens laden. Hoger betekent vaker lager laadvermogen.
 
-              **Warmte penalty ontladen factor**: weegt C-waarde warmteverlies tijdens ontladen. Hoger betekent vaker lager ontlaadvermogen.
+              **C-waarde penalty ontladen factor**: weegt warmteverlies door hoge C-waarde tijdens ontladen. Hoger betekent vaker lager ontlaadvermogen.
 
-              **Afkoeling halveringstijd**: aantal uren waarin het temperatuurverschil tussen batterij en buitenlucht halveert.
+              **Packtemp afkoel halveringstijd**: aantal rust-uren waarin het temperatuurverschil tussen batterij en buitenlucht halveert.
 
-              **Max temp boven 80% SoC**: gewenste maximale batterijtemperatuur wanneer de planning boven 80% SoC uitkomt.
+              **Packtemp warmte stijging per C²h**: temperatuurstijging in graden per C² × uur tijdens laden of ontladen. Hoger betekent sneller voorspelde opwarming.
 
-              **Temperatuur penalty factor**: weegt overschrijding van de temperatuurgrens. `0` schakelt deze extra penalty uit.
+              **Packtemp limiet boven 80% SoC**: gewenste maximale batterijtemperatuur wanneer de planning boven 80% SoC uitkomt.
 
-              **Buitentemperatuur sensor**: optionele `sensor.*` voor actuele buitentemperatuur. Laat leeg als je alleen `weather.openweathermap` hebt.
+              **Packtemp overschrijding penalty factor**: weegt overschrijding van de temperatuurgrens. `0` schakelt deze extra penalty uit.
 
-              **Weather entity**: `weather.*` entity voor `weather.get_forecasts`, bijvoorbeeld `weather.openweathermap`.
+              **Actuele buitentemperatuur sensor**: optionele `sensor.*` voor actuele buitentemperatuur. Laat leeg als je alleen `weather.openweathermap` hebt.
+
+              **Forecast weather entity**: `weather.*` entity voor `weather.get_forecasts`, bijvoorbeeld `weather.openweathermap`.
 
           - type: conditional
             conditions:
@@ -569,7 +573,7 @@ views:
               - entity: sensor.dynamisch_handelsstrategie
                 name: Batterij
                 type: line
-                curve: smooth
+                curve: straight
                 color: '#009688'
                 stroke_width: 2
                 unit: '°C'
@@ -628,6 +632,24 @@ views:
                       ? s.batterij_temp_na_c
                       : null
                   ]);
+              - entity: sensor.dynamisch_handelsstrategie
+                name: Δ packtemp
+                type: column
+                color: '#5c6bc0'
+                opacity: 0.55
+                unit: '°C'
+                yaxis_id: delta
+                data_generator: |
+                  return (entity.attributes.slots || []).map(s => {
+                    const voor = Number(s.batterij_temp_voor_c);
+                    const na = Number(s.batterij_temp_na_c);
+                    return [
+                      new Date(s.start).getTime(),
+                      Number.isFinite(voor) && Number.isFinite(na)
+                        ? parseFloat((na - voor).toFixed(2))
+                        : null
+                    ];
+                  });
               - entity: input_boolean.dynamisch_handelsstrategie_berekening_bezig
                 name: Refresh trigger
                 type: line
@@ -642,10 +664,17 @@ views:
                 x:
                   format: 'dd-MM HH:mm'
               yaxis:
-                decimalsInFloat: 1
-                labels:
-                  formatter: |
-                    EVAL:function(v) { return v.toFixed(1) + ' °C' }
+                - id: temp
+                  decimalsInFloat: 1
+                  labels:
+                    formatter: |
+                      EVAL:function(v) { return v.toFixed(1) + ' °C' }
+                - id: delta
+                  opposite: true
+                  decimalsInFloat: 2
+                  labels:
+                    formatter: |
+                      EVAL:function(v) { return v.toFixed(2) + ' Δ°C' }
               chart:
                 height: 220px
                 toolbar:
@@ -679,6 +708,7 @@ views:
                 type: column
                 color: '#66bb6a'
                 unit: 'ct'
+                yaxis_id: penalty
                 data_generator: |
                   return (entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
@@ -689,6 +719,7 @@ views:
                 type: column
                 color: '#ff9800'
                 unit: 'ct'
+                yaxis_id: penalty
                 data_generator: |
                   return (entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
@@ -699,6 +730,7 @@ views:
                 type: column
                 color: '#ef5350'
                 unit: 'ct'
+                yaxis_id: penalty
                 data_generator: |
                   return (entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
@@ -707,6 +739,7 @@ views:
               - entity: sensor.dynamisch_handelsstrategie
                 name: Actie
                 type: line
+                yaxis_id: helper
                 stroke_width: 0
                 opacity: 0
                 show:
@@ -721,6 +754,7 @@ views:
               - entity: sensor.dynamisch_handelsstrategie
                 name: Vermogen
                 type: line
+                yaxis_id: helper
                 stroke_width: 0
                 opacity: 0
                 show:
@@ -735,6 +769,7 @@ views:
               - entity: sensor.dynamisch_handelsstrategie
                 name: C
                 type: line
+                yaxis_id: helper
                 stroke_width: 0
                 opacity: 0
                 show:
@@ -749,6 +784,7 @@ views:
               - entity: sensor.dynamisch_handelsstrategie
                 name: Temp voor
                 type: line
+                yaxis_id: helper
                 stroke_width: 0
                 opacity: 0
                 show:
@@ -763,6 +799,7 @@ views:
               - entity: sensor.dynamisch_handelsstrategie
                 name: Temp na
                 type: line
+                yaxis_id: helper
                 stroke_width: 0
                 opacity: 0
                 show:
@@ -777,6 +814,7 @@ views:
               - entity: sensor.dynamisch_handelsstrategie
                 name: Warmte ct
                 type: line
+                yaxis_id: helper
                 stroke_width: 0
                 opacity: 0
                 show:
@@ -791,6 +829,7 @@ views:
               - entity: sensor.dynamisch_handelsstrategie
                 name: Temp ct
                 type: line
+                yaxis_id: helper
                 stroke_width: 0
                 opacity: 0
                 show:
@@ -840,13 +879,16 @@ views:
                     return html;
                   }
               yaxis:
-                decimalsInFloat: 2
-                labels:
-                  formatter: |
-                    EVAL:function(v) { return v.toFixed(1) + ' ct' }
+                - id: penalty
+                  decimalsInFloat: 2
+                  min: 0
+                  labels:
+                    formatter: |
+                      EVAL:function(v) { return v.toFixed(1) + ' ct' }
+                - id: helper
+                  show: false
               chart:
                 height: 220px
-                stacked: true
                 toolbar:
                   show: false
                 zoom:
@@ -886,17 +928,22 @@ views:
               - type: attribute
                 entity: sensor.dynamisch_handelsstrategie
                 attribute: warmte_afkoeling_halveringstijd_h
-                name: Afkoeling halveringstijd
+                name: Packtemp afkoel halveringstijd
                 icon: mdi:coolant-temperature
               - type: attribute
                 entity: sensor.dynamisch_handelsstrategie
+                attribute: warmte_stijging_c_per_c2h
+                name: Packtemp warmte stijging
+                icon: mdi:heat-wave
+              - type: attribute
+                entity: sensor.dynamisch_handelsstrategie
                 attribute: temp_limiet_c
-                name: Temperatuurlimiet
+                name: Packtemp limiet
                 icon: mdi:thermometer-alert
               - type: attribute
                 entity: sensor.dynamisch_handelsstrategie
                 attribute: temp_penalty_factor
-                name: Temp penalty factor
+                name: Packtemp overschrijding penalty
                 icon: mdi:thermometer-chevron-up
             show_header_toggle: false
             state_color: true
@@ -910,6 +957,14 @@ views:
               - entity: sensor.dynamisch_handelsstrategie
                 name: Verwachte winst (horizon)
                 icon: mdi:cash-plus
+              - entity: sensor.dynamisch_handelsstrategie_berekening_duur
+                name: Laatste berekening duur
+                icon: mdi:timer-outline
+              - type: attribute
+                entity: sensor.dynamisch_handelsstrategie_berekening_duur
+                attribute: status
+                name: Laatste berekening status
+                icon: mdi:progress-check
               - type: attribute
                 entity: sensor.dynamisch_handelsstrategie
                 attribute: volgende_actie

@@ -97,7 +97,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Callable
 
 
 # ── CONFIGURATIE ──────────────────────────────────────────────────────────────
@@ -131,6 +131,10 @@ SOC_STAP_KWH: float = 0.05
 # SoC-gridpunten; rond alleen het gerapporteerde vermogen naar boven af.
 VERMOGEN_STAP_W: int = 25
 
+# De DP evalueert vermogenskeuzes grover dan de Zendure-aansturingsstap. De
+# minimumwaarde en exacte maximale laad/ontlaadlimiet blijven aparte kandidaten.
+DP_VERMOGEN_STAP_W: int = 250
+
 # Vermogens lager dan dit minimum worden niet als DP-keuze geëvalueerd. Rust
 # blijft altijd mogelijk als aparte actie.
 MINIMUM_VERMOGEN_W: int = 100
@@ -140,14 +144,18 @@ MINIMUM_VERMOGEN_W: int = 100
 WARMTE_PENALTY_EUR_PER_KWH_C2: float = 0.05
 
 # Eenvoudig thermisch model:
-# - temperatuur beweegt per slot richting de voorspelde buitentemperatuur;
+# - temperatuur beweegt alleen tijdens rust richting de voorspelde buitentemperatuur;
 # - laden/ontladen voegt warmte toe op basis van C² × duur;
 # - de DP krijgt een extra euro-penalty boven de ingestelde packtemperatuurgrens.
-TEMP_STAP_C: float = 3.0
+TEMP_STAP_C: float = 1.0
 WARMTE_STIJGING_C_PER_C2H: float = 3.0
 TEMP_PENALTY_EUR_PER_C2H: float = 0.25
 
 # ── DATATYPE ──────────────────────────────────────────────────────────────────
+
+class StrategieBerekeningGeannuleerd(Exception):
+    """Raised wanneer AppDaemon een lopende DP-berekening wil vervangen."""
+
 
 @dataclass
 class Accustatus:
@@ -402,9 +410,11 @@ def los_dp_op(
     minimum_vermogen_w: int = MINIMUM_VERMOGEN_W,
     batterij_temp_start_c: float | None = None,
     warmte_afkoeling_halveringstijd_h: float = 2.0,
+    warmte_stijging_c_per_c2h: float = WARMTE_STIJGING_C_PER_C2H,
     temp_limiet_c: float = 35.0,
     temp_penalty_factor: float = 1.0,
     temp_soc_drempel_pct: float = 80.0,
+    annuleer_check: Callable[[], bool] | None = None,
 ) -> list[dict[str, Any]]:
     """
     Berekent de winstmaximaliserende laad/ontlaad strategie via DP.
@@ -459,7 +469,8 @@ def los_dp_op(
     Als batterij_temp_start_c bekend is, breidt los_dp_op() de DP-state uit van
     (tijd, SoC) naar (tijd, SoC, packtemperatuur). De buitentemperatuur per slot
     komt uit slot["buiten_temp_c"]. Die forecasttemperatuur is de vloer/omgeving
-    waar de packtemperatuur naartoe koelt. Acties voegen warmte toe via C² × duur.
+    waar de packtemperatuur tijdens rust naartoe koelt. Laden en ontladen koelen
+    niet tegelijk af; acties voegen alleen warmte toe via C² × duur.
 
     Boven temp_soc_drempel_pct en temp_limiet_c telt temp_penalty_factor mee als
     extra euro-penalty. Zo kan de DP vermogen verlagen als een eerder hard slot
@@ -488,9 +499,12 @@ def los_dp_op(
         minimum_vermogen_w:      Laagste vermogensopdracht die DP evalueert; rust blijft apart.
         batterij_temp_start_c:   Warmste batterij-packtemperatuur bij start van de planning.
         warmte_afkoeling_halveringstijd_h: Uren waarin het temperatuurverschil met buiten halveert.
+        warmte_stijging_c_per_c2h: Graden packtemperatuurstijging per C² × uur actie.
         temp_limiet_c:           Packtemperatuurgrens voor hoge SoC.
         temp_penalty_factor:     Gewicht voor overschrijding van temp_limiet_c.
         temp_soc_drempel_pct:    SoC-percentage waarboven temp_limiet_c actief is.
+        annuleer_check:          Callback die True teruggeeft als AppDaemon deze
+                                 DP-run moet stoppen voor een nieuwere berekening.
 
     Returns:
         Lijst van slot-dicts met toegevoegde velden:
@@ -504,6 +518,12 @@ def los_dp_op(
     if n == 0:
         return []
 
+    def controleer_annulering() -> None:
+        if annuleer_check is not None and annuleer_check():
+            raise StrategieBerekeningGeannuleerd()
+
+    controleer_annulering()
+
     max_kwh     = accu.max_kwh
     eta_laad    = accu.eta_laad
     eta_ontlaad = accu.eta_ontlaad
@@ -513,11 +533,13 @@ def los_dp_op(
     warmte_penalty_ontladen_factor = max(0.0, float(warmte_penalty_ontladen_factor))
     minimum_vermogen_w = max(0, int(minimum_vermogen_w))
     warmte_afkoeling_halveringstijd_h = max(0.05, float(warmte_afkoeling_halveringstijd_h))
+    warmte_stijging_c_per_c2h = max(0.0, float(warmte_stijging_c_per_c2h))
     temp_limiet_c = float(temp_limiet_c)
     temp_penalty_factor = max(0.0, float(temp_penalty_factor))
     temp_soc_drempel_pct = min(100.0, max(0.0, float(temp_soc_drempel_pct)))
     thermisch_actief = batterij_temp_start_c is not None
     batterij_temp_start = float(batterij_temp_start_c) if thermisch_actief else None
+    controleer_annulering()
 
     # Transactiekosten in €/kWh (gesplitst over laden en ontladen).
     # Dit zorgt ervoor dat een cyclus alleen plaatsvindt als de brutospread
@@ -541,19 +563,20 @@ def los_dp_op(
         return min(n_soc, max(0, math.ceil(kwh / SOC_STAP_KWH - 1e-9)))
 
     def vermogensstappen(maximum_w: float) -> list[int]:
-        if maximum_w < minimum_vermogen_w or VERMOGEN_STAP_W <= 0:
+        if maximum_w < minimum_vermogen_w or DP_VERMOGEN_STAP_W <= 0:
             return []
 
-        start_w = int(math.ceil(minimum_vermogen_w / VERMOGEN_STAP_W) * VERMOGEN_STAP_W)
-        eind_w = int(math.floor(maximum_w / VERMOGEN_STAP_W) * VERMOGEN_STAP_W)
-        if eind_w < start_w:
-            return []
+        stappen_set = {int(round(minimum_vermogen_w)), int(round(maximum_w))}
+        start_w = int(math.ceil(minimum_vermogen_w / DP_VERMOGEN_STAP_W) * DP_VERMOGEN_STAP_W)
+        eind_w = int(math.floor(maximum_w / DP_VERMOGEN_STAP_W) * DP_VERMOGEN_STAP_W)
+        if eind_w >= start_w:
+            stappen_set.update(range(start_w, eind_w + 1, DP_VERMOGEN_STAP_W))
 
-        stappen = list(range(start_w, eind_w + 1, VERMOGEN_STAP_W))
-        afgerond_max = int(round(maximum_w))
-        if afgerond_max > eind_w and afgerond_max >= start_w:
-            stappen.append(afgerond_max)
-        return stappen
+        return sorted(
+            stap
+            for stap in stappen_set
+            if minimum_vermogen_w <= stap <= maximum_w
+        )
 
     def warmte_penalty_eur(energie_accu_kwh: float, duur_h: float, factor: float) -> float:
         if factor <= 0 or energie_accu_kwh <= 0 or duur_h <= 0 or max_kwh <= 0:
@@ -584,10 +607,16 @@ def los_dp_op(
         if temp_voor_c is None or buiten_temp_c is None or duur_h <= 0:
             return temp_voor_c
 
-        afkoel_factor = 0.5 ** (duur_h / warmte_afkoeling_halveringstijd_h)
-        temp_na_koeling = buiten_temp_c + (temp_voor_c - buiten_temp_c) * afkoel_factor
         actie_c = c_waarde(energie_accu_kwh, duur_h)
-        return temp_na_koeling + WARMTE_STIJGING_C_PER_C2H * actie_c * actie_c * duur_h
+        warmte_stijging_c = warmte_stijging_c_per_c2h * actie_c * actie_c * duur_h
+        if energie_accu_kwh > 0:
+            return temp_voor_c + warmte_stijging_c
+
+        afkoel_factor = 0.5 ** (duur_h / warmte_afkoeling_halveringstijd_h)
+        temp_na_c = buiten_temp_c + (temp_voor_c - buiten_temp_c) * afkoel_factor
+        ondergrens = min(temp_voor_c, buiten_temp_c)
+        bovengrens = max(temp_voor_c, buiten_temp_c)
+        return min(bovengrens, max(ondergrens, temp_na_c))
 
     def temperatuur_penalty_eur(temp_na_c: float | None, soc_na_kwh: float, duur_h: float) -> float:
         if (
@@ -649,6 +678,7 @@ def los_dp_op(
 
     # ── BACKWARDS PASS ────────────────────────────────────────────────────────
     for t in range(n - 1, -1, -1):
+        controleer_annulering()
         prijs  = slots[t]["price"]       # €/kWh
         duur_h = slots[t]["duration_h"]  # uren
 
@@ -656,6 +686,7 @@ def los_dp_op(
             soc_kwh = idx_naar_kwh(s)  # altijd een gridpunt (veelvoud van SOC_STAP_KWH)
 
             for q in range(n_temp):
+                controleer_annulering()
                 # ── Optie: RUST ───────────────────────────────────────────────
                 # Geen actie, SoC ongewijzigd, temperatuur koelt wel richting buiten.
                 q_rust = volgende_temp_idx(q, t, 0.0)
@@ -668,7 +699,9 @@ def los_dp_op(
                 eff_laad_w = max_laad_w * derating
                 ruimte_kwh = max_kwh - soc_kwh
 
-                for vermogen_w in vermogensstappen(max_laad_w):
+                for stap_index, vermogen_w in enumerate(vermogensstappen(max_laad_w)):
+                    if stap_index % 16 == 0:
+                        controleer_annulering()
                     werkelijk_w = min(float(vermogen_w), eff_laad_w)
                     energie_ideaal = min(werkelijk_w / 1000.0 * duur_h * eta_laad, ruimte_kwh)
                     s_laden = kwh_naar_idx_omlaag(soc_kwh + energie_ideaal)
@@ -697,7 +730,9 @@ def los_dp_op(
 
                 # ── Optie: ONTLADEN ───────────────────────────────────────────
                 # Evalueer alle outputLimit-opdrachten vanaf minimum_vermogen_w.
-                for vermogen_w in vermogensstappen(max_ontlaad_w):
+                for stap_index, vermogen_w in enumerate(vermogensstappen(max_ontlaad_w)):
+                    if stap_index % 16 == 0:
+                        controleer_annulering()
                     max_naar_net_kwh = float(vermogen_w) / 1000.0 * duur_h
                     max_uit_accu_kwh = max_naar_net_kwh / eta_ontlaad if eta_ontlaad > 0 else 0.0
                     energie_ideaal_uit = min(max_uit_accu_kwh, soc_kwh)
@@ -746,6 +781,7 @@ def los_dp_op(
     huidig_temp_c = batterij_temp_start
 
     for t in range(n):
+        controleer_annulering()
         slot       = slots[t]
         soc_kwh    = idx_naar_kwh(huidig_s)   # gekwantiseerde SoC aan begin van slot
         actie_code, gekozen_vermogen_w, nieuwe_s, nieuwe_q = P[t][huidig_s][huidig_q]
@@ -843,6 +879,7 @@ def los_dp_op(
     def herbereken_modelvelden(schema: list[dict[str, Any]]) -> None:
         temp_c = batterij_temp_start
         for k, s_r in enumerate(schema):
+            controleer_annulering()
             duur_h = slots[k]["duration_h"]
             actie = s_r.get("actie")
             try:
@@ -886,6 +923,8 @@ def los_dp_op(
     if not plateau_spreiding:
         return resultaat
 
+    controleer_annulering()
+
     # ── PLATEAU SPREIDING ─────────────────────────────────────────────────────
     # Herverdeel energie gelijkmatig over aaneengesloten slots met dezelfde actie
     # en een onderlinge prijsverschil ≤ plateau_drempel_ct. Water-filling zorgt
@@ -896,6 +935,7 @@ def los_dp_op(
         resterend = totaal
         actief = set(range(len(maxima)))
         while resterend > 1e-9 and actief:
+            controleer_annulering()
             gelijk = resterend / len(actief)
             gecapped: set[int] = set()
             for k in actief:
@@ -972,6 +1012,7 @@ def los_dp_op(
         end = basis + 1
 
         while plateau_duur_h(start, end) < max_plateau_uren:
+            controleer_annulering()
             kandidaten: list[tuple[float, int, int]] = []
             links = start - 1
             rechts = end
@@ -1020,6 +1061,7 @@ def los_dp_op(
 
     i = 0
     while i < n:
+        controleer_annulering()
         actie_i = resultaat[i]["actie"]
         if actie_i not in ("laden", "ontladen"):
             i += 1
