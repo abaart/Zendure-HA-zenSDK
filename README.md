@@ -11,6 +11,50 @@ Deze fork behoudt een paar lokale wijzigingen ten opzichte van `Gielz1986/Zendur
 - `sensor.dynamisch_spread_indicatie`, `sensor.dynamisch_spread_indicatie_nom`, `sensor.dynamisch_spread_indicatie_morgen`, en `sensor.dynamisch_spread_indicatie_nom_morgen` berekenen spread met `(gemiddelde dure prijs - gemiddelde goedkope prijs) * 100`, zodat de sensorwaarde past bij `unit_of_measurement: "ct/kWh"`.
 - `.DS_Store` bestanden worden genegeerd met `.gitignore`, zodat macOS metadata-bestanden buiten commits blijven.
 
+## Lokaal deployen naar Home Assistant
+
+Gebruik `scripts/deploy_ha.sh` om AppDaemon-bestanden en package YAML via SSH naar Home Assistant te kopieren.
+
+Maak eerst een lokale `.env`:
+
+```bash
+cp .env.example .env
+```
+
+Vul daarna in `.env` minimaal `HA_SSH_HOST` in:
+
+```bash
+HA_SSH_HOST=homeassistant.local
+HA_SSH_USER=root
+HA_SSH_PORT=22
+HA_CONFIG_DIR=/config
+HA_APPDAEMON_ADDON_SLUG=a0d7b954_appdaemon
+```
+
+Controleer de kopieeractie zonder bestanden te wijzigen:
+
+```bash
+scripts/deploy_ha.sh --dry-run
+```
+
+Kopieer de bestanden en herstart AppDaemon:
+
+```bash
+scripts/deploy_ha.sh
+```
+
+`scripts/deploy_ha.sh` schrijft deze Home Assistant bestanden:
+
+- `/config/appdaemon/apps/apps.yaml`: vervangt alleen de top-level sectie `dynamisch_handelen:` en laat andere AppDaemon apps in `apps.yaml` staan.
+- `/config/appdaemon/apps/dynamisch_handelen.py`
+- `/config/appdaemon/apps/strategie_dp.py`
+- `/config/packages/zendure_gielz1986_nl.yaml`
+- `/config/packages/zendure_local_nl.yaml`
+
+`scripts/deploy_ha.sh` herstart AppDaemon met `ha apps restart a0d7b954_appdaemon`. Zet `HA_APPDAEMON_ADDON_SLUG` in `.env` wanneer jouw AppDaemon app slug anders is. Start `scripts/deploy_ha.sh --no-restart` wanneer je alleen bestanden wilt kopieren.
+
+`scripts/deploy_ha.sh` kopieert `Dutch (NL) Integration/automation_nl.yaml`, `Dutch (NL) Integration/dashboard_nl.yaml`, en `Dutch (NL) Integration/dashboard_strategie.yaml` niet. Beheer deze drie YAML-bestanden handmatig in Home Assistant.
+
 ![Preview](Images/Dashboard-220326.gif) <br>
 <sub>
 <a href="https://github.com/Gielz1986/Zendure-HA-zenSDK/wiki/NL-%E2%80%90-Beschikbare-entiteiten">
