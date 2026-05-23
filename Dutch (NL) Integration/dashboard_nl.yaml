@@ -817,10 +817,6 @@ views:
             entities:
               - entity: sensor.zendure_2400_ac_modus
                 name: Modus
-              - entity: sensor.zendure_2400_ac_moduswissel_status
-                name: Moduswissel Status
-              - entity: sensor.zendure_2400_ac_moduswissel_aangevraagd_sinds
-                name: Moduswissel Aangevraagd Sinds
               - type: conditional
                 conditions:
                   - condition: or
@@ -2679,34 +2675,6 @@ views:
               - entity: input_text.homewizard_p1_ip_adres
               - entity: input_number.zendure_2400_ac_standby_vertraging
                 name: Standby Vertraging
-          - type: heading
-            icon: ''
-            heading: Configuratie (Moduswissel)
-            heading_style: title
-          - type: markdown
-            content: >-
-              <ha-alert alert-type="info">Helptekst</ha-alert>Bij
-              **Moduswissel Vertraging⚙️** stel je in hoeveel seconden de vraag
-              naar opladen of ontladen aanwezig moet blijven voordat de Zendure
-              van modus wisselt. Dit voorkomt dat korte verbruikspieken,
-              bijvoorbeeld van een Quooker, veel relais-schakelingen
-              veroorzaken.
-
-
-              Bij **Min. Vermogen Tijdens Moduswissel⚙️** stel je in met welk
-              minimaal laad- of ontlaadvermogen de oude modus actief blijft
-              tijdens de wachttijd.
-            text_only: true
-            visibility:
-              - condition: state
-                entity: input_boolean.help_tonen_op_dashboard
-                state: 'on'
-          - type: entities
-            entities:
-              - entity: input_number.zendure_2400_ac_moduswissel_vertraging
-                name: Moduswissel Vertraging
-              - entity: input_number.zendure_2400_ac_minimaal_vermogen_tijdens_moduswissel
-                name: Min. Vermogen Tijdens Moduswissel
           - type: heading
             icon: ''
             heading: Configuratie (Opladen)
