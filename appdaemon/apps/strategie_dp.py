@@ -608,12 +608,13 @@ def los_dp_op(
 
     # SoC-grid: index 0 = leeg (= min-SoC), index n_soc = vol (= max-SoC)
     n_soc = max(1, round(max_kwh / SOC_STAP_KWH))
+    soc_kwh_per_idx = [idx * SOC_STAP_KWH for idx in range(n_soc + 1)]
 
     def kwh_naar_idx(kwh: float) -> int:
         return min(n_soc, max(0, round(kwh / SOC_STAP_KWH)))
 
     def idx_naar_kwh(idx: int) -> float:
-        return idx * SOC_STAP_KWH
+        return soc_kwh_per_idx[idx]
 
     def kwh_naar_idx_omlaag(kwh: float) -> int:
         return min(n_soc, max(0, math.floor(kwh / SOC_STAP_KWH + 1e-9)))
@@ -637,6 +638,9 @@ def los_dp_op(
             if minimum_vermogen_w <= stap <= maximum_w
         )
 
+    laad_vermogensstappen = vermogensstappen(max_laad_w)
+    ontlaad_vermogensstappen = vermogensstappen(max_ontlaad_w)
+
     def warmte_penalty_eur(energie_accu_kwh: float, duur_h: float, factor: float) -> float:
         if factor <= 0 or energie_accu_kwh <= 0 or duur_h <= 0 or max_kwh <= 0:
             return 0.0
@@ -656,6 +660,8 @@ def los_dp_op(
             return float(slots[t].get("buiten_temp_c", batterij_temp_start))
         except (TypeError, ValueError):
             return batterij_temp_start
+
+    slot_buiten_temp_per_t = [slot_buiten_temp_c(t) for t in range(n)]
 
     def voorspel_temp_na_c(
         temp_voor_c: float | None,
@@ -692,25 +698,35 @@ def los_dp_op(
         venster_pct = min(1.0, max(0.0, soc_kwh / max_kwh))
         return soc_min_pct + venster_pct * (soc_max_pct - soc_min_pct)
 
+    echte_soc_pct_per_idx = [echte_soc_pct(soc_kwh) for soc_kwh in soc_kwh_per_idx]
+    temp_limiet_per_idx = [
+        temp_limiet_c if soc_pct >= temp_soc_drempel_pct else temp_limiet_lage_soc_c
+        for soc_pct in echte_soc_pct_per_idx
+    ]
+    temp_penalty_soc_factor_per_idx = [
+        1.0 if soc_pct <= 90.0 else 1.0 + min(1.0, max(0.0, (soc_pct - 90.0) / 10.0)) * (temp_penalty_100_soc_factor - 1.0)
+        for soc_pct in echte_soc_pct_per_idx
+    ]
+    hoge_soc_fractie_per_idx = [
+        min(1.0, max(0.0, (soc_pct - 90.0) / 10.0))
+        for soc_pct in echte_soc_pct_per_idx
+    ]
+    lage_soc_fractie_per_idx = [
+        min(1.0, max(0.0, (10.0 - soc_pct) / 5.0))
+        for soc_pct in echte_soc_pct_per_idx
+    ]
+
     def temp_limiet_voor_soc_kwh(soc_kwh: float) -> float:
         if max_kwh <= 0:
             return temp_limiet_c
 
-        soc_pct = echte_soc_pct(soc_kwh)
-        if soc_pct >= temp_soc_drempel_pct:
-            return temp_limiet_c
-        return temp_limiet_lage_soc_c
+        return temp_limiet_per_idx[kwh_naar_idx(soc_kwh)]
 
     def temp_penalty_soc_factor(soc_kwh: float) -> float:
         if max_kwh <= 0:
             return 1.0
 
-        soc_pct = echte_soc_pct(soc_kwh)
-        if soc_pct <= 90.0:
-            return 1.0
-
-        t = min(1.0, max(0.0, (soc_pct - 90.0) / 10.0))
-        return 1.0 + t * (temp_penalty_100_soc_factor - 1.0)
+        return temp_penalty_soc_factor_per_idx[kwh_naar_idx(soc_kwh)]
 
     def soc_verblijf_penalty_componenten(
         soc_kwh: float,
@@ -722,7 +738,7 @@ def los_dp_op(
 
         soc_pct = echte_soc_pct(soc_kwh)
         hoge_fractie = min(1.0, max(0.0, (soc_pct - 90.0) / 10.0))
-        lage_fractie = min(1.0, max(0.0, (10.0 - soc_pct) / 10.0))
+        lage_fractie = min(1.0, max(0.0, (10.0 - soc_pct) / 5.0))
         temp_factor = 1.0
         if temp_c is not None and temp_c > 35.0:
             temp_factor += ((temp_c - 35.0) / 10.0) ** 2
@@ -753,6 +769,28 @@ def los_dp_op(
     def soc_verblijf_penalty_eur(soc_kwh: float, temp_c: float | None, duur_h: float) -> float:
         return soc_verblijf_penalty_componenten(soc_kwh, temp_c, duur_h)[0]
 
+    def soc_verblijf_penalty_basis(soc_kwh: float, duur_h: float) -> tuple[float, float]:
+        if max_kwh <= 0 or duur_h <= 0:
+            return 0.0, 0.0
+
+        soc_pct = echte_soc_pct(soc_kwh)
+        hoge_fractie = min(1.0, max(0.0, (soc_pct - 90.0) / 10.0))
+        lage_fractie = min(1.0, max(0.0, (10.0 - soc_pct) / 5.0))
+        basis = SOC_VERBLIJF_PENALTY_EUR_PER_KWH_H * max_kwh * duur_h
+        hoge_basis = (
+            hoge_soc_verblijf_penalty_factor
+            * basis
+            * hoge_fractie
+            * hoge_fractie
+        )
+        lage_penalty = (
+            lage_soc_verblijf_penalty_factor
+            * basis
+            * lage_fractie
+            * lage_fractie
+        )
+        return hoge_basis, lage_penalty
+
     def overtemp_penalty_eur(temp_na_c: float | None, soc_na_kwh: float, duur_h: float) -> float:
         gekozen_temp_limiet_c = temp_limiet_voor_soc_kwh(soc_na_kwh)
         if (
@@ -776,7 +814,7 @@ def los_dp_op(
     if thermisch_actief:
         buiten_temperaturen = [
             waarde
-            for waarde in (slot_buiten_temp_c(t) for t in range(n))
+            for waarde in slot_buiten_temp_per_t
             if waarde is not None
         ]
         temp_grenzen = [batterij_temp_start, temp_limiet_c, temp_limiet_lage_soc_c]
@@ -787,27 +825,80 @@ def los_dp_op(
         temp_min = 0.0
         n_temp = 1
 
+    temp_c_per_idx = [
+        temp_min + idx * TEMP_STAP_C if thermisch_actief else None
+        for idx in range(n_temp)
+    ]
+
     def temp_naar_idx(temp_c: float | None) -> int:
         if not thermisch_actief or temp_c is None:
             return 0
         return min(n_temp - 1, max(0, round((temp_c - temp_min) / TEMP_STAP_C)))
 
     def idx_naar_temp(idx: int) -> float | None:
-        if not thermisch_actief:
-            return None
-        return temp_min + idx * TEMP_STAP_C
+        return temp_c_per_idx[idx]
 
     def volgende_temp_idx(q: int, t: int, energie_accu_kwh: float, actie: str) -> int:
         if not thermisch_actief:
             return 0
         temp_na_c = voorspel_temp_na_c(
-            idx_naar_temp(q),
-            slot_buiten_temp_c(t),
+            temp_c_per_idx[q],
+            slot_buiten_temp_per_t[t],
             energie_accu_kwh,
             slots[t]["duration_h"],
             actie,
         )
         return temp_naar_idx(temp_na_c)
+
+    temp_factor_per_idx = []
+    for temp_c in temp_c_per_idx:
+        factor = 1.0
+        if temp_c is not None and temp_c > 35.0:
+            factor += ((temp_c - 35.0) / 10.0) ** 2
+        temp_factor_per_idx.append(factor)
+
+    def overtemp_penalty_eur_idx(temp_idx: int, soc_idx: int, duur_h: float) -> float:
+        temp_na_c = temp_c_per_idx[temp_idx]
+        gekozen_temp_limiet_c = temp_limiet_per_idx[soc_idx]
+        if (
+            temp_na_c is None
+            or temp_penalty_factor <= 0
+            or duur_h <= 0
+            or max_kwh <= 0
+            or temp_na_c <= gekozen_temp_limiet_c
+        ):
+            return 0.0
+        overschrijding_c = temp_na_c - gekozen_temp_limiet_c
+        return (
+            temp_penalty_factor
+            * temp_penalty_soc_factor_per_idx[soc_idx]
+            * TEMP_PENALTY_EUR_PER_C2H
+            * overschrijding_c
+            * overschrijding_c
+            * duur_h
+        )
+
+    def soc_verblijf_penalty_eur_idx(soc_idx: int, temp_idx: int, duur_h: float) -> float:
+        if max_kwh <= 0 or duur_h <= 0:
+            return 0.0
+
+        basis = SOC_VERBLIJF_PENALTY_EUR_PER_KWH_H * max_kwh * duur_h
+        hoge_fractie = hoge_soc_fractie_per_idx[soc_idx]
+        lage_fractie = lage_soc_fractie_per_idx[soc_idx]
+        hoge_penalty = (
+            hoge_soc_verblijf_penalty_factor
+            * basis
+            * hoge_fractie
+            * hoge_fractie
+            * temp_factor_per_idx[temp_idx]
+        )
+        lage_penalty = (
+            lage_soc_verblijf_penalty_factor
+            * basis
+            * lage_fractie
+            * lage_fractie
+        )
+        return hoge_penalty + lage_penalty
 
     NEG_INF = float("-inf")
 
@@ -827,63 +918,106 @@ def los_dp_op(
         duur_h = slots[t]["duration_h"]  # uren
 
         for s in range(n_soc + 1):
-            soc_kwh = idx_naar_kwh(s)  # altijd een gridpunt (veelvoud van SOC_STAP_KWH)
+            soc_kwh = soc_kwh_per_idx[s]  # altijd een gridpunt (veelvoud van SOC_STAP_KWH)
+
+            # Deze kandidaten hangen alleen af van slot t en SoC-index s, niet van
+            # temperatuur-index q. De q-afhankelijke temperatuurovergang blijft
+            # hieronder in dezelfde volgorde berekend als voorheen.
+            laad_kandidaten = []
+            derating = bereken_derating(soc_kwh, max_kwh)
+            eff_laad_w = max_laad_w * derating
+            ruimte_kwh = max_kwh - soc_kwh
+            for stap_index, vermogen_w in enumerate(laad_vermogensstappen):
+                if stap_index % 16 == 0:
+                    controleer_annulering()
+                werkelijk_w = min(float(vermogen_w), eff_laad_w)
+                energie_ideaal = min(werkelijk_w / 1000.0 * duur_h * eta_laad, ruimte_kwh)
+                s_laden = kwh_naar_idx_omlaag(soc_kwh + energie_ideaal)
+                if s_laden <= s:
+                    continue
+
+                energie_naar_accu_q = soc_kwh_per_idx[s_laden] - soc_kwh
+                energie_van_net = energie_naar_accu_q / eta_laad if eta_laad > 0 else 0.0
+                kosten_laden = energie_van_net * (prijs + spread_helft)
+                kosten_warmte = warmte_penalty_eur(
+                    energie_naar_accu_q,
+                    duur_h,
+                    warmte_penalty_laden_factor,
+                )
+                laad_kandidaten.append((
+                    stap_index,
+                    vermogen_w,
+                    s_laden,
+                    energie_naar_accu_q,
+                    -kosten_laden - kosten_warmte,
+                    *soc_verblijf_penalty_basis(
+                        (soc_kwh + soc_kwh_per_idx[s_laden]) / 2.0,
+                        duur_h,
+                    ),
+                ))
+
+            ontlaad_kandidaten = []
+            for stap_index, vermogen_w in enumerate(ontlaad_vermogensstappen):
+                if stap_index % 16 == 0:
+                    controleer_annulering()
+                max_naar_net_kwh = float(vermogen_w) / 1000.0 * duur_h
+                max_uit_accu_kwh = max_naar_net_kwh / eta_ontlaad if eta_ontlaad > 0 else 0.0
+                energie_ideaal_uit = min(max_uit_accu_kwh, soc_kwh)
+                s_ontladen = kwh_naar_idx_omhoog(soc_kwh - energie_ideaal_uit)
+                if s_ontladen >= s:
+                    continue
+
+                energie_uit_accu_q = soc_kwh - soc_kwh_per_idx[s_ontladen]
+                energie_naar_net = energie_uit_accu_q * eta_ontlaad
+                opbrengst_ontladen = energie_naar_net * (prijs - spread_helft)
+                kosten_warmte = warmte_penalty_eur(
+                    energie_uit_accu_q,
+                    duur_h,
+                    warmte_penalty_ontladen_factor,
+                )
+                ontlaad_kandidaten.append((
+                    stap_index,
+                    vermogen_w,
+                    s_ontladen,
+                    energie_uit_accu_q,
+                    opbrengst_ontladen - kosten_warmte,
+                    *soc_verblijf_penalty_basis(
+                        (soc_kwh + soc_kwh_per_idx[s_ontladen]) / 2.0,
+                        duur_h,
+                    ),
+                ))
 
             for q in range(n_temp):
                 controleer_annulering()
                 # ── Optie: RUST ───────────────────────────────────────────────
                 # Geen actie, SoC ongewijzigd, temperatuur koelt wel richting buiten.
                 q_rust = volgende_temp_idx(q, t, 0.0, "rust")
-                kosten_overtemp_rust = overtemp_penalty_eur(
-                    idx_naar_temp(q_rust),
-                    soc_kwh,
-                    duur_h,
-                )
-                kosten_soc_verblijf = soc_verblijf_penalty_eur(
-                    soc_kwh,
-                    idx_naar_temp(q_rust),
-                    duur_h,
-                )
+                kosten_overtemp_rust = overtemp_penalty_eur_idx(q_rust, s, duur_h)
+                kosten_soc_verblijf = soc_verblijf_penalty_eur_idx(s, q_rust, duur_h)
                 beste = V[t + 1][s][q_rust] - kosten_overtemp_rust - kosten_soc_verblijf
                 beste_keuze = (0, 0, s, q_rust)
 
                 # ── Optie: LADEN ──────────────────────────────────────────────
                 # Evalueer alle vermogensopdrachten vanaf minimum_vermogen_w.
-                derating = bereken_derating(soc_kwh, max_kwh)
-                eff_laad_w = max_laad_w * derating
-                ruimte_kwh = max_kwh - soc_kwh
-
-                for stap_index, vermogen_w in enumerate(vermogensstappen(max_laad_w)):
+                for (
+                    stap_index,
+                    vermogen_w,
+                    s_laden,
+                    energie_naar_accu_q,
+                    waarde_basis,
+                    hoge_soc_verblijf_basis,
+                    lage_soc_verblijf_penalty,
+                ) in laad_kandidaten:
                     if stap_index % 16 == 0:
                         controleer_annulering()
-                    werkelijk_w = min(float(vermogen_w), eff_laad_w)
-                    energie_ideaal = min(werkelijk_w / 1000.0 * duur_h * eta_laad, ruimte_kwh)
-                    s_laden = kwh_naar_idx_omlaag(soc_kwh + energie_ideaal)
-                    if s_laden <= s:
-                        continue
-
-                    energie_naar_accu_q = idx_naar_kwh(s_laden) - soc_kwh
-                    energie_van_net = energie_naar_accu_q / eta_laad if eta_laad > 0 else 0.0
-                    kosten_laden = energie_van_net * (prijs + spread_helft)
-                    kosten_warmte = warmte_penalty_eur(
-                        energie_naar_accu_q,
-                        duur_h,
-                        warmte_penalty_laden_factor,
-                    )
                     q_laden = volgende_temp_idx(q, t, energie_naar_accu_q, "laden")
-                    kosten_temp = overtemp_penalty_eur(
-                        idx_naar_temp(q_laden),
-                        idx_naar_kwh(s_laden),
-                        duur_h,
-                    )
-                    kosten_soc_verblijf = soc_verblijf_penalty_eur(
-                        (soc_kwh + idx_naar_kwh(s_laden)) / 2.0,
-                        idx_naar_temp(q_laden),
-                        duur_h,
+                    kosten_temp = overtemp_penalty_eur_idx(q_laden, s_laden, duur_h)
+                    kosten_soc_verblijf = (
+                        hoge_soc_verblijf_basis * temp_factor_per_idx[q_laden]
+                        + lage_soc_verblijf_penalty
                     )
                     waarde = (
-                        -kosten_laden
-                        - kosten_warmte
+                        waarde_basis
                         - kosten_temp
                         - kosten_soc_verblijf
                         + V[t + 1][s_laden][q_laden]
@@ -895,38 +1029,25 @@ def los_dp_op(
 
                 # ── Optie: ONTLADEN ───────────────────────────────────────────
                 # Evalueer alle outputLimit-opdrachten vanaf minimum_vermogen_w.
-                for stap_index, vermogen_w in enumerate(vermogensstappen(max_ontlaad_w)):
+                for (
+                    stap_index,
+                    vermogen_w,
+                    s_ontladen,
+                    energie_uit_accu_q,
+                    waarde_basis,
+                    hoge_soc_verblijf_basis,
+                    lage_soc_verblijf_penalty,
+                ) in ontlaad_kandidaten:
                     if stap_index % 16 == 0:
                         controleer_annulering()
-                    max_naar_net_kwh = float(vermogen_w) / 1000.0 * duur_h
-                    max_uit_accu_kwh = max_naar_net_kwh / eta_ontlaad if eta_ontlaad > 0 else 0.0
-                    energie_ideaal_uit = min(max_uit_accu_kwh, soc_kwh)
-                    s_ontladen = kwh_naar_idx_omhoog(soc_kwh - energie_ideaal_uit)
-                    if s_ontladen >= s:
-                        continue
-
-                    energie_uit_accu_q = soc_kwh - idx_naar_kwh(s_ontladen)
-                    energie_naar_net = energie_uit_accu_q * eta_ontlaad
-                    opbrengst_ontladen = energie_naar_net * (prijs - spread_helft)
-                    kosten_warmte = warmte_penalty_eur(
-                        energie_uit_accu_q,
-                        duur_h,
-                        warmte_penalty_ontladen_factor,
-                    )
                     q_ontladen = volgende_temp_idx(q, t, energie_uit_accu_q, "ontladen")
-                    kosten_temp = overtemp_penalty_eur(
-                        idx_naar_temp(q_ontladen),
-                        idx_naar_kwh(s_ontladen),
-                        duur_h,
-                    )
-                    kosten_soc_verblijf = soc_verblijf_penalty_eur(
-                        (soc_kwh + idx_naar_kwh(s_ontladen)) / 2.0,
-                        idx_naar_temp(q_ontladen),
-                        duur_h,
+                    kosten_temp = overtemp_penalty_eur_idx(q_ontladen, s_ontladen, duur_h)
+                    kosten_soc_verblijf = (
+                        hoge_soc_verblijf_basis * temp_factor_per_idx[q_ontladen]
+                        + lage_soc_verblijf_penalty
                     )
                     waarde = (
-                        opbrengst_ontladen
-                        - kosten_warmte
+                        waarde_basis
                         - kosten_temp
                         - kosten_soc_verblijf
                         + V[t + 1][s_ontladen][q_ontladen]

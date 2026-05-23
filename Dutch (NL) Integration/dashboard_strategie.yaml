@@ -734,7 +734,7 @@ views:
             header:
               show: true
               show_states: false
-              title: Warmte-penalty per slot
+              title: Penalty per slot
             graph_span: 48h
             span:
               start: hour
@@ -744,7 +744,7 @@ views:
               color: '#ef5350'
             series:
               - entity: sensor.dynamisch_handelsstrategie
-                name: Laden
+                name: Warmte laden
                 type: column
                 color: '#66bb6a'
                 unit: 'ct'
@@ -755,7 +755,7 @@ views:
                     s.actie === 'laden' ? ((s.warmte_penalty_eur ?? 0) * 100) : null
                   ]);
               - entity: sensor.dynamisch_handelsstrategie
-                name: Ontladen
+                name: Warmte ontladen
                 type: column
                 color: '#ff9800'
                 unit: 'ct'
@@ -776,6 +776,19 @@ views:
                     new Date(s.start).getTime(),
                     (s.overtemp_penalty_eur ?? s.temp_penalty_eur ?? 0) > 0
                       ? ((s.overtemp_penalty_eur ?? s.temp_penalty_eur ?? 0) * 100)
+                      : null
+                  ]);
+              - entity: sensor.dynamisch_handelsstrategie
+                name: SoC verblijf
+                type: column
+                color: '#7e57c2'
+                unit: 'ct'
+                yaxis_id: penalty
+                data_generator: |
+                  return (entity.attributes.slots || []).map(s => [
+                    new Date(s.start).getTime(),
+                    (s.soc_verblijf_penalty_eur ?? 0) > 0
+                      ? ((s.soc_verblijf_penalty_eur ?? 0) * 100)
                       : null
                   ]);
               - entity: sensor.dynamisch_handelsstrategie
@@ -883,6 +896,51 @@ views:
                     new Date(s.start).getTime(),
                     (s.overtemp_penalty_eur ?? s.temp_penalty_eur ?? 0) * 100
                   ]);
+              - entity: sensor.dynamisch_handelsstrategie
+                name: SoC verblijf ct
+                type: line
+                yaxis_id: helper
+                stroke_width: 0
+                opacity: 0
+                show:
+                  in_chart: true
+                  in_header: false
+                  in_legend: false
+                data_generator: |
+                  return (entity.attributes.slots || []).map(s => [
+                    new Date(s.start).getTime(),
+                    (s.soc_verblijf_penalty_eur ?? 0) * 100
+                  ]);
+              - entity: sensor.dynamisch_handelsstrategie
+                name: Hoge SoC verblijf ct
+                type: line
+                yaxis_id: helper
+                stroke_width: 0
+                opacity: 0
+                show:
+                  in_chart: true
+                  in_header: false
+                  in_legend: false
+                data_generator: |
+                  return (entity.attributes.slots || []).map(s => [
+                    new Date(s.start).getTime(),
+                    (s.hoge_soc_verblijf_penalty_eur ?? 0) * 100
+                  ]);
+              - entity: sensor.dynamisch_handelsstrategie
+                name: Lage SoC verblijf ct
+                type: line
+                yaxis_id: helper
+                stroke_width: 0
+                opacity: 0
+                show:
+                  in_chart: true
+                  in_header: false
+                  in_legend: false
+                data_generator: |
+                  return (entity.attributes.slots || []).map(s => [
+                    new Date(s.start).getTime(),
+                    (s.lage_soc_verblijf_penalty_eur ?? 0) * 100
+                  ]);
               - entity: input_boolean.dynamisch_handelsstrategie_berekening_bezig
                 name: Refresh trigger
                 type: line
@@ -908,13 +966,16 @@ views:
               tooltip:
                 custom: |
                   EVAL:function({ series, dataPointIndex, w }) {
-                    var actionCode = series[3][dataPointIndex];
-                    var vermogen = series[4][dataPointIndex];
-                    var c = series[5][dataPointIndex];
-                    var tempVoor = series[6][dataPointIndex];
-                    var tempNa = series[7][dataPointIndex];
-                    var warmte = series[8][dataPointIndex];
-                    var overtempPenalty = series[9][dataPointIndex];
+                    var actionCode = series[4][dataPointIndex];
+                    var vermogen = series[5][dataPointIndex];
+                    var c = series[6][dataPointIndex];
+                    var tempVoor = series[7][dataPointIndex];
+                    var tempNa = series[8][dataPointIndex];
+                    var warmte = series[9][dataPointIndex];
+                    var overtempPenalty = series[10][dataPointIndex];
+                    var socVerblijfPenalty = series[11][dataPointIndex];
+                    var hogeSocPenalty = series[12][dataPointIndex];
+                    var lageSocPenalty = series[13][dataPointIndex];
                     var actieLabel = actionCode === 1 ? 'Laden' : actionCode === 2 ? 'Ontladen' : 'Rust';
                     var ts = w.globals.seriesX[0] && w.globals.seriesX[0][dataPointIndex];
                     if (!ts) return '';
@@ -929,6 +990,8 @@ views:
                     html += '<div style="color:var(--secondary-text-color)">Pack temp: <span style="color:var(--primary-text-color);font-weight:bold">' + (tempVoor != null ? tempVoor.toFixed(1) : '-') + ' → ' + (tempNa != null ? tempNa.toFixed(1) : '-') + ' °C</span></div>';
                     html += '<div style="color:var(--secondary-text-color)">Warmte penalty: <span style="color:var(--primary-text-color);font-weight:bold">' + (warmte != null ? warmte.toFixed(2) : '0.00') + ' ct</span></div>';
                     html += '<div style="color:var(--secondary-text-color)">Overtemp penalty: <span style="color:var(--primary-text-color);font-weight:bold">' + (overtempPenalty != null ? overtempPenalty.toFixed(3) : '0.000') + ' ct</span></div>';
+                    html += '<div style="color:var(--secondary-text-color)">SoC verblijf: <span style="color:var(--primary-text-color);font-weight:bold">' + (socVerblijfPenalty != null ? socVerblijfPenalty.toFixed(3) : '0.000') + ' ct</span></div>';
+                    html += '<div style="color:var(--secondary-text-color)">Hoog/laag SoC: <span style="color:var(--primary-text-color);font-weight:bold">' + (hogeSocPenalty != null ? hogeSocPenalty.toFixed(3) : '0.000') + ' / ' + (lageSocPenalty != null ? lageSocPenalty.toFixed(3) : '0.000') + ' ct</span></div>';
                     html += '</div>';
                     return html;
                   }

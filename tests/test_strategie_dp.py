@@ -845,6 +845,8 @@ class TestMinimaleSpread:
         assert schema_10[0]["lage_soc_verblijf_penalty_eur"] == 0.0
         assert schema_5[0]["lage_soc_verblijf_penalty_eur"] > 0.0
         assert schema_5[0]["soc_verblijf_penalty_eur"] == schema_5[0]["lage_soc_verblijf_penalty_eur"]
+        assert schema_10[0]["lage_soc_verblijf_fractie"] == 0.0
+        assert schema_5[0]["lage_soc_verblijf_fractie"] == 1.0
 
     def test_soc_verblijf_penalty_factor_nul_schakelt_uit(self):
         schema = los_dp_op(
