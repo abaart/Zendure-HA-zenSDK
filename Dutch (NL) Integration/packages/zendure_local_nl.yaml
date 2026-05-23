@@ -3,6 +3,10 @@ input_button:
     name: Dynamisch Handelsstrategie Herberekenen
     icon: mdi:calculator-variant
 
+  dynamisch_strategie_advies_herberekenen:
+    name: Dynamisch Strategie Advies Herberekenen
+    icon: mdi:lightbulb-on-outline
+
 input_boolean:
   dynamisch_handelsstrategie_berekening_bezig:
     name: Dynamisch Strategie Berekening Bezig
@@ -21,9 +25,19 @@ input_text:
     max: 120
 
 input_number:
+  dynamisch_advies_analyse_dagen:
+    name: Dynamisch Advies Analyse Dagen
+    icon: mdi:calendar-search
+    initial: 14
+    min: 1
+    max: 30
+    step: 1
+    mode: box
+
   dynamisch_warmte_penalty_laden_factor:
     name: Dynamisch C-waarde Penalty Laden Factor
     icon: mdi:thermometer-lines
+    initial: 2.0
     min: 0
     max: 10
     step: 0.1
@@ -32,6 +46,7 @@ input_number:
   dynamisch_warmte_penalty_ontladen_factor:
     name: Dynamisch C-waarde Penalty Ontladen Factor
     icon: mdi:thermometer-chevron-down
+    initial: 0.8
     min: 0
     max: 10
     step: 0.1
@@ -45,28 +60,49 @@ input_number:
     step: 0.25
     mode: slider
 
-  dynamisch_warmte_stijging_c_per_c2h:
-    name: Dynamisch Packtemp Warmte Stijging Per C2h
+  dynamisch_warmte_stijging_laden_c_per_c2h:
+    name: Dynamisch Packtemp Warmte Stijging Laden Per C2h
     icon: mdi:heat-wave
+    initial: 42.0
     min: 0
-    max: 20
-    step: 0.25
+    max: 85
+    step: 0.5
+    mode: slider
+
+  dynamisch_warmte_stijging_ontladen_c_per_c2h:
+    name: Dynamisch Packtemp Warmte Stijging Ontladen Per C2h
+    icon: mdi:heat-wave
+    initial: 23.0
+    min: 0
+    max: 50
+    step: 0.5
     mode: slider
 
   dynamisch_max_temp_boven_80_soc:
     name: Dynamisch Packtemp Limiet Boven 80% SoC
     icon: mdi:thermometer-alert
+    initial: 40.0
     min: 25
     max: 50
+    step: 0.5
+    mode: slider
+
+  dynamisch_max_temp_onder_80_soc:
+    name: Dynamisch Packtemp Limiet Onder 80% SoC
+    icon: mdi:thermometer-alert
+    initial: 45.0
+    min: 25
+    max: 55
     step: 0.5
     mode: slider
 
   dynamisch_temp_penalty_factor:
     name: Dynamisch Packtemp Overschrijding Penalty Factor
     icon: mdi:thermometer-chevron-up
+    initial: 0.06
     min: 0
     max: 10
-    step: 0.1
+    step: 0.01
     mode: slider
 
 template:

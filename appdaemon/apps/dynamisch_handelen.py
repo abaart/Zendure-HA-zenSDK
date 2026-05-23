@@ -27,21 +27,26 @@ Ingangen:
   input_number.dynamisch_warmte_penalty_laden_factor     gewicht voor warmteverlies bij laden
   input_number.dynamisch_warmte_penalty_ontladen_factor  gewicht voor warmteverlies bij ontladen
   input_number.dynamisch_warmte_afkoeling_halveringstijd_uren  afkoeling richting buitentemperatuur
-  input_number.dynamisch_warmte_stijging_c_per_c2h        packtemperatuurstijging door C² × uur actie
+  input_number.dynamisch_warmte_stijging_laden_c_per_c2h  packtemperatuurstijging door C² × uur laden
+  input_number.dynamisch_warmte_stijging_ontladen_c_per_c2h  packtemperatuurstijging door C² × uur ontladen
   input_number.dynamisch_max_temp_boven_80_soc            packtemperatuurlimiet boven 80% SoC
+  input_number.dynamisch_max_temp_onder_80_soc            packtemperatuurlimiet onder 80% SoC
   input_number.dynamisch_temp_penalty_factor              gewicht voor temperatuur-overschrijding
   input_text.dynamisch_buitentemperatuur_sensor           optionele sensor met actuele buitentemperatuur
   input_text.dynamisch_weather_entity                     optionele weather entity voor forecast
   input_button.dynamisch_handelsstrategie_herberekenen   knop voor handmatige herberekening
+  input_button.dynamisch_strategie_advies_herberekenen   knop voor handmatige adviesanalyse
+  input_number.dynamisch_advies_analyse_dagen            aantal dagen historie voor advies
   input_boolean.dynamisch_handelsstrategie_berekening_bezig  laadstatus voor dashboardknop
 
 Uitgang:
   sensor.dynamisch_handelsstrategie   verwachte winst (€) + volledig schema als attribuut
+  sensor.dynamisch_strategie_advies   advies over DP- en thermische parameters
   sensor.dynamisch_handelsstrategie_berekening_duur  duur van de laatste bereken-run
 """
 
 import math
-from datetime import datetime, time
+from datetime import datetime, timedelta, time
 from time import monotonic
 
 import appdaemon.plugins.hass.hassapi as hass
@@ -50,6 +55,13 @@ import appdaemon.plugins.hass.hassapi as hass
 from strategie_dp import (
     Accustatus,
     StrategieBerekeningGeannuleerd,
+    WARMTE_STIJGING_LADEN_C_PER_C2H,
+    WARMTE_STIJGING_ONTLADEN_C_PER_C2H,
+    WARMTE_PENALTY_LADEN_FACTOR,
+    WARMTE_PENALTY_ONTLADEN_FACTOR,
+    TEMP_LIMIET_C,
+    TEMP_LIMIET_LAGE_SOC_C,
+    TEMP_PENALTY_FACTOR,
     bereken_derating,
     bereken_laadvermogen_voor_aansturing,
     los_dp_op,
@@ -70,10 +82,20 @@ class DynamischHandelen(hass.Hass):
         self._berekening_generatie = 0
         self._zet_berekening_bezig(False)
         self._initialiseer_berekening_duur_sensor()
+        self._initialiseer_advies_sensor()
         self.run_daily(self.bereken_strategie, time(14, 35, 0))
+        self.run_daily(self.bereken_strategie_advies, time(14, 50, 0))
         self.listen_state(
             self._herbereken_op_knop,
             "input_button.dynamisch_handelsstrategie_herberekenen",
+        )
+        self.listen_state(
+            self._herbereken_advies_op_knop,
+            "input_button.dynamisch_strategie_advies_herberekenen",
+        )
+        self.listen_state(
+            self._herbereken_advies_op_config,
+            "input_number.dynamisch_advies_analyse_dagen",
         )
         self.listen_state(
             self._herbereken_op_config,
@@ -85,8 +107,12 @@ class DynamischHandelen(hass.Hass):
         )
         for entity in (
             "input_number.dynamisch_warmte_afkoeling_halveringstijd_uren",
+            "input_number.dynamisch_warmte_stijging_laden_c_per_c2h",
+            "input_number.dynamisch_warmte_stijging_ontladen_c_per_c2h",
+            # Oude helpernaam blijft een trigger voor installaties die de package nog niet hebben bijgewerkt.
             "input_number.dynamisch_warmte_stijging_c_per_c2h",
             "input_number.dynamisch_max_temp_boven_80_soc",
+            "input_number.dynamisch_max_temp_onder_80_soc",
             "input_number.dynamisch_temp_penalty_factor",
             "input_text.dynamisch_buitentemperatuur_sensor",
             "input_text.dynamisch_weather_entity",
@@ -107,6 +133,19 @@ class DynamischHandelen(hass.Hass):
             level="INFO",
         )
         self.bereken_strategie({"trigger": entity})
+
+    def _herbereken_advies_op_knop(self, entity, attribute, old, new, kwargs):
+        """Herberekent het strategie-advies na een druk op de HA-knop."""
+        self.log("Dynamisch Handelen: adviesanalyse handmatig gestart via HA-knop")
+        self.bereken_strategie_advies({"trigger": entity})
+
+    def _herbereken_advies_op_config(self, entity, attribute, old, new, kwargs):
+        """Herberekent het strategie-advies wanneer de adviesconfiguratie wijzigt."""
+        self.log(
+            f"Dynamisch Handelen: adviesanalyse gestart door wijziging van {entity}",
+            level="INFO",
+        )
+        self.bereken_strategie_advies({"trigger": entity})
 
     def bereken_strategie(self, kwargs):
         """
@@ -223,6 +262,404 @@ class DynamischHandelen(hass.Hass):
                 level="DEBUG",
             )
 
+    def _initialiseer_advies_sensor(self) -> None:
+        """Maakt de advies-sensor direct aan zodat het dashboard geen entity-melding toont."""
+        if self.get_state("sensor.dynamisch_strategie_advies") is not None:
+            return
+
+        self._publiceer_advies_sensor(
+            "nog_niet_berekend",
+            {
+                "advies_tekst": "Adviesanalyse is nog niet uitgevoerd.",
+                "adviesregels": [],
+                "analyse_dagen": self._haal_advies_analyse_dagen(),
+                "confidence": "onbekend",
+                "history_beschikbaar": False,
+                "laatst_bijgewerkt": datetime.now().astimezone().isoformat(),
+            },
+        )
+
+    def bereken_strategie_advies(self, kwargs=None) -> None:
+        """
+        Analyseert recente strategie-runs en publiceert voorzichtig parameteradvies.
+
+        De analyse gebruikt recorder-history als die via AppDaemon beschikbaar is.
+        Zonder voldoende historische strategie-slots of temperatuurmetingen geeft
+        de sensor expliciet lage betrouwbaarheid in plaats van schijnzekerheid.
+        """
+        dagen = self._haal_advies_analyse_dagen()
+        trigger = kwargs.get("trigger") if isinstance(kwargs, dict) else None
+        self.log(
+            f"Dynamisch Handelen: adviesanalyse gestart over {dagen} dagen",
+            level="INFO",
+        )
+
+        try:
+            strategie_items = self._haal_history_items(
+                "sensor.dynamisch_handelsstrategie",
+                dagen,
+            )
+            temp_items = self._haal_history_items(
+                "sensor.zendure_2400_ac_warmste_batterij_temperatuur",
+                dagen,
+            )
+        except Exception as exc:
+            self.log(
+                f"Dynamisch Handelen: adviesanalyse kon history niet lezen: {exc}",
+                level="WARNING",
+            )
+            self._publiceer_advies_sensor(
+                "history_onbeschikbaar",
+                {
+                    "advies_tekst": "Recorder-history is niet beschikbaar voor de adviesanalyse.",
+                    "adviesregels": ["Controleer of AppDaemon history mag lezen en of recorder actief is."],
+                    "analyse_dagen": dagen,
+                    "confidence": "laag",
+                    "history_beschikbaar": False,
+                    "trigger": trigger,
+                    "laatst_bijgewerkt": datetime.now().astimezone().isoformat(),
+                },
+            )
+            return
+
+        slots = self._haal_geanalyseerde_strategie_slots(strategie_items, dagen)
+        temp_samples = self._haal_temp_samples(temp_items)
+        advies = self._bouw_strategie_advies(slots, temp_samples, dagen)
+        advies["trigger"] = trigger
+        self._publiceer_advies_sensor(advies.pop("state"), advies)
+
+    def _publiceer_advies_sensor(self, state: str, attributes: dict) -> None:
+        """Publiceert de strategie-advies sensor."""
+        basis = {
+            "friendly_name": "Dynamisch Strategie Advies",
+            "icon": "mdi:lightbulb-on-outline",
+        }
+        basis.update(attributes)
+        try:
+            self.set_state(
+                "sensor.dynamisch_strategie_advies",
+                state=state,
+                attributes=basis,
+            )
+        except Exception as exc:
+            self.log(
+                f"Dynamisch Handelen: kon advies-sensor niet bijwerken: {exc}",
+                level="DEBUG",
+            )
+
+    def _haal_history_items(self, entity_id: str, dagen: int) -> list[dict]:
+        """Leest HA history en normaliseert AppDaemon's verschillende return-vormen."""
+        try:
+            history = self.get_history(entity_id=entity_id, days=dagen) or []
+        except TypeError:
+            history = self.get_history(entity_id, days=dagen) or []
+        return self._flatten_history_items(history)
+
+    def _flatten_history_items(self, value) -> list[dict]:
+        if isinstance(value, dict):
+            if "state" in value or "attributes" in value:
+                return [value]
+
+            items: list[dict] = []
+            for nested in value.values():
+                items.extend(self._flatten_history_items(nested))
+            return items
+
+        if isinstance(value, list):
+            items: list[dict] = []
+            for nested in value:
+                items.extend(self._flatten_history_items(nested))
+            return items
+
+        return []
+
+    def _parse_datetime(self, waarde) -> datetime | None:
+        if isinstance(waarde, datetime):
+            return waarde.astimezone()
+
+        if waarde is None:
+            return None
+
+        tekst = str(waarde).strip()
+        if not tekst:
+            return None
+
+        try:
+            return datetime.fromisoformat(tekst.replace("Z", "+00:00")).astimezone()
+        except ValueError:
+            return None
+
+    def _haal_geanalyseerde_strategie_slots(
+        self,
+        strategie_items: list[dict],
+        dagen: int,
+    ) -> list[dict]:
+        """Pakt unieke, inmiddels verstreken strategieslots uit recente sensor-history."""
+        nu = datetime.now().astimezone()
+        sinds = nu - timedelta(days=dagen)
+        gekozen: dict[tuple[str, str], dict] = {}
+
+        for item in strategie_items:
+            attrs = item.get("attributes") or {}
+            item_tijd = self._parse_datetime(
+                item.get("last_changed") or item.get("last_updated")
+            )
+            slots = attrs.get("slots") or []
+            if not isinstance(slots, list):
+                continue
+
+            for slot in slots:
+                if not isinstance(slot, dict):
+                    continue
+
+                start = self._parse_datetime(slot.get("start"))
+                end = self._parse_datetime(slot.get("end"))
+                if start is None or end is None or end < sinds or end > nu:
+                    continue
+                if item_tijd is not None and item_tijd > end:
+                    continue
+
+                sleutel = (start.isoformat(), end.isoformat())
+                vorige = gekozen.get(sleutel)
+                vorige_tijd = vorige.get("_item_tijd") if vorige else None
+                if vorige is not None and item_tijd is not None and vorige_tijd is not None and item_tijd <= vorige_tijd:
+                    continue
+
+                kopie = dict(slot)
+                kopie["_start_dt"] = start
+                kopie["_end_dt"] = end
+                kopie["_item_tijd"] = item_tijd
+                gekozen[sleutel] = kopie
+
+        return sorted(gekozen.values(), key=lambda s: s["_start_dt"])
+
+    def _haal_temp_samples(self, temp_items: list[dict]) -> list[tuple[datetime, float]]:
+        samples: list[tuple[datetime, float]] = []
+        for item in temp_items:
+            tijd = self._parse_datetime(item.get("last_changed") or item.get("last_updated"))
+            if tijd is None:
+                continue
+            try:
+                waarde = float(item.get("state"))
+            except (TypeError, ValueError):
+                continue
+            samples.append((tijd, waarde))
+        return sorted(samples, key=lambda item: item[0])
+
+    def _temp_rond_tijd(
+        self,
+        samples: list[tuple[datetime, float]],
+        tijd: datetime,
+        marge_voor: timedelta = timedelta(minutes=45),
+        marge_na: timedelta = timedelta(minutes=10),
+    ) -> float | None:
+        beste: tuple[datetime, float] | None = None
+        for sample_tijd, waarde in samples:
+            if sample_tijd > tijd + marge_na:
+                break
+            if sample_tijd >= tijd - marge_voor:
+                beste = (sample_tijd, waarde)
+        return beste[1] if beste is not None else None
+
+    def _mediaan(self, waarden: list[float]) -> float | None:
+        if not waarden:
+            return None
+
+        gesorteerd = sorted(waarden)
+        midden = len(gesorteerd) // 2
+        if len(gesorteerd) % 2:
+            return gesorteerd[midden]
+        return (gesorteerd[midden - 1] + gesorteerd[midden]) / 2.0
+
+    def _gemiddelde(self, waarden: list[float]) -> float:
+        return sum(waarden) / len(waarden) if waarden else 0.0
+
+    def _pas_factor_aan(self, huidig: float, mediaan_fout_c: float | None) -> float:
+        if mediaan_fout_c is None or abs(mediaan_fout_c) < 1.0:
+            return round(huidig, 2)
+
+        stap = min(0.35, max(-0.35, mediaan_fout_c * 0.08))
+        return round(max(0.0, huidig * (1.0 + stap)), 2)
+
+    def _bouw_strategie_advies(
+        self,
+        slots: list[dict],
+        temp_samples: list[tuple[datetime, float]],
+        dagen: int,
+    ) -> dict:
+        """Maakt advies uit historische strategie-slots en gemeten packtemperaturen."""
+        huidig_laden = self._haal_warmte_penalty_laden_factor()
+        huidig_ontladen = self._haal_warmte_penalty_ontladen_factor()
+        huidig_temp_penalty = self._haal_float_met_default(
+            "input_number.dynamisch_temp_penalty_factor",
+            TEMP_PENALTY_FACTOR,
+            minimum=0.0,
+        )
+        huidig_stijging_laden = self._haal_warmte_stijging_factor(
+            "input_number.dynamisch_warmte_stijging_laden_c_per_c2h",
+            WARMTE_STIJGING_LADEN_C_PER_C2H,
+        )
+        huidig_stijging_ontladen = self._haal_warmte_stijging_factor(
+            "input_number.dynamisch_warmte_stijging_ontladen_c_per_c2h",
+            WARMTE_STIJGING_ONTLADEN_C_PER_C2H,
+        )
+        huidig_halvering = self._haal_float_met_default(
+            "input_number.dynamisch_warmte_afkoeling_halveringstijd_uren",
+            2.0,
+            minimum=0.05,
+        )
+
+        laad_slots = [s for s in slots if s.get("actie") == "laden"]
+        ontlaad_slots = [s for s in slots if s.get("actie") == "ontladen"]
+        rust_slots = [s for s in slots if s.get("actie") == "rust"]
+        actie_slots = laad_slots + ontlaad_slots
+        overtemp_slots = [
+            s for s in slots
+            if float(s.get("overtemp_penalty_eur") or s.get("temp_penalty_eur") or 0.0) > 0
+        ]
+
+        c_laden = [float(s.get("c_waarde") or 0.0) for s in laad_slots]
+        c_ontladen = [float(s.get("c_waarde") or 0.0) for s in ontlaad_slots]
+        warmte_laden_ct = [
+            float(s.get("warmte_penalty_eur") or 0.0) * 100.0 for s in laad_slots
+        ]
+        warmte_ontladen_ct = [
+            float(s.get("warmte_penalty_eur") or 0.0) * 100.0 for s in ontlaad_slots
+        ]
+        overtemp_ct = [
+            float(s.get("overtemp_penalty_eur") or s.get("temp_penalty_eur") or 0.0) * 100.0
+            for s in slots
+        ]
+
+        fouten_laden: list[float] = []
+        fouten_ontladen: list[float] = []
+        fouten_rust: list[float] = []
+        for slot in slots:
+            voorspeld = slot.get("batterij_temp_na_c")
+            if voorspeld is None:
+                continue
+
+            gemeten = self._temp_rond_tijd(temp_samples, slot["_end_dt"])
+            if gemeten is None:
+                continue
+
+            fout = gemeten - float(voorspeld)
+            if slot.get("actie") == "laden":
+                fouten_laden.append(fout)
+            elif slot.get("actie") == "ontladen":
+                fouten_ontladen.append(fout)
+            else:
+                fouten_rust.append(fout)
+
+        mediaan_fout_laden = self._mediaan(fouten_laden)
+        mediaan_fout_ontladen = self._mediaan(fouten_ontladen)
+        mediaan_fout_rust = self._mediaan(fouten_rust)
+
+        aanbevolen_stijging_laden = self._pas_factor_aan(huidig_stijging_laden, mediaan_fout_laden)
+        aanbevolen_stijging_ontladen = self._pas_factor_aan(huidig_stijging_ontladen, mediaan_fout_ontladen)
+        aanbevolen_halvering = round(huidig_halvering, 2)
+        if mediaan_fout_rust is not None and abs(mediaan_fout_rust) >= 1.0:
+            richting = 1.0 + min(0.35, max(-0.35, mediaan_fout_rust * 0.08))
+            aanbevolen_halvering = round(max(0.25, huidig_halvering * richting), 2)
+
+        overtemp_ratio = len(overtemp_slots) / len(slots) if slots else 0.0
+        aanbevolen_temp_penalty = huidig_temp_penalty
+        if overtemp_ratio >= 0.08:
+            aanbevolen_temp_penalty = max(0.05, huidig_temp_penalty * 1.25)
+        elif len(slots) >= 20 and overtemp_ratio == 0.0 and self._gemiddelde(overtemp_ct) == 0.0:
+            aanbevolen_temp_penalty = huidig_temp_penalty
+        aanbevolen_temp_penalty = round(aanbevolen_temp_penalty, 3)
+
+        aanbevolen_laden = round(huidig_laden, 2)
+        if c_laden and self._gemiddelde(c_laden) >= 0.45 and self._gemiddelde(warmte_laden_ct) < 1.0:
+            aanbevolen_laden = round(min(10.0, max(0.1, huidig_laden * 1.15)), 2)
+
+        aanbevolen_ontladen = round(huidig_ontladen, 2)
+        if c_ontladen and self._gemiddelde(c_ontladen) >= 0.45 and self._gemiddelde(warmte_ontladen_ct) < 1.0:
+            aanbevolen_ontladen = round(min(10.0, max(0.1, huidig_ontladen * 1.15)), 2)
+
+        regels: list[str] = []
+        confidence = "laag"
+        state = "te_weinig_data"
+        temp_vergelijkingen = len(fouten_laden) + len(fouten_ontladen) + len(fouten_rust)
+
+        if len(slots) < 8:
+            regels.append(
+                f"Nog weinig strategieslots gevonden ({len(slots)}). Laat de analyse enkele dagen meelopen."
+            )
+        elif temp_vergelijkingen < 5:
+            regels.append(
+                f"{len(slots)} strategieslots gevonden, maar slechts {temp_vergelijkingen} bruikbare temperatuurvergelijkingen."
+            )
+            state = "meer_temperatuurdata_nodig"
+        else:
+            confidence = "middel" if temp_vergelijkingen < 20 else "hoog"
+            state = "stabiel"
+
+        if mediaan_fout_laden is not None and abs(mediaan_fout_laden) >= 1.0:
+            state = "warmte_model_afwijking"
+            richting = "hoger" if mediaan_fout_laden > 0 else "lager"
+            regels.append(
+                f"Laden eindigde mediaan {mediaan_fout_laden:+.1f} °C t.o.v. voorspelling; zet warmte stijging laden waarschijnlijk {richting}."
+            )
+
+        if mediaan_fout_ontladen is not None and abs(mediaan_fout_ontladen) >= 1.0:
+            state = "warmte_model_afwijking"
+            richting = "hoger" if mediaan_fout_ontladen > 0 else "lager"
+            regels.append(
+                f"Ontladen eindigde mediaan {mediaan_fout_ontladen:+.1f} °C t.o.v. voorspelling; zet warmte stijging ontladen waarschijnlijk {richting}."
+            )
+
+        if mediaan_fout_rust is not None and abs(mediaan_fout_rust) >= 1.0:
+            state = "warmte_model_afwijking"
+            richting = "trager" if mediaan_fout_rust > 0 else "sneller"
+            regels.append(
+                f"Rustslots koelen mediaan {mediaan_fout_rust:+.1f} °C t.o.v. voorspelling; afkoeling lijkt {richting}."
+            )
+
+        if overtemp_ratio >= 0.08:
+            state = "check_temperatuurlimieten"
+            regels.append(
+                f"Overtemp-penalty kwam voor in {len(overtemp_slots)} van {len(slots)} slots; verhoog de penalty of verlaag vermogen/temperatuurlimiet."
+            )
+
+        if actie_slots and self._gemiddelde([float(s.get("c_waarde") or 0.0) for s in actie_slots]) >= 0.45:
+            regels.append("Gemiddelde C-waarde is hoog; C-waarde penalty's zijn de moeite om actief te houden.")
+
+        if not regels:
+            regels.append("Geen duidelijke afwijking gevonden. Huidige factoren lijken voorlopig passend.")
+
+        return {
+            "state": state,
+            "advies_tekst": " ".join(regels),
+            "adviesregels": regels,
+            "analyse_dagen": dagen,
+            "geanalyseerde_slots": len(slots),
+            "laad_slots": len(laad_slots),
+            "ontlaad_slots": len(ontlaad_slots),
+            "rust_slots": len(rust_slots),
+            "temperatuur_vergelijkingen": temp_vergelijkingen,
+            "confidence": confidence,
+            "history_beschikbaar": True,
+            "overtemp_slots": len(overtemp_slots),
+            "overtemp_slots_ratio": round(overtemp_ratio, 3),
+            "gemiddelde_overtemp_penalty_ct": round(self._gemiddelde(overtemp_ct), 3),
+            "gemiddelde_warmte_penalty_laden_ct": round(self._gemiddelde(warmte_laden_ct), 3),
+            "gemiddelde_warmte_penalty_ontladen_ct": round(self._gemiddelde(warmte_ontladen_ct), 3),
+            "gemiddelde_c_laden": round(self._gemiddelde(c_laden), 3),
+            "gemiddelde_c_ontladen": round(self._gemiddelde(c_ontladen), 3),
+            "mediaan_temp_fout_laden_c": round(mediaan_fout_laden, 2) if mediaan_fout_laden is not None else None,
+            "mediaan_temp_fout_ontladen_c": round(mediaan_fout_ontladen, 2) if mediaan_fout_ontladen is not None else None,
+            "mediaan_temp_fout_rust_c": round(mediaan_fout_rust, 2) if mediaan_fout_rust is not None else None,
+            "aanbevolen_warmte_stijging_laden_c_per_c2h": aanbevolen_stijging_laden,
+            "aanbevolen_warmte_stijging_ontladen_c_per_c2h": aanbevolen_stijging_ontladen,
+            "aanbevolen_afkoeling_halveringstijd_h": aanbevolen_halvering,
+            "aanbevolen_temp_penalty_factor": aanbevolen_temp_penalty,
+            "aanbevolen_warmte_penalty_laden_factor": aanbevolen_laden,
+            "aanbevolen_warmte_penalty_ontladen_factor": aanbevolen_ontladen,
+            "laatst_bijgewerkt": datetime.now().astimezone().isoformat(),
+        }
+
     def _voer_geplande_herberekening_uit(self, kwargs):
         """Voert één extra herberekening uit na triggers tijdens een lopende run."""
         geplande_kwargs = kwargs.get("geplande_kwargs") if isinstance(kwargs, dict) else None
@@ -319,7 +756,9 @@ class DynamischHandelen(hass.Hass):
             f"warmte ontladen {warmte_penalty_ontladen_factor:.2f} | "
             f"plateau {'aan' if plateau_spreiding else 'uit'} | "
             f"packtemp {thermisch['batterij_temp_start_c'] if thermisch['batterij_temp_start_c'] is not None else '-'} °C | "
-            f"warmte stijging {thermisch['warmte_stijging_c_per_c2h']:.2f} °C/C²h | "
+            f"warmte stijging laden {thermisch['warmte_stijging_laden_c_per_c2h']:.2f} °C/C²h | "
+            f"warmte stijging ontladen {thermisch['warmte_stijging_ontladen_c_per_c2h']:.2f} °C/C²h | "
+            f"temp limiet hoog/laag {thermisch['temp_limiet_c']:.1f}/{thermisch['temp_limiet_lage_soc_c']:.1f} °C | "
             f"forecast {thermisch['forecast_bron']}",
             level="INFO",
         )
@@ -333,8 +772,10 @@ class DynamischHandelen(hass.Hass):
             warmte_penalty_ontladen_factor=warmte_penalty_ontladen_factor,
             batterij_temp_start_c=thermisch["batterij_temp_start_c"],
             warmte_afkoeling_halveringstijd_h=thermisch["warmte_afkoeling_halveringstijd_h"],
-            warmte_stijging_c_per_c2h=thermisch["warmte_stijging_c_per_c2h"],
+            warmte_stijging_laden_c_per_c2h=thermisch["warmte_stijging_laden_c_per_c2h"],
+            warmte_stijging_ontladen_c_per_c2h=thermisch["warmte_stijging_ontladen_c_per_c2h"],
             temp_limiet_c=thermisch["temp_limiet_c"],
+            temp_limiet_lage_soc_c=thermisch["temp_limiet_lage_soc_c"],
             temp_penalty_factor=thermisch["temp_penalty_factor"],
             annuleer_check=is_geannuleerd,
         )
@@ -393,8 +834,12 @@ class DynamischHandelen(hass.Hass):
                 "forecast_bron": thermisch["forecast_bron"],
                 "forecast_punten": thermisch["forecast_punten"],
                 "warmte_afkoeling_halveringstijd_h": thermisch["warmte_afkoeling_halveringstijd_h"],
-                "warmte_stijging_c_per_c2h": thermisch["warmte_stijging_c_per_c2h"],
+                "warmte_stijging_laden_c_per_c2h": thermisch["warmte_stijging_laden_c_per_c2h"],
+                "warmte_stijging_ontladen_c_per_c2h": thermisch["warmte_stijging_ontladen_c_per_c2h"],
+                # Backwards-compatible attribuut voor bestaande dashboards of automations.
+                "warmte_stijging_c_per_c2h": thermisch["warmte_stijging_laden_c_per_c2h"],
                 "temp_limiet_c": thermisch["temp_limiet_c"],
+                "temp_limiet_lage_soc_c": thermisch["temp_limiet_lage_soc_c"],
                 "temp_penalty_factor": thermisch["temp_penalty_factor"],
                 "temp_soc_drempel_pct": 80.0,
                 "plateau_spreiding":   plateau_spreiding,
@@ -856,6 +1301,19 @@ class DynamischHandelen(hass.Hass):
         """
         return float(self.get_state("input_number.dynamisch_minimale_spread") or 0)
 
+    def _haal_advies_analyse_dagen(self) -> int:
+        """
+        Leest hoeveel dagen recorder-history de adviesanalyse mag gebruiken.
+        Korter dan 30 dagen is prima: de sensor publiceert dan lagere confidence
+        als er nog weinig bruikbare slots zijn.
+        """
+        waarde = self._haal_float_met_default(
+            "input_number.dynamisch_advies_analyse_dagen",
+            14,
+            minimum=1,
+        )
+        return min(30, max(1, int(round(waarde))))
+
     def _haal_warmte_penalty_laden_factor(self) -> float:
         """
         Leest hoeveel gewicht de DP aan C-waarde warmteverlies bij laden moet geven.
@@ -866,7 +1324,7 @@ class DynamischHandelen(hass.Hass):
         try:
             return max(0.0, float(waarde))
         except (TypeError, ValueError):
-            return 1.0
+            return WARMTE_PENALTY_LADEN_FACTOR
 
     def _haal_warmte_penalty_ontladen_factor(self) -> float:
         """
@@ -876,7 +1334,7 @@ class DynamischHandelen(hass.Hass):
         try:
             return max(0.0, float(waarde))
         except (TypeError, ValueError):
-            return 1.0
+            return WARMTE_PENALTY_ONTLADEN_FACTOR
 
     def _haal_float_met_default(self, entity_id: str, default: float, minimum: float | None = None) -> float:
         """Leest een numerieke HA-helper en gebruikt default bij unknown/unavailable."""
@@ -888,6 +1346,21 @@ class DynamischHandelen(hass.Hass):
         if minimum is not None:
             getal = max(minimum, getal)
         return getal
+
+    def _haal_warmte_stijging_factor(self, entity_id: str, default: float) -> float:
+        """
+        Leest een richting-specifieke packtemperatuurfactor.
+
+        input_number.dynamisch_warmte_stijging_c_per_c2h blijft de fallback voor
+        installaties waar de twee nieuwe input_number helpers nog ontbreken.
+        """
+        waarde = self.get_state(entity_id)
+        if waarde in (None, "unknown", "unavailable"):
+            waarde = self.get_state("input_number.dynamisch_warmte_stijging_c_per_c2h")
+        try:
+            return max(0.0, float(waarde))
+        except (TypeError, ValueError):
+            return default
 
     def _haal_entity_id_uit_input_text(self, entity_id: str) -> str | None:
         """Leest een entity_id uit input_text en negeert lege helperwaarden."""
@@ -1057,18 +1530,25 @@ class DynamischHandelen(hass.Hass):
                 2.0,
                 minimum=0.05,
             ),
-            "warmte_stijging_c_per_c2h": self._haal_float_met_default(
-                "input_number.dynamisch_warmte_stijging_c_per_c2h",
-                3.0,
-                minimum=0.0,
+            "warmte_stijging_laden_c_per_c2h": self._haal_warmte_stijging_factor(
+                "input_number.dynamisch_warmte_stijging_laden_c_per_c2h",
+                WARMTE_STIJGING_LADEN_C_PER_C2H,
+            ),
+            "warmte_stijging_ontladen_c_per_c2h": self._haal_warmte_stijging_factor(
+                "input_number.dynamisch_warmte_stijging_ontladen_c_per_c2h",
+                WARMTE_STIJGING_ONTLADEN_C_PER_C2H,
             ),
             "temp_limiet_c": self._haal_float_met_default(
                 "input_number.dynamisch_max_temp_boven_80_soc",
-                35.0,
+                TEMP_LIMIET_C,
+            ),
+            "temp_limiet_lage_soc_c": self._haal_float_met_default(
+                "input_number.dynamisch_max_temp_onder_80_soc",
+                TEMP_LIMIET_LAGE_SOC_C,
             ),
             "temp_penalty_factor": self._haal_float_met_default(
                 "input_number.dynamisch_temp_penalty_factor",
-                1.0,
+                TEMP_PENALTY_FACTOR,
                 minimum=0.0,
             ),
         }

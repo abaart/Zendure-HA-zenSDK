@@ -527,10 +527,11 @@ class TestMinimaleSpread:
         assert "batterij_temp_na_c" in eerste
         assert "buiten_temp_c" in eerste
         assert "c_waarde" in eerste
+        assert "overtemp_penalty_eur" in eerste
         assert "temp_penalty_eur" in eerste
         assert "temp_limiet_actief" in eerste
 
-    def test_thermisch_model_koelt_alleen_tijdens_rust(self):
+    def test_thermisch_model_koelt_ook_tijdens_laden(self):
         slots = maak_slots([0.01, 1.00])
         for slot in slots:
             slot["buiten_temp_c"] = 0.0
@@ -546,7 +547,23 @@ class TestMinimaleSpread:
         )
 
         assert schema[0]["actie"] == "laden"
-        assert schema[0]["batterij_temp_na_c"] == pytest.approx(30.0)
+        assert schema[0]["batterij_temp_na_c"] == pytest.approx(15.0)
+
+    def test_thermisch_model_warmt_richting_warme_omgeving(self):
+        slots = maak_slots([0.10])
+        slots[0]["buiten_temp_c"] = 30.0
+
+        schema = los_dp_op(
+            slots,
+            maak_accu(huidig_kwh=0.0),
+            plateau_spreiding=False,
+            batterij_temp_start_c=20.0,
+            warmte_afkoeling_halveringstijd_h=1.0,
+            temp_penalty_factor=0.0,
+        )
+
+        assert schema[0]["actie"] == "rust"
+        assert schema[0]["batterij_temp_na_c"] == pytest.approx(25.0)
 
     def test_thermisch_model_rustslot_koelt_richting_buitenlucht(self):
         slots = maak_slots([0.10])
@@ -606,6 +623,61 @@ class TestMinimaleSpread:
         assert met_stijging[0]["actie"] == "laden"
         assert met_stijging[0]["batterij_temp_na_c"] > zonder_stijging[0]["batterij_temp_na_c"]
 
+    def test_thermisch_model_gebruikt_richting_specifieke_stijgingfactoren(self):
+        laad_slots_zonder_stijging = maak_slots([0.01, 1.00])
+        laad_slots_met_stijging = maak_slots([0.01, 1.00])
+        ontlaad_slots_zonder_stijging = maak_slots([1.00])
+        ontlaad_slots_met_stijging = maak_slots([1.00])
+        for slot in (
+            laad_slots_zonder_stijging
+            + laad_slots_met_stijging
+            + ontlaad_slots_zonder_stijging
+            + ontlaad_slots_met_stijging
+        ):
+            slot["buiten_temp_c"] = 0.0
+
+        laad_zonder_stijging = los_dp_op(
+            laad_slots_zonder_stijging,
+            maak_accu(huidig_kwh=0.0),
+            plateau_spreiding=False,
+            batterij_temp_start_c=30.0,
+            warmte_stijging_laden_c_per_c2h=0.0,
+            warmte_stijging_ontladen_c_per_c2h=40.0,
+            temp_penalty_factor=0.0,
+        )
+        laad_met_stijging = los_dp_op(
+            laad_slots_met_stijging,
+            maak_accu(huidig_kwh=0.0),
+            plateau_spreiding=False,
+            batterij_temp_start_c=30.0,
+            warmte_stijging_laden_c_per_c2h=40.0,
+            warmte_stijging_ontladen_c_per_c2h=0.0,
+            temp_penalty_factor=0.0,
+        )
+        ontlaad_zonder_stijging = los_dp_op(
+            ontlaad_slots_zonder_stijging,
+            maak_accu(huidig_kwh=2.4, max_laad_w=0.0),
+            plateau_spreiding=False,
+            batterij_temp_start_c=30.0,
+            warmte_stijging_laden_c_per_c2h=40.0,
+            warmte_stijging_ontladen_c_per_c2h=0.0,
+            temp_penalty_factor=0.0,
+        )
+        ontlaad_met_stijging = los_dp_op(
+            ontlaad_slots_met_stijging,
+            maak_accu(huidig_kwh=2.4, max_laad_w=0.0),
+            plateau_spreiding=False,
+            batterij_temp_start_c=30.0,
+            warmte_stijging_laden_c_per_c2h=0.0,
+            warmte_stijging_ontladen_c_per_c2h=40.0,
+            temp_penalty_factor=0.0,
+        )
+
+        assert laad_met_stijging[0]["actie"] == "laden"
+        assert laad_met_stijging[0]["batterij_temp_na_c"] > laad_zonder_stijging[0]["batterij_temp_na_c"]
+        assert ontlaad_met_stijging[0]["actie"] == "ontladen"
+        assert ontlaad_met_stijging[0]["batterij_temp_na_c"] > ontlaad_zonder_stijging[0]["batterij_temp_na_c"]
+
     def test_thermisch_model_beperkt_laden_bij_warme_hoge_soc(self):
         slots_zonder_penalty = maak_slots([0.01, 1.00])
         slots_met_penalty = maak_slots([0.01, 1.00])
@@ -633,6 +705,46 @@ class TestMinimaleSpread:
         assert zonder_penalty[0]["soc_na_pct"] > 80.0
         assert met_penalty[0]["soc_na_pct"] <= 80.0
         assert met_penalty[0]["vermogen_w"] < zonder_penalty[0]["vermogen_w"]
+
+    def test_overtemp_penalty_blijft_zichtbaar_bij_kleine_overschrijding(self):
+        slots = maak_slots([0.10])
+        slots[0]["buiten_temp_c"] = 35.01
+
+        schema = los_dp_op(
+            slots,
+            maak_accu(huidig_kwh=2.0, max_kwh=2.4, max_ontlaad_w=0.0),
+            plateau_spreiding=False,
+            batterij_temp_start_c=35.01,
+            warmte_afkoeling_halveringstijd_h=1.0,
+            temp_limiet_c=35.0,
+            temp_penalty_factor=1.0,
+        )
+
+        assert schema[0]["temp_limiet_actief"] is True
+        assert schema[0]["overtemp_penalty_eur"] > 0.0
+        assert schema[0]["temp_penalty_eur"] == schema[0]["overtemp_penalty_eur"]
+
+    def test_overtemp_penalty_werkt_onder_soc_drempel_met_lage_soc_limiet(self):
+        slots = maak_slots([0.10])
+        slots[0]["buiten_temp_c"] = 46.0
+
+        schema = los_dp_op(
+            slots,
+            maak_accu(huidig_kwh=0.2, max_kwh=2.4, max_laad_w=0.0, max_ontlaad_w=0.0),
+            plateau_spreiding=False,
+            batterij_temp_start_c=46.0,
+            warmte_afkoeling_halveringstijd_h=1.0,
+            temp_limiet_c=40.0,
+            temp_limiet_lage_soc_c=45.0,
+            temp_penalty_factor=1.0,
+        )
+
+        assert schema[0]["soc_na_pct"] < 80.0
+        assert schema[0]["temp_limiet_c"] == 45.0
+        assert schema[0]["temp_limiet_hoge_soc_c"] == 40.0
+        assert schema[0]["temp_limiet_lage_soc_c"] == 45.0
+        assert schema[0]["temp_limiet_actief"] is True
+        assert schema[0]["overtemp_penalty_eur"] > 0.0
 
 
 # ── DERATING EFFECT ───────────────────────────────────────────────────────────

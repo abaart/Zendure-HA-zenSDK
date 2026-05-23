@@ -144,11 +144,19 @@ MINIMUM_VERMOGEN_W: int = 100
 WARMTE_PENALTY_EUR_PER_KWH_C2: float = 0.05
 
 # Eenvoudig thermisch model:
-# - temperatuur beweegt alleen tijdens rust richting de voorspelde buitentemperatuur;
-# - laden/ontladen voegt warmte toe op basis van C² × duur;
+# - temperatuur beweegt in elk slot richting de voorspelde omgevingstemperatuur;
+# - laden/ontladen voegt daar warmte aan toe op basis van C² × duur;
 # - de DP krijgt een extra euro-penalty boven de ingestelde packtemperatuurgrens.
 TEMP_STAP_C: float = 1.0
-WARMTE_STIJGING_C_PER_C2H: float = 3.0
+WARMTE_STIJGING_LADEN_C_PER_C2H: float = 42.0
+WARMTE_STIJGING_ONTLADEN_C_PER_C2H: float = 23.0
+# Backwards-compatible naam voor tests, oude AppDaemon-configuratie en imports.
+WARMTE_STIJGING_C_PER_C2H: float = WARMTE_STIJGING_LADEN_C_PER_C2H
+WARMTE_PENALTY_LADEN_FACTOR: float = 2.0
+WARMTE_PENALTY_ONTLADEN_FACTOR: float = 0.8
+TEMP_LIMIET_C: float = 40.0
+TEMP_LIMIET_LAGE_SOC_C: float = 45.0
+TEMP_PENALTY_FACTOR: float = 0.06
 TEMP_PENALTY_EUR_PER_C2H: float = 0.25
 
 # ── DATATYPE ──────────────────────────────────────────────────────────────────
@@ -405,14 +413,17 @@ def los_dp_op(
     plateau_drempel_ct: float = 2.0,
     max_plateau_uren: int = 5,
     plateau_spreiding: bool = True,
-    warmte_penalty_laden_factor: float = 1.0,
-    warmte_penalty_ontladen_factor: float = 1.0,
+    warmte_penalty_laden_factor: float = WARMTE_PENALTY_LADEN_FACTOR,
+    warmte_penalty_ontladen_factor: float = WARMTE_PENALTY_ONTLADEN_FACTOR,
     minimum_vermogen_w: int = MINIMUM_VERMOGEN_W,
     batterij_temp_start_c: float | None = None,
     warmte_afkoeling_halveringstijd_h: float = 2.0,
-    warmte_stijging_c_per_c2h: float = WARMTE_STIJGING_C_PER_C2H,
-    temp_limiet_c: float = 35.0,
-    temp_penalty_factor: float = 1.0,
+    warmte_stijging_c_per_c2h: float | None = None,
+    warmte_stijging_laden_c_per_c2h: float | None = None,
+    warmte_stijging_ontladen_c_per_c2h: float | None = None,
+    temp_limiet_c: float = TEMP_LIMIET_C,
+    temp_limiet_lage_soc_c: float = TEMP_LIMIET_LAGE_SOC_C,
+    temp_penalty_factor: float = TEMP_PENALTY_FACTOR,
     temp_soc_drempel_pct: float = 80.0,
     annuleer_check: Callable[[], bool] | None = None,
 ) -> list[dict[str, Any]]:
@@ -469,12 +480,13 @@ def los_dp_op(
     Als batterij_temp_start_c bekend is, breidt los_dp_op() de DP-state uit van
     (tijd, SoC) naar (tijd, SoC, packtemperatuur). De buitentemperatuur per slot
     komt uit slot["buiten_temp_c"]. Die forecasttemperatuur is de vloer/omgeving
-    waar de packtemperatuur tijdens rust naartoe koelt. Laden en ontladen koelen
-    niet tegelijk af; acties voegen alleen warmte toe via C² × duur.
+    waar de packtemperatuur elk slot naartoe beweegt. Laden en ontladen voegen
+    daarna warmte toe via C² × duur.
 
-    Boven temp_soc_drempel_pct en temp_limiet_c telt temp_penalty_factor mee als
-    extra euro-penalty. Zo kan de DP vermogen verlagen als een eerder hard slot
-    de voorspelde packtemperatuur in latere slots verhoogt.
+    Vanaf temp_soc_drempel_pct gebruikt los_dp_op() temp_limiet_c als
+    packtemperatuurgrens. Onder temp_soc_drempel_pct gebruikt los_dp_op()
+    temp_limiet_lage_soc_c als hogere grens. Boven de gekozen grens telt
+    temp_penalty_factor mee als extra euro-penalty.
 
     PLATEAU SPREIDING
     -----------------
@@ -499,9 +511,12 @@ def los_dp_op(
         minimum_vermogen_w:      Laagste vermogensopdracht die DP evalueert; rust blijft apart.
         batterij_temp_start_c:   Warmste batterij-packtemperatuur bij start van de planning.
         warmte_afkoeling_halveringstijd_h: Uren waarin het temperatuurverschil met buiten halveert.
-        warmte_stijging_c_per_c2h: Graden packtemperatuurstijging per C² × uur actie.
-        temp_limiet_c:           Packtemperatuurgrens voor hoge SoC.
-        temp_penalty_factor:     Gewicht voor overschrijding van temp_limiet_c.
+        warmte_stijging_c_per_c2h: Backwards-compatible waarde voor laden en ontladen.
+        warmte_stijging_laden_c_per_c2h: Graden packtemperatuurstijging per C² × uur laden.
+        warmte_stijging_ontladen_c_per_c2h: Graden packtemperatuurstijging per C² × uur ontladen.
+        temp_limiet_c:           Packtemperatuurgrens vanaf temp_soc_drempel_pct.
+        temp_limiet_lage_soc_c:  Packtemperatuurgrens onder temp_soc_drempel_pct.
+        temp_penalty_factor:     Gewicht voor overschrijding van de gekozen grens.
         temp_soc_drempel_pct:    SoC-percentage waarboven temp_limiet_c actief is.
         annuleer_check:          Callback die True teruggeeft als AppDaemon deze
                                  DP-run moet stoppen voor een nieuwere berekening.
@@ -511,8 +526,8 @@ def los_dp_op(
         actie, vermogen_w, verwacht_vermogen_w, soc_voor_kwh, soc_na_kwh,
         soc_voor_pct, soc_na_pct, winst_eur, c_waarde, warmte_penalty_eur.
         Als het thermisch model actief is, bevat elk slot ook batterij_temp_voor_c,
-        batterij_temp_na_c, buiten_temp_c, temp_penalty_eur, temp_limiet_c en
-        temp_limiet_actief.
+        batterij_temp_na_c, buiten_temp_c, overtemp_penalty_eur, temp_limiet_c,
+        temp_limiet_hoge_soc_c, temp_limiet_lage_soc_c en temp_limiet_actief.
     """
     n = len(slots)
     if n == 0:
@@ -533,8 +548,27 @@ def los_dp_op(
     warmte_penalty_ontladen_factor = max(0.0, float(warmte_penalty_ontladen_factor))
     minimum_vermogen_w = max(0, int(minimum_vermogen_w))
     warmte_afkoeling_halveringstijd_h = max(0.05, float(warmte_afkoeling_halveringstijd_h))
-    warmte_stijging_c_per_c2h = max(0.0, float(warmte_stijging_c_per_c2h))
+    legacy_warmte_stijging = (
+        max(0.0, float(warmte_stijging_c_per_c2h))
+        if warmte_stijging_c_per_c2h is not None
+        else None
+    )
+    if warmte_stijging_laden_c_per_c2h is None:
+        warmte_stijging_laden_c_per_c2h = (
+            legacy_warmte_stijging
+            if legacy_warmte_stijging is not None
+            else WARMTE_STIJGING_LADEN_C_PER_C2H
+        )
+    if warmte_stijging_ontladen_c_per_c2h is None:
+        warmte_stijging_ontladen_c_per_c2h = (
+            legacy_warmte_stijging
+            if legacy_warmte_stijging is not None
+            else WARMTE_STIJGING_ONTLADEN_C_PER_C2H
+        )
+    warmte_stijging_laden_c_per_c2h = max(0.0, float(warmte_stijging_laden_c_per_c2h))
+    warmte_stijging_ontladen_c_per_c2h = max(0.0, float(warmte_stijging_ontladen_c_per_c2h))
     temp_limiet_c = float(temp_limiet_c)
+    temp_limiet_lage_soc_c = float(temp_limiet_lage_soc_c)
     temp_penalty_factor = max(0.0, float(temp_penalty_factor))
     temp_soc_drempel_pct = min(100.0, max(0.0, float(temp_soc_drempel_pct)))
     thermisch_actief = batterij_temp_start_c is not None
@@ -603,32 +637,49 @@ def los_dp_op(
         buiten_temp_c: float | None,
         energie_accu_kwh: float,
         duur_h: float,
+        actie: str,
     ) -> float | None:
         if temp_voor_c is None or buiten_temp_c is None or duur_h <= 0:
             return temp_voor_c
 
-        actie_c = c_waarde(energie_accu_kwh, duur_h)
-        warmte_stijging_c = warmte_stijging_c_per_c2h * actie_c * actie_c * duur_h
-        if energie_accu_kwh > 0:
-            return temp_voor_c + warmte_stijging_c
-
-        afkoel_factor = 0.5 ** (duur_h / warmte_afkoeling_halveringstijd_h)
-        temp_na_c = buiten_temp_c + (temp_voor_c - buiten_temp_c) * afkoel_factor
+        omgevings_factor = 0.5 ** (duur_h / warmte_afkoeling_halveringstijd_h)
+        temp_na_c = buiten_temp_c + (temp_voor_c - buiten_temp_c) * omgevings_factor
         ondergrens = min(temp_voor_c, buiten_temp_c)
         bovengrens = max(temp_voor_c, buiten_temp_c)
-        return min(bovengrens, max(ondergrens, temp_na_c))
+        temp_na_c = min(bovengrens, max(ondergrens, temp_na_c))
 
-    def temperatuur_penalty_eur(temp_na_c: float | None, soc_na_kwh: float, duur_h: float) -> float:
+        actie_c = c_waarde(energie_accu_kwh, duur_h)
+        if energie_accu_kwh > 0:
+            warmte_stijging_factor = (
+                warmte_stijging_laden_c_per_c2h
+                if actie == "laden"
+                else warmte_stijging_ontladen_c_per_c2h
+            )
+            warmte_stijging_c = warmte_stijging_factor * actie_c * actie_c * duur_h
+            temp_na_c += warmte_stijging_c
+
+        return temp_na_c
+
+    def temp_limiet_voor_soc_kwh(soc_kwh: float) -> float:
+        if max_kwh <= 0:
+            return temp_limiet_c
+
+        soc_pct = soc_kwh / max_kwh * 100.0
+        if soc_pct >= temp_soc_drempel_pct:
+            return temp_limiet_c
+        return temp_limiet_lage_soc_c
+
+    def overtemp_penalty_eur(temp_na_c: float | None, soc_na_kwh: float, duur_h: float) -> float:
+        gekozen_temp_limiet_c = temp_limiet_voor_soc_kwh(soc_na_kwh)
         if (
             temp_na_c is None
             or temp_penalty_factor <= 0
             or duur_h <= 0
             or max_kwh <= 0
-            or soc_na_kwh / max_kwh * 100.0 < temp_soc_drempel_pct
-            or temp_na_c <= temp_limiet_c
+            or temp_na_c <= gekozen_temp_limiet_c
         ):
             return 0.0
-        overschrijding_c = temp_na_c - temp_limiet_c
+        overschrijding_c = temp_na_c - gekozen_temp_limiet_c
         return temp_penalty_factor * TEMP_PENALTY_EUR_PER_C2H * overschrijding_c * overschrijding_c * duur_h
 
     if thermisch_actief:
@@ -637,8 +688,9 @@ def los_dp_op(
             for waarde in (slot_buiten_temp_c(t) for t in range(n))
             if waarde is not None
         ]
-        temp_min = math.floor((min([batterij_temp_start, temp_limiet_c] + buiten_temperaturen) - 5.0) / TEMP_STAP_C) * TEMP_STAP_C
-        temp_max = math.ceil((max([batterij_temp_start, temp_limiet_c] + buiten_temperaturen) + 15.0) / TEMP_STAP_C) * TEMP_STAP_C
+        temp_grenzen = [batterij_temp_start, temp_limiet_c, temp_limiet_lage_soc_c]
+        temp_min = math.floor((min(temp_grenzen + buiten_temperaturen) - 5.0) / TEMP_STAP_C) * TEMP_STAP_C
+        temp_max = math.ceil((max(temp_grenzen + buiten_temperaturen) + 15.0) / TEMP_STAP_C) * TEMP_STAP_C
         n_temp = max(1, int(round((temp_max - temp_min) / TEMP_STAP_C)) + 1)
     else:
         temp_min = 0.0
@@ -654,7 +706,7 @@ def los_dp_op(
             return None
         return temp_min + idx * TEMP_STAP_C
 
-    def volgende_temp_idx(q: int, t: int, energie_accu_kwh: float) -> int:
+    def volgende_temp_idx(q: int, t: int, energie_accu_kwh: float, actie: str) -> int:
         if not thermisch_actief:
             return 0
         temp_na_c = voorspel_temp_na_c(
@@ -662,6 +714,7 @@ def los_dp_op(
             slot_buiten_temp_c(t),
             energie_accu_kwh,
             slots[t]["duration_h"],
+            actie,
         )
         return temp_naar_idx(temp_na_c)
 
@@ -689,8 +742,13 @@ def los_dp_op(
                 controleer_annulering()
                 # ── Optie: RUST ───────────────────────────────────────────────
                 # Geen actie, SoC ongewijzigd, temperatuur koelt wel richting buiten.
-                q_rust = volgende_temp_idx(q, t, 0.0)
-                beste = V[t + 1][s][q_rust]
+                q_rust = volgende_temp_idx(q, t, 0.0, "rust")
+                kosten_overtemp_rust = overtemp_penalty_eur(
+                    idx_naar_temp(q_rust),
+                    soc_kwh,
+                    duur_h,
+                )
+                beste = V[t + 1][s][q_rust] - kosten_overtemp_rust
                 beste_keuze = (0, 0, s, q_rust)
 
                 # ── Optie: LADEN ──────────────────────────────────────────────
@@ -716,8 +774,8 @@ def los_dp_op(
                         duur_h,
                         warmte_penalty_laden_factor,
                     )
-                    q_laden = volgende_temp_idx(q, t, energie_naar_accu_q)
-                    kosten_temp = temperatuur_penalty_eur(
+                    q_laden = volgende_temp_idx(q, t, energie_naar_accu_q, "laden")
+                    kosten_temp = overtemp_penalty_eur(
                         idx_naar_temp(q_laden),
                         idx_naar_kwh(s_laden),
                         duur_h,
@@ -748,8 +806,8 @@ def los_dp_op(
                         duur_h,
                         warmte_penalty_ontladen_factor,
                     )
-                    q_ontladen = volgende_temp_idx(q, t, energie_uit_accu_q)
-                    kosten_temp = temperatuur_penalty_eur(
+                    q_ontladen = volgende_temp_idx(q, t, energie_uit_accu_q, "ontladen")
+                    kosten_temp = overtemp_penalty_eur(
                         idx_naar_temp(q_ontladen),
                         idx_naar_kwh(s_ontladen),
                         duur_h,
@@ -836,6 +894,7 @@ def los_dp_op(
             buiten_temp_c,
             energie_accu_voor_model,
             duur_h,
+            actie,
         )
         if thermisch_actief:
             huidig_temp_c = temp_na_c
@@ -861,14 +920,19 @@ def los_dp_op(
             "c_waarde": round(c_waarde(energie_accu_voor_model, duur_h), 3),
         }
         if thermisch_actief:
-            temp_limiet_actief = soc_na_kwh / max_kwh * 100.0 >= temp_soc_drempel_pct if max_kwh > 0 else False
+            gekozen_temp_limiet_c = temp_limiet_voor_soc_kwh(soc_na_kwh)
+            overtemp_penalty = round(overtemp_penalty_eur(temp_na_c, soc_na_kwh, duur_h), 6)
             slot_resultaat.update({
                 "batterij_temp_voor_c": round(temp_voor_c, 2) if temp_voor_c is not None else None,
                 "batterij_temp_na_c": round(temp_na_c, 2) if temp_na_c is not None else None,
                 "buiten_temp_c": round(buiten_temp_c, 2) if buiten_temp_c is not None else None,
-                "temp_penalty_eur": round(temperatuur_penalty_eur(temp_na_c, soc_na_kwh, duur_h), 4),
-                "temp_limiet_c": round(temp_limiet_c, 2),
-                "temp_limiet_actief": bool(temp_limiet_actief),
+                "overtemp_penalty_eur": overtemp_penalty,
+                # Backwards-compatible alias voor bestaande dashboards of automations.
+                "temp_penalty_eur": overtemp_penalty,
+                "temp_limiet_c": round(gekozen_temp_limiet_c, 2),
+                "temp_limiet_hoge_soc_c": round(temp_limiet_c, 2),
+                "temp_limiet_lage_soc_c": round(temp_limiet_lage_soc_c, 2),
+                "temp_limiet_actief": bool(overtemp_penalty > 0.0),
             })
 
         resultaat.append(slot_resultaat)
@@ -906,17 +970,22 @@ def los_dp_op(
 
             buiten_c = slot_buiten_temp_c(k)
             temp_voor_c = temp_c
-            temp_na_c = voorspel_temp_na_c(temp_voor_c, buiten_c, energie_accu, duur_h)
+            temp_na_c = voorspel_temp_na_c(temp_voor_c, buiten_c, energie_accu, duur_h, actie)
             if temp_na_c is not None:
                 temp_c = temp_na_c
 
-            temp_limiet_actief = soc_na / max_kwh * 100.0 >= temp_soc_drempel_pct if max_kwh > 0 else False
+            gekozen_temp_limiet_c = temp_limiet_voor_soc_kwh(soc_na)
             s_r["batterij_temp_voor_c"] = round(temp_voor_c, 2) if temp_voor_c is not None else None
             s_r["batterij_temp_na_c"] = round(temp_c, 2) if temp_c is not None else None
             s_r["buiten_temp_c"] = round(buiten_c, 2) if buiten_c is not None else None
-            s_r["temp_penalty_eur"] = round(temperatuur_penalty_eur(temp_c, soc_na, duur_h), 4)
-            s_r["temp_limiet_c"] = round(temp_limiet_c, 2)
-            s_r["temp_limiet_actief"] = bool(temp_limiet_actief)
+            overtemp_penalty = round(overtemp_penalty_eur(temp_c, soc_na, duur_h), 6)
+            s_r["overtemp_penalty_eur"] = overtemp_penalty
+            # Backwards-compatible alias voor bestaande dashboards of automations.
+            s_r["temp_penalty_eur"] = overtemp_penalty
+            s_r["temp_limiet_c"] = round(gekozen_temp_limiet_c, 2)
+            s_r["temp_limiet_hoge_soc_c"] = round(temp_limiet_c, 2)
+            s_r["temp_limiet_lage_soc_c"] = round(temp_limiet_lage_soc_c, 2)
+            s_r["temp_limiet_actief"] = bool(overtemp_penalty > 0.0)
 
     herbereken_modelvelden(resultaat)
 

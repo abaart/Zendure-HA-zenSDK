@@ -1,0 +1,139 @@
+{# Zendure thermisch algoritme debugdump #}
+{% set strategie = 'sensor.dynamisch_handelsstrategie' %}
+{% set slots = state_attr(strategie, 'slots') or [] %}
+
+{# Buitentemperatuur voor debug: input_text -> OpenWeatherMap -> Buienradar #}
+{% set buiten_sensor_raw = states('input_text.dynamisch_buitentemperatuur_sensor') | trim %}
+{% set buiten_sensor_input_geldig = buiten_sensor_raw not in ['', 'unknown', 'unavailable', 'none'] %}
+{% set buiten_sensor_input = buiten_sensor_raw if buiten_sensor_input_geldig else none %}
+{% set buiten_sensor_openweathermap = 'sensor.openweathermap_temperature' %}
+{% set buiten_sensor_buienradar = 'sensor.buienradar_temperature' %}
+{% set buiten_sensor =
+  buiten_sensor_input
+  if buiten_sensor_input is not none and states(buiten_sensor_input) not in ['unknown', 'unavailable', 'none']
+  else buiten_sensor_openweathermap
+  if states(buiten_sensor_openweathermap) not in ['unknown', 'unavailable', 'none']
+  else buiten_sensor_buienradar
+%}
+
+{% set weather_raw = states('input_text.dynamisch_weather_entity') | trim %}
+{% set weather_entity = weather_raw if weather_raw not in ['', 'unknown', 'unavailable', 'none'] else 'weather.openweathermap' %}
+
+{% set ns = namespace(max_temp=none, max_index=none) %}
+{% for i in range(1, 7) %}
+  {% set entity = 'sensor.zendure_2400_ac_batterij_' ~ i ~ '_temperatuur' %}
+  {% set value = states(entity) | float(default=none) %}
+  {% if value is not none and (ns.max_temp is none or value > ns.max_temp) %}
+    {% set ns.max_temp = value %}
+    {% set ns.max_index = i %}
+  {% endif %}
+{% endfor %}
+
+tijdstip_debugdump: "{{ now().isoformat() }}"
+
+live_batterij:
+  aantal_batterijen: "{{ states('sensor.zendure_2400_ac_aantal_batterijen') }}"
+  batterij_volgorde: "{{ states('input_text.zendure_2400_ac_batterij_volgorde') }}"
+  warmste_batterij_sensor: "{{ states('sensor.zendure_2400_ac_warmste_batterij_temperatuur') }}"
+  warmste_batterij_index_sensor: "{{ states('sensor.zendure_2400_ac_warmste_batterij_index') }}"
+  warmste_batterij_berekend_in_template: "{{ ns.max_temp }}"
+  warmste_batterij_index_berekend_in_template: "{{ ns.max_index }}"
+  batterij_1_temperatuur: "{{ states('sensor.zendure_2400_ac_batterij_1_temperatuur') }}"
+  batterij_2_temperatuur: "{{ states('sensor.zendure_2400_ac_batterij_2_temperatuur') }}"
+  batterij_3_temperatuur: "{{ states('sensor.zendure_2400_ac_batterij_3_temperatuur') }}"
+  batterij_4_temperatuur: "{{ states('sensor.zendure_2400_ac_batterij_4_temperatuur') }}"
+  batterij_5_temperatuur: "{{ states('sensor.zendure_2400_ac_batterij_5_temperatuur') }}"
+  batterij_6_temperatuur: "{{ states('sensor.zendure_2400_ac_batterij_6_temperatuur') }}"
+  omvormer_temperatuur: "{{ states('sensor.zendure_2400_ac_omvormer_temperatuur') }}"
+
+live_accu_en_vermogen:
+  laadpercentage: "{{ states('sensor.zendure_2400_ac_laadpercentage') }}"
+  minimale_laadpercentage: "{{ states('sensor.zendure_2400_ac_minimale_laadpercentage') }}"
+  maximale_laadpercentage: "{{ states('sensor.zendure_2400_ac_maximale_laadpercentage') }}"
+  totale_capaciteit_kwh: "{{ states('sensor.zendure_2400_ac_totale_capaciteit') }}"
+  indicatie_beschikbare_energie_kwh: "{{ states('sensor.zendure_2400_ac_indicatie_beschikbare_energie') }}"
+  indicatie_benodigde_energie_kwh: "{{ states('sensor.zendure_2400_ac_indicatie_benodigde_energie') }}"
+  rte_totaal_pct: "{{ states('sensor.zendure_2400_ac_rte_totaal') }}"
+  vermogen_aansturing_w: "{{ states('sensor.zendure_2400_ac_vermogen_aansturing') }}"
+  ingesteld_oplaadvermogen_w: "{{ states('sensor.zendure_2400_ac_ingesteld_oplaadvermogen') }}"
+  ingesteld_ontlaadvermogen_w: "{{ states('sensor.zendure_2400_ac_ingesteld_ontlaadvermogen') }}"
+  max_oplaadvermogen_helper_w: "{{ states('input_number.zendure_2400_ac_max_oplaadvermogen') }}"
+  max_ontlaadvermogen_helper_w: "{{ states('input_number.zendure_2400_ac_max_ontlaadvermogen') }}"
+  modus: "{{ states('sensor.zendure_2400_ac_modus') }}"
+  opslagmodus: "{{ states('sensor.zendure_2400_ac_opslagmodus') }}"
+  error: "{{ states('sensor.zendure_2400_ac_error') }}"
+  kalibreren: "{{ states('sensor.zendure_2400_ac_kalibreren') }}"
+
+buitentemperatuur:
+  input_text_dynamisch_buitentemperatuur_sensor: "{{ states('input_text.dynamisch_buitentemperatuur_sensor') }}"
+  gekozen_buitentemperatuur_sensor: "{{ buiten_sensor }}"
+  gekozen_buitentemperatuur_sensor_state: "{{ states(buiten_sensor) }}"
+  openweathermap_temperature: "{{ states('sensor.openweathermap_temperature') }}"
+  buienradar_temperature: "{{ states('sensor.buienradar_temperature') }}"
+  input_text_dynamisch_weather_entity: "{{ states('input_text.dynamisch_weather_entity') }}"
+  gekozen_weather_entity: "{{ weather_entity }}"
+  gekozen_weather_entity_state: "{{ states(weather_entity) }}"
+  gekozen_weather_entity_temperature_attr: "{{ state_attr(weather_entity, 'temperature') }}"
+  strategie_buiten_temp_huidig_c: "{{ state_attr(strategie, 'buiten_temp_huidig_c') }}"
+  strategie_buiten_temp_bron: "{{ state_attr(strategie, 'buiten_temp_bron') }}"
+  strategie_forecast_bron: "{{ state_attr(strategie, 'forecast_bron') }}"
+  strategie_forecast_punten: "{{ state_attr(strategie, 'forecast_punten') }}"
+
+thermische_instellingen:
+  warmte_penalty_laden_factor: "{{ states('input_number.dynamisch_warmte_penalty_laden_factor') }}"
+  warmte_penalty_ontladen_factor: "{{ states('input_number.dynamisch_warmte_penalty_ontladen_factor') }}"
+  warmte_afkoeling_halveringstijd_uren: "{{ states('input_number.dynamisch_warmte_afkoeling_halveringstijd_uren') }}"
+  warmte_stijging_laden_c_per_c2h: "{{ states('input_number.dynamisch_warmte_stijging_laden_c_per_c2h') }}"
+  warmte_stijging_ontladen_c_per_c2h: "{{ states('input_number.dynamisch_warmte_stijging_ontladen_c_per_c2h') }}"
+  warmte_stijging_oude_helper_c_per_c2h: "{{ states('input_number.dynamisch_warmte_stijging_c_per_c2h') }}"
+  max_temp_boven_80_soc: "{{ states('input_number.dynamisch_max_temp_boven_80_soc') }}"
+  temp_penalty_factor: "{{ states('input_number.dynamisch_temp_penalty_factor') }}"
+  minimale_spread_ct_per_kwh: "{{ states('input_number.dynamisch_minimale_spread') }}"
+
+strategie_sensor:
+  state_verwachte_winst_eur: "{{ states(strategie) }}"
+  bijgewerkt: "{{ state_attr(strategie, 'bijgewerkt') }}"
+  volgende_actie: "{{ state_attr(strategie, 'volgende_actie') }}"
+  volgende_start: "{{ state_attr(strategie, 'volgende_start') }}"
+  laad_slots: "{{ state_attr(strategie, 'laad_slots') }}"
+  ontlaad_slots: "{{ state_attr(strategie, 'ontlaad_slots') }}"
+  spread_blokkades_aantal: "{{ state_attr(strategie, 'spread_blokkades_aantal') }}"
+  accu_huidig_kwh: "{{ state_attr(strategie, 'accu_huidig_kwh') }}"
+  accu_max_kwh: "{{ state_attr(strategie, 'accu_max_kwh') }}"
+  eta: "{{ state_attr(strategie, 'eta') }}"
+  batterij_temp_start_c: "{{ state_attr(strategie, 'batterij_temp_start_c') }}"
+  buiten_temp_huidig_c: "{{ state_attr(strategie, 'buiten_temp_huidig_c') }}"
+  buiten_temp_bron: "{{ state_attr(strategie, 'buiten_temp_bron') }}"
+  weather_entity: "{{ state_attr(strategie, 'weather_entity') }}"
+  forecast_bron: "{{ state_attr(strategie, 'forecast_bron') }}"
+  forecast_punten: "{{ state_attr(strategie, 'forecast_punten') }}"
+  warmte_afkoeling_halveringstijd_h: "{{ state_attr(strategie, 'warmte_afkoeling_halveringstijd_h') }}"
+  warmte_stijging_laden_c_per_c2h: "{{ state_attr(strategie, 'warmte_stijging_laden_c_per_c2h') }}"
+  warmte_stijging_ontladen_c_per_c2h: "{{ state_attr(strategie, 'warmte_stijging_ontladen_c_per_c2h') }}"
+  warmte_stijging_oude_alias_c_per_c2h: "{{ state_attr(strategie, 'warmte_stijging_c_per_c2h') }}"
+  temp_limiet_c: "{{ state_attr(strategie, 'temp_limiet_c') }}"
+  temp_penalty_factor: "{{ state_attr(strategie, 'temp_penalty_factor') }}"
+  temp_soc_drempel_pct: "{{ state_attr(strategie, 'temp_soc_drempel_pct') }}"
+
+thermische_slots_eerste_48:
+{% for slot in slots[:48] %}
+  - index: {{ loop.index0 }}
+    start: "{{ slot.start if slot.start is defined else slot.get('start') }}"
+    actie: "{{ slot.actie if slot.actie is defined else slot.get('actie') }}"
+    vermogen_w: "{{ slot.vermogen_w if slot.vermogen_w is defined else slot.get('vermogen_w') }}"
+    verwacht_vermogen_w: "{{ slot.verwacht_vermogen_w if slot.verwacht_vermogen_w is defined else slot.get('verwacht_vermogen_w') }}"
+    soc_voor_pct: "{{ slot.soc_voor_pct if slot.soc_voor_pct is defined else slot.get('soc_voor_pct') }}"
+    soc_na_pct: "{{ slot.soc_na_pct if slot.soc_na_pct is defined else slot.get('soc_na_pct') }}"
+    soc_voor_kwh: "{{ slot.soc_voor_kwh if slot.soc_voor_kwh is defined else slot.get('soc_voor_kwh') }}"
+    soc_na_kwh: "{{ slot.soc_na_kwh if slot.soc_na_kwh is defined else slot.get('soc_na_kwh') }}"
+    actuele_soc_kwh: "{{ slot.actuele_soc_kwh if slot.actuele_soc_kwh is defined else slot.get('actuele_soc_kwh') }}"
+    doel_soc_kwh: "{{ slot.doel_soc_kwh if slot.doel_soc_kwh is defined else slot.get('doel_soc_kwh') }}"
+    c_waarde: "{{ slot.c_waarde if slot.c_waarde is defined else slot.get('c_waarde') }}"
+    batterij_temp_voor_c: "{{ slot.batterij_temp_voor_c if slot.batterij_temp_voor_c is defined else slot.get('batterij_temp_voor_c') }}"
+    batterij_temp_na_c: "{{ slot.batterij_temp_na_c if slot.batterij_temp_na_c is defined else slot.get('batterij_temp_na_c') }}"
+    buiten_temp_c: "{{ slot.buiten_temp_c if slot.buiten_temp_c is defined else slot.get('buiten_temp_c') }}"
+    temp_limiet_c: "{{ slot.temp_limiet_c if slot.temp_limiet_c is defined else slot.get('temp_limiet_c') }}"
+    temp_limiet_actief: "{{ slot.temp_limiet_actief if slot.temp_limiet_actief is defined else slot.get('temp_limiet_actief') }}"
+    temp_penalty_eur: "{{ slot.temp_penalty_eur if slot.temp_penalty_eur is defined else slot.get('temp_penalty_eur') }}"
+    warmte_penalty_eur: "{{ slot.warmte_penalty_eur if slot.warmte_penalty_eur is defined else slot.get('warmte_penalty_eur') }}"
+{% endfor %}

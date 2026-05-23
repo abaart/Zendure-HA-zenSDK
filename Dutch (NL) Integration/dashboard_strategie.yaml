@@ -484,16 +484,22 @@ views:
 
           - type: entities
             entities:
+              - entity: input_number.dynamisch_advies_analyse_dagen
+                name: Advies analyse dagen
               - entity: input_number.dynamisch_warmte_penalty_laden_factor
                 name: C-waarde penalty laden factor
               - entity: input_number.dynamisch_warmte_penalty_ontladen_factor
                 name: C-waarde penalty ontladen factor
               - entity: input_number.dynamisch_warmte_afkoeling_halveringstijd_uren
                 name: Packtemp afkoel halveringstijd
-              - entity: input_number.dynamisch_warmte_stijging_c_per_c2h
-                name: Packtemp warmte stijging per C²h
+              - entity: input_number.dynamisch_warmte_stijging_laden_c_per_c2h
+                name: Packtemp warmte stijging laden per C²h
+              - entity: input_number.dynamisch_warmte_stijging_ontladen_c_per_c2h
+                name: Packtemp warmte stijging ontladen per C²h
               - entity: input_number.dynamisch_max_temp_boven_80_soc
                 name: Packtemp limiet boven 80% SoC
+              - entity: input_number.dynamisch_max_temp_onder_80_soc
+                name: Packtemp limiet onder 80% SoC
               - entity: input_number.dynamisch_temp_penalty_factor
                 name: Packtemp overschrijding penalty factor
               - entity: input_text.dynamisch_buitentemperatuur_sensor
@@ -506,17 +512,23 @@ views:
           - type: markdown
             title: Parameter uitleg
             content: |-
+              **Advies analyse dagen**: aantal dagen recorder-history voor het automatische strategieadvies. Korter reageert sneller, langer is stabieler.
+
               **C-waarde penalty laden factor**: weegt warmteverlies door hoge C-waarde tijdens laden. Hoger betekent vaker lager laadvermogen.
 
               **C-waarde penalty ontladen factor**: weegt warmteverlies door hoge C-waarde tijdens ontladen. Hoger betekent vaker lager ontlaadvermogen.
 
               **Packtemp afkoel halveringstijd**: aantal rust-uren waarin het temperatuurverschil tussen batterij en buitenlucht halveert.
 
-              **Packtemp warmte stijging per C²h**: temperatuurstijging in graden per C² × uur tijdens laden of ontladen. Hoger betekent sneller voorspelde opwarming.
+              **Packtemp warmte stijging laden per C²h**: temperatuurstijging in graden per C² × uur tijdens laden. Hoger betekent sneller voorspelde opwarming tijdens laden.
+
+              **Packtemp warmte stijging ontladen per C²h**: temperatuurstijging in graden per C² × uur tijdens ontladen. Hoger betekent sneller voorspelde opwarming tijdens ontladen.
 
               **Packtemp limiet boven 80% SoC**: gewenste maximale batterijtemperatuur wanneer de planning boven 80% SoC uitkomt.
 
-              **Packtemp overschrijding penalty factor**: weegt overschrijding van de temperatuurgrens. `0` schakelt deze extra penalty uit.
+              **Packtemp limiet onder 80% SoC**: gewenste maximale batterijtemperatuur wanneer de planning onder 80% SoC blijft.
+
+              **Packtemp overschrijding penalty factor**: weegt overschrijding van de gekozen temperatuurgrens. `0` schakelt deze extra penalty uit.
 
               **Actuele buitentemperatuur sensor**: optionele `sensor.*` voor actuele buitentemperatuur. Laat leeg als je alleen `weather.openweathermap` hebt.
 
@@ -550,6 +562,17 @@ views:
               show_state: true
               tap_action:
                 action: none
+
+          - type: button
+            entity: input_button.dynamisch_strategie_advies_herberekenen
+            name: Advies herberekenen
+            icon: mdi:lightbulb-on-outline
+            show_state: false
+            tap_action:
+              action: call-service
+              service: input_button.press
+              target:
+                entity_id: input_button.dynamisch_strategie_advies_herberekenen
 
           - type: heading
             heading: Thermisch model
@@ -628,7 +651,7 @@ views:
                 data_generator: |
                   return (entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
-                    s.temp_limiet_actief && (s.temp_penalty_eur ?? 0) > 0
+                    s.temp_limiet_actief && (s.overtemp_penalty_eur ?? s.temp_penalty_eur ?? 0) > 0
                       ? s.batterij_temp_na_c
                       : null
                   ]);
@@ -653,28 +676,33 @@ views:
               - entity: input_boolean.dynamisch_handelsstrategie_berekening_bezig
                 name: Refresh trigger
                 type: line
+                yaxis_id: helper
                 show:
                   in_chart: false
                   in_header: false
                   in_legend: false
                 data_generator: |
                   return [[Date.now(), entity.state === 'on' ? 1 : 0]];
+            yaxis:
+              - id: temp
+                decimals: 1
+                apex_config:
+                  labels:
+                    formatter: |
+                      EVAL:function(v) { return v.toFixed(1) + ' °C' }
+              - id: delta
+                opposite: true
+                decimals: 2
+                apex_config:
+                  labels:
+                    formatter: |
+                      EVAL:function(v) { return v.toFixed(2) + ' Δ°C' }
+              - id: helper
+                show: false
             apex_config:
               tooltip:
                 x:
                   format: 'dd-MM HH:mm'
-              yaxis:
-                - id: temp
-                  decimalsInFloat: 1
-                  labels:
-                    formatter: |
-                      EVAL:function(v) { return v.toFixed(1) + ' °C' }
-                - id: delta
-                  opposite: true
-                  decimalsInFloat: 2
-                  labels:
-                    formatter: |
-                      EVAL:function(v) { return v.toFixed(2) + ' Δ°C' }
               chart:
                 height: 220px
                 toolbar:
@@ -726,7 +754,7 @@ views:
                     s.actie === 'ontladen' ? ((s.warmte_penalty_eur ?? 0) * 100) : null
                   ]);
               - entity: sensor.dynamisch_handelsstrategie
-                name: Temp
+                name: Overtemp
                 type: column
                 color: '#ef5350'
                 unit: 'ct'
@@ -734,7 +762,9 @@ views:
                 data_generator: |
                   return (entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
-                    (s.temp_penalty_eur ?? 0) > 0 ? ((s.temp_penalty_eur ?? 0) * 100) : null
+                    (s.overtemp_penalty_eur ?? s.temp_penalty_eur ?? 0) > 0
+                      ? ((s.overtemp_penalty_eur ?? s.temp_penalty_eur ?? 0) * 100)
+                      : null
                   ]);
               - entity: sensor.dynamisch_handelsstrategie
                 name: Actie
@@ -827,7 +857,7 @@ views:
                     (s.warmte_penalty_eur ?? 0) * 100
                   ]);
               - entity: sensor.dynamisch_handelsstrategie
-                name: Temp ct
+                name: Overtemp ct
                 type: line
                 yaxis_id: helper
                 stroke_width: 0
@@ -839,17 +869,29 @@ views:
                 data_generator: |
                   return (entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
-                    (s.temp_penalty_eur ?? 0) * 100
+                    (s.overtemp_penalty_eur ?? s.temp_penalty_eur ?? 0) * 100
                   ]);
               - entity: input_boolean.dynamisch_handelsstrategie_berekening_bezig
                 name: Refresh trigger
                 type: line
+                yaxis_id: helper
                 show:
                   in_chart: false
                   in_header: false
                   in_legend: false
                 data_generator: |
                   return [[Date.now(), entity.state === 'on' ? 1 : 0]];
+            yaxis:
+              - id: penalty
+                decimals: 2
+                min: -5
+                max: 5
+                apex_config:
+                  labels:
+                    formatter: |
+                      EVAL:function(v) { return v.toFixed(1) + ' ct' }
+              - id: helper
+                show: false
             apex_config:
               tooltip:
                 custom: |
@@ -860,7 +902,7 @@ views:
                     var tempVoor = series[6][dataPointIndex];
                     var tempNa = series[7][dataPointIndex];
                     var warmte = series[8][dataPointIndex];
-                    var tempPenalty = series[9][dataPointIndex];
+                    var overtempPenalty = series[9][dataPointIndex];
                     var actieLabel = actionCode === 1 ? 'Laden' : actionCode === 2 ? 'Ontladen' : 'Rust';
                     var ts = w.globals.seriesX[0] && w.globals.seriesX[0][dataPointIndex];
                     if (!ts) return '';
@@ -874,19 +916,10 @@ views:
                     html += '<div style="color:var(--secondary-text-color)">C-waarde: <span style="color:var(--primary-text-color);font-weight:bold">' + (c != null ? c.toFixed(3) : '-') + '</span></div>';
                     html += '<div style="color:var(--secondary-text-color)">Pack temp: <span style="color:var(--primary-text-color);font-weight:bold">' + (tempVoor != null ? tempVoor.toFixed(1) : '-') + ' → ' + (tempNa != null ? tempNa.toFixed(1) : '-') + ' °C</span></div>';
                     html += '<div style="color:var(--secondary-text-color)">Warmte penalty: <span style="color:var(--primary-text-color);font-weight:bold">' + (warmte != null ? warmte.toFixed(2) : '0.00') + ' ct</span></div>';
-                    html += '<div style="color:var(--secondary-text-color)">Temp penalty: <span style="color:var(--primary-text-color);font-weight:bold">' + (tempPenalty != null ? tempPenalty.toFixed(2) : '0.00') + ' ct</span></div>';
+                    html += '<div style="color:var(--secondary-text-color)">Overtemp penalty: <span style="color:var(--primary-text-color);font-weight:bold">' + (overtempPenalty != null ? overtempPenalty.toFixed(3) : '0.000') + ' ct</span></div>';
                     html += '</div>';
                     return html;
                   }
-              yaxis:
-                - id: penalty
-                  decimalsInFloat: 2
-                  min: 0
-                  labels:
-                    formatter: |
-                      EVAL:function(v) { return v.toFixed(1) + ' ct' }
-                - id: helper
-                  show: false
               chart:
                 height: 220px
                 toolbar:
@@ -897,6 +930,70 @@ views:
                 show: true
               markers:
                 size: 0
+
+          - type: entities
+            title: Strategie advies
+            entities:
+              - entity: sensor.dynamisch_strategie_advies
+                name: Advies status
+                icon: mdi:lightbulb-on-outline
+              - type: attribute
+                entity: sensor.dynamisch_strategie_advies
+                attribute: advies_tekst
+                name: Advies
+                icon: mdi:text-box-check-outline
+              - type: attribute
+                entity: sensor.dynamisch_strategie_advies
+                attribute: confidence
+                name: Betrouwbaarheid
+                icon: mdi:gauge
+              - type: attribute
+                entity: sensor.dynamisch_strategie_advies
+                attribute: analyse_dagen
+                name: Analyse dagen
+                icon: mdi:calendar-search
+              - type: attribute
+                entity: sensor.dynamisch_strategie_advies
+                attribute: geanalyseerde_slots
+                name: Geanalyseerde slots
+                icon: mdi:timeline-clock-outline
+              - type: attribute
+                entity: sensor.dynamisch_strategie_advies
+                attribute: temperatuur_vergelijkingen
+                name: Temperatuur vergelijkingen
+                icon: mdi:thermometer-check
+              - type: attribute
+                entity: sensor.dynamisch_strategie_advies
+                attribute: aanbevolen_warmte_stijging_laden_c_per_c2h
+                name: Advies warmte stijging laden
+                icon: mdi:heat-wave
+              - type: attribute
+                entity: sensor.dynamisch_strategie_advies
+                attribute: aanbevolen_warmte_stijging_ontladen_c_per_c2h
+                name: Advies warmte stijging ontladen
+                icon: mdi:heat-wave
+              - type: attribute
+                entity: sensor.dynamisch_strategie_advies
+                attribute: aanbevolen_afkoeling_halveringstijd_h
+                name: Advies afkoel halveringstijd
+                icon: mdi:coolant-temperature
+              - type: attribute
+                entity: sensor.dynamisch_strategie_advies
+                attribute: aanbevolen_temp_penalty_factor
+                name: Advies overtemp penalty factor
+                icon: mdi:thermometer-chevron-up
+              - type: attribute
+                entity: sensor.dynamisch_strategie_advies
+                attribute: aanbevolen_warmte_penalty_laden_factor
+                name: Advies C-waarde penalty laden
+                icon: mdi:thermometer-lines
+              - type: attribute
+                entity: sensor.dynamisch_strategie_advies
+                attribute: aanbevolen_warmte_penalty_ontladen_factor
+                name: Advies C-waarde penalty ontladen
+                icon: mdi:thermometer-chevron-down
+            show_header_toggle: false
+            state_color: true
 
           - type: entities
             title: Thermische uitleg
@@ -932,13 +1029,23 @@ views:
                 icon: mdi:coolant-temperature
               - type: attribute
                 entity: sensor.dynamisch_handelsstrategie
-                attribute: warmte_stijging_c_per_c2h
-                name: Packtemp warmte stijging
+                attribute: warmte_stijging_laden_c_per_c2h
+                name: Packtemp warmte stijging laden
+                icon: mdi:heat-wave
+              - type: attribute
+                entity: sensor.dynamisch_handelsstrategie
+                attribute: warmte_stijging_ontladen_c_per_c2h
+                name: Packtemp warmte stijging ontladen
                 icon: mdi:heat-wave
               - type: attribute
                 entity: sensor.dynamisch_handelsstrategie
                 attribute: temp_limiet_c
-                name: Packtemp limiet
+                name: Packtemp limiet boven 80% SoC
+                icon: mdi:thermometer-alert
+              - type: attribute
+                entity: sensor.dynamisch_handelsstrategie
+                attribute: temp_limiet_lage_soc_c
+                name: Packtemp limiet onder 80% SoC
                 icon: mdi:thermometer-alert
               - type: attribute
                 entity: sensor.dynamisch_handelsstrategie

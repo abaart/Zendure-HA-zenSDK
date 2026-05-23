@@ -1,0 +1,1688 @@
+{
+  "captured_at": "2026-05-23T20:05:56.679648+02:00",
+  "ha_url_without_token": "http://192.168.0.111:8123",
+  "api_status": 200,
+  "api_message": {
+    "message": "API running."
+  },
+  "entity_count_requested": 40,
+  "entity_count_found": 39,
+  "missing_entities": [
+    {
+      "entity_id": "sensor.openweathermap_temperature",
+      "http_status": 404,
+      "payload": {
+        "message": "Entity not found."
+      }
+    }
+  ],
+  "invalid_states": [
+    {
+      "entity_id": "input_text.zendure_2400_ac_batterij_volgorde",
+      "state": ""
+    },
+    {
+      "entity_id": "sensor.zendure_2400_ac_batterij_4_temperatuur",
+      "state": "unknown"
+    },
+    {
+      "entity_id": "sensor.zendure_2400_ac_batterij_5_temperatuur",
+      "state": "unknown"
+    },
+    {
+      "entity_id": "sensor.zendure_2400_ac_batterij_6_temperatuur",
+      "state": "unknown"
+    },
+    {
+      "entity_id": "input_text.dynamisch_buitentemperatuur_sensor",
+      "state": ""
+    },
+    {
+      "entity_id": "weather.openweathermap",
+      "state": "unknown"
+    }
+  ],
+  "strategy": {
+    "state": "2.443",
+    "selected_attributes": {
+      "bijgewerkt": "2026-05-23T20:00:08.934157+02:00",
+      "volgende_actie": "ontladen",
+      "volgende_start": "2026-05-23T20:00:00+02:00",
+      "laad_slots": 3,
+      "ontlaad_slots": 7,
+      "accu_huidig_kwh": 4.524,
+      "accu_max_kwh": 4.635,
+      "eta": 0.919,
+      "batterij_temp_start_c": 36.0,
+      "buiten_temp_huidig_c": null,
+      "buiten_temp_bron": "onbekend",
+      "weather_entity": "weather.openweathermap",
+      "forecast_bron": "weather.get_forecasts",
+      "forecast_punten": 40,
+      "warmte_afkoeling_halveringstijd_h": 9.0,
+      "warmte_stijging_c_per_c2h": 20.0,
+      "temp_limiet_c": 36.0,
+      "temp_penalty_factor": 1.0,
+      "temp_soc_drempel_pct": 80.0
+    },
+    "slots_count": 29,
+    "first_12_slots": [
+      {
+        "start": "2026-05-23T19:00:00+02:00",
+        "end": "2026-05-23T20:00:00+02:00",
+        "prijs_ct": 30.363,
+        "actie": "rust",
+        "soc_voor_kwh": 4.5,
+        "soc_na_kwh": 4.5,
+        "soc_voor_pct": 87.7,
+        "soc_na_pct": 87.7,
+        "batterij_temp_voor_c": 36.0,
+        "batterij_temp_na_c": 35.99,
+        "buiten_temp_c": 23.4,
+        "temp_limiet_c": 36.0,
+        "temp_limiet_actief": "true"
+      },
+      {
+        "start": "2026-05-23T20:00:00+02:00",
+        "end": "2026-05-23T21:00:00+02:00",
+        "prijs_ct": 33.296,
+        "actie": "ontladen",
+        "vermogen_w": 1500,
+        "verwacht_vermogen_w": 1500,
+        "soc_voor_kwh": 4.5,
+        "soc_na_kwh": 2.9,
+        "soc_voor_pct": 87.7,
+        "soc_na_pct": 60.1,
+        "winst_eur": 0.4898,
+        "warmte_penalty_eur": 0.0095,
+        "c_waarde": 0.345,
+        "batterij_temp_voor_c": 35.99,
+        "batterij_temp_na_c": 38.38,
+        "buiten_temp_c": 23.4,
+        "temp_limiet_c": 36.0,
+        "geplande_actie": "ontladen",
+        "actief_slot_begin_kwh": 4.5,
+        "actief_slot_raw_soc_kwh": 4.519,
+        "actuele_soc_kwh": 4.519,
+        "actuele_soc_bron": "laadpercentage",
+        "doel_soc_kwh": 2.9,
+        "actief_slot_delta_kwh": 1.619,
+        "actief_slot_resterend_h": 0.998
+      },
+      {
+        "start": "2026-05-23T21:00:00+02:00",
+        "end": "2026-05-23T22:00:00+02:00",
+        "prijs_ct": 34.44,
+        "actie": "ontladen",
+        "vermogen_w": 2000,
+        "verwacht_vermogen_w": 2000,
+        "soc_voor_kwh": 2.9,
+        "soc_na_kwh": 0.75,
+        "soc_voor_pct": 60.1,
+        "soc_na_pct": 23.0,
+        "winst_eur": 0.6808,
+        "warmte_penalty_eur": 0.0231,
+        "c_waarde": 0.464,
+        "batterij_temp_voor_c": 38.38,
+        "batterij_temp_na_c": 42.68,
+        "buiten_temp_c": 23.4,
+        "temp_limiet_c": 36.0
+      },
+      {
+        "start": "2026-05-23T22:00:00+02:00",
+        "end": "2026-05-23T23:00:00+02:00",
+        "prijs_ct": 31.866,
+        "actie": "ontladen",
+        "vermogen_w": 750,
+        "verwacht_vermogen_w": 700,
+        "soc_voor_kwh": 0.75,
+        "soc_voor_pct": 23.0,
+        "soc_na_pct": 10.0,
+        "winst_eur": 0.2197,
+        "warmte_penalty_eur": 0.001,
+        "c_waarde": 0.162,
+        "batterij_temp_voor_c": 42.68,
+        "batterij_temp_na_c": 43.2,
+        "buiten_temp_c": 23.4,
+        "temp_limiet_c": 36.0
+      },
+      {
+        "start": "2026-05-23T23:00:00+02:00",
+        "end": "2026-05-24T00:00:00+02:00",
+        "prijs_ct": 30.285,
+        "actie": "rust",
+        "soc_voor_pct": 10.0,
+        "soc_na_pct": 10.0,
+        "batterij_temp_voor_c": 43.2,
+        "batterij_temp_na_c": 41.58,
+        "buiten_temp_c": 21.3,
+        "temp_limiet_c": 36.0
+      },
+      {
+        "start": "2026-05-24T00:00:00+02:00",
+        "end": "2026-05-24T01:00:00+02:00",
+        "prijs_ct": 30.056,
+        "actie": "rust",
+        "soc_voor_pct": 10.0,
+        "soc_na_pct": 10.0,
+        "batterij_temp_voor_c": 41.58,
+        "batterij_temp_na_c": 40.08,
+        "buiten_temp_c": 21.3,
+        "temp_limiet_c": 36.0
+      },
+      {
+        "start": "2026-05-24T01:00:00+02:00",
+        "end": "2026-05-24T02:00:00+02:00",
+        "prijs_ct": 29.657,
+        "actie": "rust",
+        "soc_voor_pct": 10.0,
+        "soc_na_pct": 10.0,
+        "batterij_temp_voor_c": 40.08,
+        "batterij_temp_na_c": 38.68,
+        "buiten_temp_c": 21.3,
+        "temp_limiet_c": 36.0
+      },
+      {
+        "start": "2026-05-24T02:00:00+02:00",
+        "end": "2026-05-24T03:00:00+02:00",
+        "prijs_ct": 29.074,
+        "actie": "rust",
+        "soc_voor_pct": 10.0,
+        "soc_na_pct": 10.0,
+        "batterij_temp_voor_c": 38.68,
+        "batterij_temp_na_c": 37.1,
+        "buiten_temp_c": 17.3,
+        "temp_limiet_c": 36.0
+      },
+      {
+        "start": "2026-05-24T03:00:00+02:00",
+        "end": "2026-05-24T04:00:00+02:00",
+        "prijs_ct": 28.647,
+        "actie": "rust",
+        "soc_voor_pct": 10.0,
+        "soc_na_pct": 10.0,
+        "batterij_temp_voor_c": 37.1,
+        "batterij_temp_na_c": 35.63,
+        "buiten_temp_c": 17.3,
+        "temp_limiet_c": 36.0
+      },
+      {
+        "start": "2026-05-24T04:00:00+02:00",
+        "end": "2026-05-24T05:00:00+02:00",
+        "prijs_ct": 28.416,
+        "actie": "rust",
+        "soc_voor_pct": 10.0,
+        "soc_na_pct": 10.0,
+        "batterij_temp_voor_c": 35.63,
+        "batterij_temp_na_c": 34.27,
+        "buiten_temp_c": 17.3,
+        "temp_limiet_c": 36.0
+      },
+      {
+        "start": "2026-05-24T05:00:00+02:00",
+        "end": "2026-05-24T06:00:00+02:00",
+        "prijs_ct": 27.884,
+        "actie": "rust",
+        "soc_voor_pct": 10.0,
+        "soc_na_pct": 10.0,
+        "batterij_temp_voor_c": 34.27,
+        "batterij_temp_na_c": 32.67,
+        "buiten_temp_c": 12.7,
+        "temp_limiet_c": 36.0
+      },
+      {
+        "start": "2026-05-24T06:00:00+02:00",
+        "end": "2026-05-24T07:00:00+02:00",
+        "prijs_ct": 27.689,
+        "actie": "rust",
+        "soc_voor_pct": 10.0,
+        "soc_na_pct": 10.0,
+        "batterij_temp_voor_c": 32.67,
+        "batterij_temp_na_c": 31.19,
+        "buiten_temp_c": 12.7,
+        "temp_limiet_c": 36.0
+      }
+    ]
+  },
+  "weather_forecast_api": {
+    "entity": "weather.openweathermap",
+    "status": 200,
+    "forecast_count": 40,
+    "first_12": [
+      {
+        "datetime": "2026-05-23T18:00:00+00:00",
+        "condition": "sunny",
+        "temperature": 23.3,
+        "pressure": 1027.0,
+        "cloud_coverage": 0,
+        "wind_speed": 10.69,
+        "wind_bearing": 297,
+        "uv_index": null,
+        "precipitation_probability": 0,
+        "precipitation": 0.0,
+        "apparent_temperature": 23.4,
+        "wind_gust_speed": 19.3,
+        "humidity": 66
+      },
+      {
+        "datetime": "2026-05-23T21:00:00+00:00",
+        "condition": "partlycloudy",
+        "temperature": 21.2,
+        "pressure": 1028.0,
+        "cloud_coverage": 32,
+        "wind_speed": 8.64,
+        "wind_bearing": 354,
+        "uv_index": null,
+        "precipitation_probability": 0,
+        "precipitation": 0.0,
+        "apparent_temperature": 21.3,
+        "wind_gust_speed": 19.91,
+        "humidity": 73
+      },
+      {
+        "datetime": "2026-05-24T00:00:00+00:00",
+        "condition": "cloudy",
+        "temperature": 17.3,
+        "pressure": 1028.0,
+        "cloud_coverage": 65,
+        "wind_speed": 7.6,
+        "wind_bearing": 11,
+        "uv_index": null,
+        "precipitation_probability": 0,
+        "precipitation": 0.0,
+        "apparent_temperature": 17.3,
+        "wind_gust_speed": 17.03,
+        "humidity": 84
+      },
+      {
+        "datetime": "2026-05-24T03:00:00+00:00",
+        "condition": "cloudy",
+        "temperature": 12.7,
+        "pressure": 1030.0,
+        "cloud_coverage": 100,
+        "wind_speed": 6.84,
+        "wind_bearing": 23,
+        "uv_index": null,
+        "precipitation_probability": 0,
+        "precipitation": 0.0,
+        "apparent_temperature": 12.4,
+        "wind_gust_speed": 14.15,
+        "humidity": 91
+      },
+      {
+        "datetime": "2026-05-24T06:00:00+00:00",
+        "condition": "cloudy",
+        "temperature": 17.0,
+        "pressure": 1031.0,
+        "cloud_coverage": 89,
+        "wind_speed": 6.19,
+        "wind_bearing": 42,
+        "uv_index": null,
+        "precipitation_probability": 0,
+        "precipitation": 0.0,
+        "apparent_temperature": 16.7,
+        "wind_gust_speed": 9.86,
+        "humidity": 75
+      },
+      {
+        "datetime": "2026-05-24T09:00:00+00:00",
+        "condition": "cloudy",
+        "temperature": 20.9,
+        "pressure": 1032.0,
+        "cloud_coverage": 99,
+        "wind_speed": 8.17,
+        "wind_bearing": 36,
+        "uv_index": null,
+        "precipitation_probability": 0,
+        "precipitation": 0.0,
+        "apparent_temperature": 20.4,
+        "wind_gust_speed": 9.0,
+        "humidity": 53
+      },
+      {
+        "datetime": "2026-05-24T12:00:00+00:00",
+        "condition": "cloudy",
+        "temperature": 23.0,
+        "pressure": 1032.0,
+        "cloud_coverage": 99,
+        "wind_speed": 9.43,
+        "wind_bearing": 50,
+        "uv_index": null,
+        "precipitation_probability": 0,
+        "precipitation": 0.0,
+        "apparent_temperature": 22.5,
+        "wind_gust_speed": 8.53,
+        "humidity": 47
+      },
+      {
+        "datetime": "2026-05-24T15:00:00+00:00",
+        "condition": "cloudy",
+        "temperature": 23.4,
+        "pressure": 1031.0,
+        "cloud_coverage": 75,
+        "wind_speed": 13.39,
+        "wind_bearing": 52,
+        "uv_index": null,
+        "precipitation_probability": 0,
+        "precipitation": 0.0,
+        "apparent_temperature": 23.0,
+        "wind_gust_speed": 10.33,
+        "humidity": 46
+      },
+      {
+        "datetime": "2026-05-24T18:00:00+00:00",
+        "condition": "cloudy",
+        "temperature": 19.6,
+        "pressure": 1032.0,
+        "cloud_coverage": 67,
+        "wind_speed": 9.86,
+        "wind_bearing": 43,
+        "uv_index": null,
+        "precipitation_probability": 0,
+        "precipitation": 0.0,
+        "apparent_temperature": 19.2,
+        "wind_gust_speed": 16.38,
+        "humidity": 60
+      },
+      {
+        "datetime": "2026-05-24T21:00:00+00:00",
+        "condition": "cloudy",
+        "temperature": 14.7,
+        "pressure": 1032.0,
+        "cloud_coverage": 74,
+        "wind_speed": 7.63,
+        "wind_bearing": 33,
+        "uv_index": null,
+        "precipitation_probability": 0,
+        "precipitation": 0.0,
+        "apparent_temperature": 14.2,
+        "wind_gust_speed": 11.38,
+        "humidity": 76
+      },
+      {
+        "datetime": "2026-05-25T00:00:00+00:00",
+        "condition": "cloudy",
+        "temperature": 14.0,
+        "pressure": 1033.0,
+        "cloud_coverage": 60,
+        "wind_speed": 6.12,
+        "wind_bearing": 71,
+        "uv_index": null,
+        "precipitation_probability": 0,
+        "precipitation": 0.0,
+        "apparent_temperature": 13.9,
+        "wind_gust_speed": 6.77,
+        "humidity": 92
+      },
+      {
+        "datetime": "2026-05-25T03:00:00+00:00",
+        "condition": "sunny",
+        "temperature": 13.3,
+        "pressure": 1032.0,
+        "cloud_coverage": 7,
+        "wind_speed": 5.29,
+        "wind_bearing": 103,
+        "uv_index": null,
+        "precipitation_probability": 0,
+        "precipitation": 0.0,
+        "apparent_temperature": 13.1,
+        "wind_gust_speed": 5.22,
+        "humidity": 93
+      }
+    ]
+  },
+  "completeness": {
+    "missing_strategy_attrs": [
+      {
+        "attribute": "buiten_temp_huidig_c",
+        "value": null
+      }
+    ],
+    "slot_issues": [
+      {
+        "slot": 24,
+        "start": "2026-05-24T19:00:00+02:00",
+        "actie": "ontladen",
+        "missing_key": "warmte_penalty_eur"
+      }
+    ]
+  },
+  "states": {
+    "sensor.dynamisch_handelsstrategie": {
+      "entity_id": "sensor.dynamisch_handelsstrategie",
+      "state": "2.443",
+      "attributes": {
+        "unit_of_measurement": "EUR",
+        "friendly_name": "Dynamisch Handelen Verwachte Winst",
+        "icon": "mdi:cash-plus",
+        "device_class": "monetary",
+        "slots": [
+          {
+            "start": "2026-05-23T19:00:00+02:00",
+            "end": "2026-05-23T20:00:00+02:00",
+            "prijs_ct": 30.363,
+            "actie": "rust",
+            "soc_voor_kwh": 4.5,
+            "soc_na_kwh": 4.5,
+            "soc_voor_pct": 87.7,
+            "soc_na_pct": 87.7,
+            "batterij_temp_voor_c": 36.0,
+            "batterij_temp_na_c": 35.99,
+            "buiten_temp_c": 23.4,
+            "temp_limiet_c": 36.0,
+            "temp_limiet_actief": "true"
+          },
+          {
+            "start": "2026-05-23T20:00:00+02:00",
+            "end": "2026-05-23T21:00:00+02:00",
+            "prijs_ct": 33.296,
+            "actie": "ontladen",
+            "vermogen_w": 1500,
+            "verwacht_vermogen_w": 1500,
+            "soc_voor_kwh": 4.5,
+            "soc_na_kwh": 2.9,
+            "soc_voor_pct": 87.7,
+            "soc_na_pct": 60.1,
+            "winst_eur": 0.4898,
+            "warmte_penalty_eur": 0.0095,
+            "c_waarde": 0.345,
+            "batterij_temp_voor_c": 35.99,
+            "batterij_temp_na_c": 38.38,
+            "buiten_temp_c": 23.4,
+            "temp_limiet_c": 36.0,
+            "geplande_actie": "ontladen",
+            "actief_slot_begin_kwh": 4.5,
+            "actief_slot_raw_soc_kwh": 4.519,
+            "actuele_soc_kwh": 4.519,
+            "actuele_soc_bron": "laadpercentage",
+            "doel_soc_kwh": 2.9,
+            "actief_slot_delta_kwh": 1.619,
+            "actief_slot_resterend_h": 0.998
+          },
+          {
+            "start": "2026-05-23T21:00:00+02:00",
+            "end": "2026-05-23T22:00:00+02:00",
+            "prijs_ct": 34.44,
+            "actie": "ontladen",
+            "vermogen_w": 2000,
+            "verwacht_vermogen_w": 2000,
+            "soc_voor_kwh": 2.9,
+            "soc_na_kwh": 0.75,
+            "soc_voor_pct": 60.1,
+            "soc_na_pct": 23.0,
+            "winst_eur": 0.6808,
+            "warmte_penalty_eur": 0.0231,
+            "c_waarde": 0.464,
+            "batterij_temp_voor_c": 38.38,
+            "batterij_temp_na_c": 42.68,
+            "buiten_temp_c": 23.4,
+            "temp_limiet_c": 36.0
+          },
+          {
+            "start": "2026-05-23T22:00:00+02:00",
+            "end": "2026-05-23T23:00:00+02:00",
+            "prijs_ct": 31.866,
+            "actie": "ontladen",
+            "vermogen_w": 750,
+            "verwacht_vermogen_w": 700,
+            "soc_voor_kwh": 0.75,
+            "soc_voor_pct": 23.0,
+            "soc_na_pct": 10.0,
+            "winst_eur": 0.2197,
+            "warmte_penalty_eur": 0.001,
+            "c_waarde": 0.162,
+            "batterij_temp_voor_c": 42.68,
+            "batterij_temp_na_c": 43.2,
+            "buiten_temp_c": 23.4,
+            "temp_limiet_c": 36.0
+          },
+          {
+            "start": "2026-05-23T23:00:00+02:00",
+            "end": "2026-05-24T00:00:00+02:00",
+            "prijs_ct": 30.285,
+            "actie": "rust",
+            "soc_voor_pct": 10.0,
+            "soc_na_pct": 10.0,
+            "batterij_temp_voor_c": 43.2,
+            "batterij_temp_na_c": 41.58,
+            "buiten_temp_c": 21.3,
+            "temp_limiet_c": 36.0
+          },
+          {
+            "start": "2026-05-24T00:00:00+02:00",
+            "end": "2026-05-24T01:00:00+02:00",
+            "prijs_ct": 30.056,
+            "actie": "rust",
+            "soc_voor_pct": 10.0,
+            "soc_na_pct": 10.0,
+            "batterij_temp_voor_c": 41.58,
+            "batterij_temp_na_c": 40.08,
+            "buiten_temp_c": 21.3,
+            "temp_limiet_c": 36.0
+          },
+          {
+            "start": "2026-05-24T01:00:00+02:00",
+            "end": "2026-05-24T02:00:00+02:00",
+            "prijs_ct": 29.657,
+            "actie": "rust",
+            "soc_voor_pct": 10.0,
+            "soc_na_pct": 10.0,
+            "batterij_temp_voor_c": 40.08,
+            "batterij_temp_na_c": 38.68,
+            "buiten_temp_c": 21.3,
+            "temp_limiet_c": 36.0
+          },
+          {
+            "start": "2026-05-24T02:00:00+02:00",
+            "end": "2026-05-24T03:00:00+02:00",
+            "prijs_ct": 29.074,
+            "actie": "rust",
+            "soc_voor_pct": 10.0,
+            "soc_na_pct": 10.0,
+            "batterij_temp_voor_c": 38.68,
+            "batterij_temp_na_c": 37.1,
+            "buiten_temp_c": 17.3,
+            "temp_limiet_c": 36.0
+          },
+          {
+            "start": "2026-05-24T03:00:00+02:00",
+            "end": "2026-05-24T04:00:00+02:00",
+            "prijs_ct": 28.647,
+            "actie": "rust",
+            "soc_voor_pct": 10.0,
+            "soc_na_pct": 10.0,
+            "batterij_temp_voor_c": 37.1,
+            "batterij_temp_na_c": 35.63,
+            "buiten_temp_c": 17.3,
+            "temp_limiet_c": 36.0
+          },
+          {
+            "start": "2026-05-24T04:00:00+02:00",
+            "end": "2026-05-24T05:00:00+02:00",
+            "prijs_ct": 28.416,
+            "actie": "rust",
+            "soc_voor_pct": 10.0,
+            "soc_na_pct": 10.0,
+            "batterij_temp_voor_c": 35.63,
+            "batterij_temp_na_c": 34.27,
+            "buiten_temp_c": 17.3,
+            "temp_limiet_c": 36.0
+          },
+          {
+            "start": "2026-05-24T05:00:00+02:00",
+            "end": "2026-05-24T06:00:00+02:00",
+            "prijs_ct": 27.884,
+            "actie": "rust",
+            "soc_voor_pct": 10.0,
+            "soc_na_pct": 10.0,
+            "batterij_temp_voor_c": 34.27,
+            "batterij_temp_na_c": 32.67,
+            "buiten_temp_c": 12.7,
+            "temp_limiet_c": 36.0
+          },
+          {
+            "start": "2026-05-24T06:00:00+02:00",
+            "end": "2026-05-24T07:00:00+02:00",
+            "prijs_ct": 27.689,
+            "actie": "rust",
+            "soc_voor_pct": 10.0,
+            "soc_na_pct": 10.0,
+            "batterij_temp_voor_c": 32.67,
+            "batterij_temp_na_c": 31.19,
+            "buiten_temp_c": 12.7,
+            "temp_limiet_c": 36.0
+          },
+          {
+            "start": "2026-05-24T07:00:00+02:00",
+            "end": "2026-05-24T08:00:00+02:00",
+            "prijs_ct": 25.45,
+            "actie": "rust",
+            "soc_voor_pct": 10.0,
+            "soc_na_pct": 10.0,
+            "batterij_temp_voor_c": 31.19,
+            "batterij_temp_na_c": 29.82,
+            "buiten_temp_c": 12.7,
+            "temp_limiet_c": 36.0
+          },
+          {
+            "start": "2026-05-24T08:00:00+02:00",
+            "end": "2026-05-24T09:00:00+02:00",
+            "prijs_ct": 16.21,
+            "actie": "rust",
+            "soc_voor_pct": 10.0,
+            "soc_na_pct": 10.0,
+            "batterij_temp_voor_c": 29.82,
+            "batterij_temp_na_c": 28.87,
+            "buiten_temp_c": 17.0,
+            "temp_limiet_c": 36.0
+          },
+          {
+            "start": "2026-05-24T09:00:00+02:00",
+            "end": "2026-05-24T10:00:00+02:00",
+            "prijs_ct": 13.561,
+            "actie": "rust",
+            "soc_voor_pct": 10.0,
+            "soc_na_pct": 10.0,
+            "batterij_temp_voor_c": 28.87,
+            "batterij_temp_na_c": 27.99,
+            "buiten_temp_c": 17.0,
+            "temp_limiet_c": 36.0
+          },
+          {
+            "start": "2026-05-24T10:00:00+02:00",
+            "end": "2026-05-24T11:00:00+02:00",
+            "prijs_ct": 13.261,
+            "actie": "rust",
+            "soc_voor_pct": 10.0,
+            "soc_na_pct": 10.0,
+            "batterij_temp_voor_c": 27.99,
+            "batterij_temp_na_c": 27.18,
+            "buiten_temp_c": 17.0,
+            "temp_limiet_c": 36.0
+          },
+          {
+            "start": "2026-05-24T11:00:00+02:00",
+            "end": "2026-05-24T12:00:00+02:00",
+            "prijs_ct": 11.893,
+            "actie": "rust",
+            "soc_voor_pct": 10.0,
+            "soc_na_pct": 10.0,
+            "batterij_temp_voor_c": 27.18,
+            "batterij_temp_na_c": 26.71,
+            "buiten_temp_c": 20.9,
+            "temp_limiet_c": 36.0
+          },
+          {
+            "start": "2026-05-24T12:00:00+02:00",
+            "end": "2026-05-24T13:00:00+02:00",
+            "prijs_ct": 9.023,
+            "actie": "laden",
+            "vermogen_w": 750,
+            "verwacht_vermogen_w": 725,
+            "soc_na_kwh": 0.65,
+            "soc_voor_pct": 10.0,
+            "soc_na_pct": 21.2,
+            "winst_eur": -0.0638,
+            "warmte_penalty_eur": 0.001,
+            "c_waarde": 0.14,
+            "batterij_temp_voor_c": 26.71,
+            "batterij_temp_na_c": 27.11,
+            "buiten_temp_c": 20.9,
+            "temp_limiet_c": 36.0
+          },
+          {
+            "start": "2026-05-24T13:00:00+02:00",
+            "end": "2026-05-24T14:00:00+02:00",
+            "prijs_ct": 4.399,
+            "actie": "laden",
+            "vermogen_w": 2500,
+            "verwacht_vermogen_w": 2450,
+            "soc_voor_kwh": 0.65,
+            "soc_na_kwh": 2.9,
+            "soc_voor_pct": 21.2,
+            "soc_na_pct": 60.1,
+            "winst_eur": -0.1076,
+            "warmte_penalty_eur": 0.0424,
+            "c_waarde": 0.485,
+            "batterij_temp_voor_c": 27.11,
+            "batterij_temp_na_c": 31.82,
+            "buiten_temp_c": 20.9,
+            "temp_limiet_c": 36.0
+          },
+          {
+            "start": "2026-05-24T14:00:00+02:00",
+            "end": "2026-05-24T15:00:00+02:00",
+            "prijs_ct": 6.111,
+            "actie": "laden",
+            "vermogen_w": 2000,
+            "verwacht_vermogen_w": 1850,
+            "soc_voor_kwh": 2.9,
+            "soc_na_kwh": 4.6,
+            "soc_voor_pct": 60.1,
+            "soc_na_pct": 89.4,
+            "winst_eur": -0.113,
+            "warmte_penalty_eur": 0.0183,
+            "c_waarde": 0.367,
+            "batterij_temp_voor_c": 31.82,
+            "batterij_temp_na_c": 34.51,
+            "buiten_temp_c": 23.0,
+            "temp_limiet_c": 36.0,
+            "temp_limiet_actief": "true"
+          },
+          {
+            "start": "2026-05-24T15:00:00+02:00",
+            "end": "2026-05-24T16:00:00+02:00",
+            "prijs_ct": 10.728,
+            "actie": "rust",
+            "soc_voor_kwh": 4.6,
+            "soc_na_kwh": 4.6,
+            "soc_voor_pct": 89.4,
+            "soc_na_pct": 89.4,
+            "batterij_temp_voor_c": 34.51,
+            "batterij_temp_na_c": 33.66,
+            "buiten_temp_c": 23.0,
+            "temp_limiet_c": 36.0,
+            "temp_limiet_actief": "true"
+          },
+          {
+            "start": "2026-05-24T16:00:00+02:00",
+            "end": "2026-05-24T17:00:00+02:00",
+            "prijs_ct": 13.327,
+            "actie": "rust",
+            "soc_voor_kwh": 4.6,
+            "soc_na_kwh": 4.6,
+            "soc_voor_pct": 89.4,
+            "soc_na_pct": 89.4,
+            "batterij_temp_voor_c": 33.66,
+            "batterij_temp_na_c": 32.87,
+            "buiten_temp_c": 23.0,
+            "temp_limiet_c": 36.0,
+            "temp_limiet_actief": "true"
+          },
+          {
+            "start": "2026-05-24T17:00:00+02:00",
+            "end": "2026-05-24T18:00:00+02:00",
+            "prijs_ct": 15.09,
+            "actie": "rust",
+            "soc_voor_kwh": 4.6,
+            "soc_na_kwh": 4.6,
+            "soc_voor_pct": 89.4,
+            "soc_na_pct": 89.4,
+            "batterij_temp_voor_c": 32.87,
+            "batterij_temp_na_c": 32.16,
+            "buiten_temp_c": 23.4,
+            "temp_limiet_c": 36.0,
+            "temp_limiet_actief": "true"
+          },
+          {
+            "start": "2026-05-24T18:00:00+02:00",
+            "end": "2026-05-24T19:00:00+02:00",
+            "prijs_ct": 24.384,
+            "actie": "rust",
+            "soc_voor_kwh": 4.6,
+            "soc_na_kwh": 4.6,
+            "soc_voor_pct": 89.4,
+            "soc_na_pct": 89.4,
+            "batterij_temp_voor_c": 32.16,
+            "batterij_temp_na_c": 31.51,
+            "buiten_temp_c": 23.4,
+            "temp_limiet_c": 36.0,
+            "temp_limiet_actief": "true"
+          },
+          {
+            "start": "2026-05-24T19:00:00+02:00",
+            "end": "2026-05-24T20:00:00+02:00",
+            "prijs_ct": 29.684,
+            "actie": "ontladen",
+            "vermogen_w": 100,
+            "verwacht_vermogen_w": 100,
+            "soc_voor_kwh": 4.6,
+            "soc_na_kwh": 4.5,
+            "soc_voor_pct": 89.4,
+            "soc_na_pct": 87.7,
+            "winst_eur": 0.0273,
+            "c_waarde": 0.022,
+            "batterij_temp_voor_c": 31.51,
+            "batterij_temp_na_c": 31.52,
+            "buiten_temp_c": 23.4,
+            "temp_limiet_c": 36.0,
+            "temp_limiet_actief": "true"
+          },
+          {
+            "start": "2026-05-24T20:00:00+02:00",
+            "end": "2026-05-24T21:00:00+02:00",
+            "prijs_ct": 32.02,
+            "actie": "ontladen",
+            "vermogen_w": 1750,
+            "verwacht_vermogen_w": 1750,
+            "soc_voor_kwh": 4.5,
+            "soc_na_kwh": 2.6,
+            "soc_voor_pct": 87.7,
+            "soc_na_pct": 54.9,
+            "winst_eur": 0.5594,
+            "warmte_penalty_eur": 0.016,
+            "c_waarde": 0.41,
+            "batterij_temp_voor_c": 31.52,
+            "batterij_temp_na_c": 34.89,
+            "buiten_temp_c": 19.6,
+            "temp_limiet_c": 36.0
+          },
+          {
+            "start": "2026-05-24T21:00:00+02:00",
+            "end": "2026-05-24T22:00:00+02:00",
+            "prijs_ct": 31.956,
+            "actie": "ontladen",
+            "vermogen_w": 1500,
+            "verwacht_vermogen_w": 1475,
+            "soc_voor_kwh": 2.6,
+            "soc_na_kwh": 1.0,
+            "soc_voor_pct": 54.9,
+            "soc_na_pct": 27.3,
+            "winst_eur": 0.4701,
+            "warmte_penalty_eur": 0.0095,
+            "c_waarde": 0.345,
+            "batterij_temp_voor_c": 34.89,
+            "batterij_temp_na_c": 37.27,
+            "buiten_temp_c": 19.6,
+            "temp_limiet_c": 36.0
+          },
+          {
+            "start": "2026-05-24T22:00:00+02:00",
+            "end": "2026-05-24T23:00:00+02:00",
+            "prijs_ct": 30.492,
+            "actie": "ontladen",
+            "vermogen_w": 1000,
+            "verwacht_vermogen_w": 925,
+            "soc_voor_kwh": 1.0,
+            "soc_voor_pct": 27.3,
+            "soc_na_pct": 10.0,
+            "winst_eur": 0.2804,
+            "warmte_penalty_eur": 0.0023,
+            "c_waarde": 0.216,
+            "batterij_temp_voor_c": 37.27,
+            "batterij_temp_na_c": 38.2,
+            "buiten_temp_c": 19.6,
+            "temp_limiet_c": 36.0
+          },
+          {
+            "start": "2026-05-24T23:00:00+02:00",
+            "end": "2026-05-25T00:00:00+02:00",
+            "prijs_ct": 29.348,
+            "actie": "rust",
+            "soc_voor_pct": 10.0,
+            "soc_na_pct": 10.0,
+            "batterij_temp_voor_c": 38.2,
+            "batterij_temp_na_c": 36.46,
+            "buiten_temp_c": 14.7,
+            "temp_limiet_c": 36.0
+          }
+        ],
+        "laad_slots": 3,
+        "ontlaad_slots": 7,
+        "volgende_actie": "ontladen",
+        "volgende_start": "2026-05-23T20:00:00+02:00",
+        "accu_max_kwh": 4.635,
+        "eta": 0.919,
+        "min_spread_ct": 8.0,
+        "bijgewerkt": "2026-05-23T20:00:08.934157+02:00",
+        "spread_blokkades": [],
+        "last_changed": "2026-05-23T11:16:47.244279+00:00",
+        "last_reported": "2026-05-23T11:16:47.244279+00:00",
+        "last_updated": "2026-05-23T11:16:47.244279+00:00",
+        "context": {
+          "id": "01KSA8TKGC78PAVN6RPFQ0TJVE",
+          "user_id": "a60d3ec4fafc4c4dbff44cdd9a165546"
+        },
+        "accu_huidig_kwh": 4.524,
+        "warmte_penalty_factor": 1.5,
+        "warmte_penalty_laden_factor": 1.6,
+        "batterij_temp_start_c": 36.0,
+        "buiten_temp_bron": "onbekend",
+        "weather_entity": "weather.openweathermap",
+        "forecast_bron": "weather.get_forecasts",
+        "forecast_punten": 40,
+        "warmte_afkoeling_halveringstijd_h": 9.0,
+        "temp_limiet_c": 36.0,
+        "temp_soc_drempel_pct": 80.0,
+        "temp_penalty_factor": 1.0,
+        "warmte_penalty_ontladen_factor": 1.0,
+        "warmte_stijging_c_per_c2h": 20.0
+      },
+      "last_changed": "2026-05-23T18:00:08.984699+00:00",
+      "last_reported": "2026-05-23T18:00:08.984699+00:00",
+      "last_updated": "2026-05-23T18:00:08.984699+00:00",
+      "context": {
+        "id": "01KSAZX60RBDTTK3RV5KDWBV7H",
+        "parent_id": null,
+        "user_id": "a60d3ec4fafc4c4dbff44cdd9a165546"
+      }
+    },
+    "sensor.zendure_2400_ac_aantal_batterijen": {
+      "entity_id": "sensor.zendure_2400_ac_aantal_batterijen",
+      "state": "3",
+      "attributes": {
+        "icon": "mdi:flip-vertical",
+        "friendly_name": "Zendure 2400 AC Aantal Batterijen"
+      },
+      "last_changed": "2026-05-23T17:46:24.948959+00:00",
+      "last_reported": "2026-05-23T17:46:24.948959+00:00",
+      "last_updated": "2026-05-23T17:46:24.948959+00:00",
+      "context": {
+        "id": "01KSAZ419MH8C4Q64ASMANYVHP",
+        "parent_id": null,
+        "user_id": null
+      }
+    },
+    "input_text.zendure_2400_ac_batterij_volgorde": {
+      "entity_id": "input_text.zendure_2400_ac_batterij_volgorde",
+      "state": "",
+      "attributes": {
+        "editable": false,
+        "min": 0,
+        "max": 44,
+        "pattern": null,
+        "mode": "text",
+        "icon": "mdi:flip-vertical",
+        "friendly_name": "Zendure 2400 AC Batterij Volgorde"
+      },
+      "last_changed": "2026-05-21T17:31:10.503118+00:00",
+      "last_reported": "2026-05-21T17:31:10.503118+00:00",
+      "last_updated": "2026-05-21T17:31:10.503118+00:00",
+      "context": {
+        "id": "01KS5SEP97MB9EDWAC1T85MT3Q",
+        "parent_id": null,
+        "user_id": null
+      }
+    },
+    "sensor.zendure_2400_ac_warmste_batterij_temperatuur": {
+      "entity_id": "sensor.zendure_2400_ac_warmste_batterij_temperatuur",
+      "state": "36.0",
+      "attributes": {
+        "state_class": "measurement",
+        "unit_of_measurement": "°C",
+        "device_class": "temperature",
+        "icon": "mdi:thermometer-alert",
+        "friendly_name": "Zendure 2400 AC Warmste Batterij Temperatuur"
+      },
+      "last_changed": "2026-05-23T17:46:25.024882+00:00",
+      "last_reported": "2026-05-23T17:46:25.024882+00:00",
+      "last_updated": "2026-05-23T17:46:25.024882+00:00",
+      "context": {
+        "id": "01KSAZ419GT2EZE8KKZTHWBMZX",
+        "parent_id": null,
+        "user_id": null
+      }
+    },
+    "sensor.zendure_2400_ac_warmste_batterij_index": {
+      "entity_id": "sensor.zendure_2400_ac_warmste_batterij_index",
+      "state": "3",
+      "attributes": {
+        "icon": "mdi:battery-search",
+        "friendly_name": "Zendure 2400 AC Warmste Batterij Index"
+      },
+      "last_changed": "2026-05-23T17:46:25.025642+00:00",
+      "last_reported": "2026-05-23T17:46:25.025642+00:00",
+      "last_updated": "2026-05-23T17:46:25.025642+00:00",
+      "context": {
+        "id": "01KSAZ419GT2EZE8KKZTHWBMZX",
+        "parent_id": null,
+        "user_id": null
+      }
+    },
+    "sensor.zendure_2400_ac_batterij_1_temperatuur": {
+      "entity_id": "sensor.zendure_2400_ac_batterij_1_temperatuur",
+      "state": "30.0",
+      "attributes": {
+        "state_class": "measurement",
+        "unit_of_measurement": "°C",
+        "device_class": "temperature",
+        "icon": "mdi:thermometer",
+        "friendly_name": "Zendure 2400 AC Batterij 1 Temperatuur"
+      },
+      "last_changed": "2026-05-23T17:46:24.944388+00:00",
+      "last_reported": "2026-05-23T17:46:24.944388+00:00",
+      "last_updated": "2026-05-23T17:46:24.944388+00:00",
+      "context": {
+        "id": "01KSAZ419GT2EZE8KKZTHWBMZX",
+        "parent_id": null,
+        "user_id": null
+      }
+    },
+    "sensor.zendure_2400_ac_batterij_2_temperatuur": {
+      "entity_id": "sensor.zendure_2400_ac_batterij_2_temperatuur",
+      "state": "31.0",
+      "attributes": {
+        "state_class": "measurement",
+        "unit_of_measurement": "°C",
+        "device_class": "temperature",
+        "icon": "mdi:thermometer",
+        "friendly_name": "Zendure 2400 AC Batterij 2 Temperatuur"
+      },
+      "last_changed": "2026-05-23T18:05:55.232995+00:00",
+      "last_reported": "2026-05-23T18:05:55.232995+00:00",
+      "last_updated": "2026-05-23T18:05:55.232995+00:00",
+      "context": {
+        "id": "01KSB07R50MRGFJSN1ZHH27MR8",
+        "parent_id": null,
+        "user_id": null
+      }
+    },
+    "sensor.zendure_2400_ac_batterij_3_temperatuur": {
+      "entity_id": "sensor.zendure_2400_ac_batterij_3_temperatuur",
+      "state": "36.0",
+      "attributes": {
+        "state_class": "measurement",
+        "unit_of_measurement": "°C",
+        "device_class": "temperature",
+        "icon": "mdi:thermometer",
+        "friendly_name": "Zendure 2400 AC Batterij 3 Temperatuur"
+      },
+      "last_changed": "2026-05-23T17:46:24.945490+00:00",
+      "last_reported": "2026-05-23T17:46:24.945490+00:00",
+      "last_updated": "2026-05-23T17:46:24.945490+00:00",
+      "context": {
+        "id": "01KSAZ419H5C4FC4PXN7JGPQH4",
+        "parent_id": null,
+        "user_id": null
+      }
+    },
+    "sensor.zendure_2400_ac_batterij_4_temperatuur": {
+      "entity_id": "sensor.zendure_2400_ac_batterij_4_temperatuur",
+      "state": "unknown",
+      "attributes": {
+        "state_class": "measurement",
+        "unit_of_measurement": "°C",
+        "device_class": "temperature",
+        "icon": "mdi:thermometer",
+        "friendly_name": "Zendure 2400 AC Batterij 4 Temperatuur"
+      },
+      "last_changed": "2026-05-23T17:46:24.946282+00:00",
+      "last_reported": "2026-05-23T17:46:24.946282+00:00",
+      "last_updated": "2026-05-23T17:46:24.946282+00:00",
+      "context": {
+        "id": "01KSAZ419JN0N6QD97167C0GDK",
+        "parent_id": null,
+        "user_id": null
+      }
+    },
+    "sensor.zendure_2400_ac_batterij_5_temperatuur": {
+      "entity_id": "sensor.zendure_2400_ac_batterij_5_temperatuur",
+      "state": "unknown",
+      "attributes": {
+        "state_class": "measurement",
+        "unit_of_measurement": "°C",
+        "device_class": "temperature",
+        "icon": "mdi:thermometer",
+        "friendly_name": "Zendure 2400 AC Batterij 5 Temperatuur"
+      },
+      "last_changed": "2026-05-23T17:46:24.947142+00:00",
+      "last_reported": "2026-05-23T17:46:24.947142+00:00",
+      "last_updated": "2026-05-23T17:46:24.947142+00:00",
+      "context": {
+        "id": "01KSAZ419KZGP1VBRG7J0NJC9C",
+        "parent_id": null,
+        "user_id": null
+      }
+    },
+    "sensor.zendure_2400_ac_batterij_6_temperatuur": {
+      "entity_id": "sensor.zendure_2400_ac_batterij_6_temperatuur",
+      "state": "unknown",
+      "attributes": {
+        "state_class": "measurement",
+        "unit_of_measurement": "°C",
+        "device_class": "temperature",
+        "icon": "mdi:thermometer",
+        "friendly_name": "Zendure 2400 AC Batterij 6 Temperatuur"
+      },
+      "last_changed": "2026-05-23T17:46:24.947898+00:00",
+      "last_reported": "2026-05-23T17:46:24.947898+00:00",
+      "last_updated": "2026-05-23T17:46:24.947898+00:00",
+      "context": {
+        "id": "01KSAZ419KMXFR2A0DD7ATJB69",
+        "parent_id": null,
+        "user_id": null
+      }
+    },
+    "sensor.zendure_2400_ac_omvormer_temperatuur": {
+      "entity_id": "sensor.zendure_2400_ac_omvormer_temperatuur",
+      "state": "34.0",
+      "attributes": {
+        "state_class": "measurement",
+        "unit_of_measurement": "°C",
+        "device_class": "temperature",
+        "icon": "mdi:thermometer",
+        "friendly_name": "Zendure 2400 AC Omvormer Temperatuur"
+      },
+      "last_changed": "2026-05-23T17:46:24.953502+00:00",
+      "last_reported": "2026-05-23T17:46:24.953502+00:00",
+      "last_updated": "2026-05-23T17:46:24.953502+00:00",
+      "context": {
+        "id": "01KSAZ419SCYG7E8XSGR9AMY56",
+        "parent_id": null,
+        "user_id": null
+      }
+    },
+    "sensor.zendure_2400_ac_laadpercentage": {
+      "entity_id": "sensor.zendure_2400_ac_laadpercentage",
+      "state": "86",
+      "attributes": {
+        "state_class": "measurement",
+        "unit_of_measurement": "%",
+        "device_class": "battery",
+        "friendly_name": "Zendure 2400 AC Laadpercentage"
+      },
+      "last_changed": "2026-05-23T18:04:04.296479+00:00",
+      "last_reported": "2026-05-23T18:04:04.296479+00:00",
+      "last_updated": "2026-05-23T18:04:04.296479+00:00",
+      "context": {
+        "id": "01KSB04BT89CQBE2YFKTSB1RDF",
+        "parent_id": null,
+        "user_id": null
+      }
+    },
+    "sensor.zendure_2400_ac_minimale_laadpercentage": {
+      "entity_id": "sensor.zendure_2400_ac_minimale_laadpercentage",
+      "state": "10",
+      "attributes": {
+        "state_class": "measurement",
+        "unit_of_measurement": "%",
+        "device_class": "battery",
+        "icon": "mdi:battery-high",
+        "friendly_name": "Zendure 2400 AC Minimale Laadpercentage"
+      },
+      "last_changed": "2026-05-23T17:46:24.954397+00:00",
+      "last_reported": "2026-05-23T17:46:24.954397+00:00",
+      "last_updated": "2026-05-23T17:46:24.954397+00:00",
+      "context": {
+        "id": "01KSAZ419T8SXR17PMPQ0HEXV7",
+        "parent_id": null,
+        "user_id": null
+      }
+    },
+    "sensor.zendure_2400_ac_maximale_laadpercentage": {
+      "entity_id": "sensor.zendure_2400_ac_maximale_laadpercentage",
+      "state": "90",
+      "attributes": {
+        "state_class": "measurement",
+        "unit_of_measurement": "%",
+        "device_class": "battery",
+        "icon": "mdi:battery-high",
+        "friendly_name": "Zendure 2400 AC Maximale Laadpercentage"
+      },
+      "last_changed": "2026-05-23T17:46:24.954805+00:00",
+      "last_reported": "2026-05-23T17:46:24.954805+00:00",
+      "last_updated": "2026-05-23T17:46:24.954805+00:00",
+      "context": {
+        "id": "01KSAZ419TQ8YWAE2T4KEW23K9",
+        "parent_id": null,
+        "user_id": null
+      }
+    },
+    "sensor.zendure_2400_ac_totale_capaciteit": {
+      "entity_id": "sensor.zendure_2400_ac_totale_capaciteit",
+      "state": "5.76",
+      "attributes": {
+        "unit_of_measurement": "kWh",
+        "icon": "mdi:flip-vertical",
+        "friendly_name": "Zendure 2400 AC Totale Capaciteit"
+      },
+      "last_changed": "2026-05-23T17:46:24.929292+00:00",
+      "last_reported": "2026-05-23T17:46:24.929292+00:00",
+      "last_updated": "2026-05-23T17:46:24.929292+00:00",
+      "context": {
+        "id": "01KSAZ4191855Y1NX282N35ET7",
+        "parent_id": null,
+        "user_id": null
+      }
+    },
+    "sensor.zendure_2400_ac_indicatie_beschikbare_energie": {
+      "entity_id": "sensor.zendure_2400_ac_indicatie_beschikbare_energie",
+      "state": "4.05",
+      "attributes": {
+        "totale_capaciteit_kwh": 5.76,
+        "indicatie_beschikbare_energie_(zonder_verlies)": 4.38,
+        "bruikbaar_percentage": "76.0 %",
+        "gebruikte_export_efficiëntie": "92.6 %",
+        "bron_export_efficiëntie": "Export efficiëntie 24u gemiddelde",
+        "unit_of_measurement": "kWh",
+        "device_class": "energy",
+        "icon": "mdi:lightning-bolt-circle",
+        "friendly_name": "Zendure 2400 AC Indicatie Beschikbare Energie"
+      },
+      "last_changed": "2026-05-23T18:04:04.325214+00:00",
+      "last_reported": "2026-05-23T18:04:04.325214+00:00",
+      "last_updated": "2026-05-23T18:04:04.325214+00:00",
+      "context": {
+        "id": "01KSB04BT89CQBE2YFKTSB1RDF",
+        "parent_id": null,
+        "user_id": null
+      }
+    },
+    "sensor.zendure_2400_ac_indicatie_benodigde_energie": {
+      "entity_id": "sensor.zendure_2400_ac_indicatie_benodigde_energie",
+      "state": "0.25",
+      "attributes": {
+        "totale_capaciteit_kwh": 5.76,
+        "indicatie_benodigde_energie_(zonder_verlies)": 0.23,
+        "benodigd_percentage": "4.0 %",
+        "gebruikte_import_efficiëntie": "93.2 %",
+        "bron_import_efficiëntie": "Import efficiëntie 24u gemiddelde",
+        "unit_of_measurement": "kWh",
+        "device_class": "energy",
+        "icon": "mdi:lightning-bolt-circle",
+        "friendly_name": "Zendure 2400 AC Indicatie Benodigde Energie"
+      },
+      "last_changed": "2026-05-23T18:04:04.326326+00:00",
+      "last_reported": "2026-05-23T18:04:04.326326+00:00",
+      "last_updated": "2026-05-23T18:04:04.326326+00:00",
+      "context": {
+        "id": "01KSB04BT89CQBE2YFKTSB1RDF",
+        "parent_id": null,
+        "user_id": null
+      }
+    },
+    "sensor.zendure_2400_ac_rte_totaal": {
+      "entity_id": "sensor.zendure_2400_ac_rte_totaal",
+      "state": "84.62",
+      "attributes": {
+        "state_class": "measurement",
+        "unit_of_measurement": "%",
+        "icon": "mdi:percent-box",
+        "friendly_name": "Zendure 2400 AC RTE Totaal"
+      },
+      "last_changed": "2026-05-23T18:05:45.261870+00:00",
+      "last_reported": "2026-05-23T18:05:45.261870+00:00",
+      "last_updated": "2026-05-23T18:05:45.261870+00:00",
+      "context": {
+        "id": "01KSB07ED8ZPNETRPS4XQZSANX",
+        "parent_id": null,
+        "user_id": null
+      }
+    },
+    "sensor.zendure_2400_ac_vermogen_aansturing": {
+      "entity_id": "sensor.zendure_2400_ac_vermogen_aansturing",
+      "state": "-1500.0",
+      "attributes": {
+        "state_class": "measurement",
+        "unit_of_measurement": "W",
+        "device_class": "power",
+        "icon": "mdi:battery-charging-50",
+        "friendly_name": "Zendure 2400 AC Vermogen Aansturing"
+      },
+      "last_changed": "2026-05-23T18:05:50.251535+00:00",
+      "last_reported": "2026-05-23T18:05:50.251535+00:00",
+      "last_updated": "2026-05-23T18:05:50.251535+00:00",
+      "context": {
+        "id": "01KSB07K9BPN87NGBTND2V7WYN",
+        "parent_id": null,
+        "user_id": null
+      }
+    },
+    "sensor.zendure_2400_ac_ingesteld_oplaadvermogen": {
+      "entity_id": "sensor.zendure_2400_ac_ingesteld_oplaadvermogen",
+      "state": "0",
+      "attributes": {
+        "state_class": "measurement",
+        "unit_of_measurement": "W",
+        "device_class": "power",
+        "friendly_name": "Zendure 2400 AC Ingesteld Oplaadvermogen"
+      },
+      "last_changed": "2026-05-23T17:46:24.960170+00:00",
+      "last_reported": "2026-05-23T17:46:24.960170+00:00",
+      "last_updated": "2026-05-23T17:46:24.960170+00:00",
+      "context": {
+        "id": "01KSAZ41A0M437T4Q53GKP34C3",
+        "parent_id": null,
+        "user_id": null
+      }
+    },
+    "sensor.zendure_2400_ac_ingesteld_ontlaadvermogen": {
+      "entity_id": "sensor.zendure_2400_ac_ingesteld_ontlaadvermogen",
+      "state": "1500",
+      "attributes": {
+        "state_class": "measurement",
+        "unit_of_measurement": "W",
+        "device_class": "power",
+        "friendly_name": "Zendure 2400 AC Ingesteld Ontlaadvermogen"
+      },
+      "last_changed": "2026-05-23T18:02:46.302464+00:00",
+      "last_reported": "2026-05-23T18:02:46.302464+00:00",
+      "last_updated": "2026-05-23T18:02:46.302464+00:00",
+      "context": {
+        "id": "01KSB01ZMYP6C4AYPGAA4ZV6N4",
+        "parent_id": null,
+        "user_id": null
+      }
+    },
+    "input_number.zendure_2400_ac_max_oplaadvermogen": {
+      "entity_id": "input_number.zendure_2400_ac_max_oplaadvermogen",
+      "state": "3000.0",
+      "attributes": {
+        "initial": null,
+        "editable": false,
+        "min": 400.0,
+        "max": 7200.0,
+        "step": 1.0,
+        "mode": "box",
+        "unit_of_measurement": "W",
+        "icon": "mdi:format-vertical-align-top",
+        "friendly_name": "Zendure 2400 AC Max. Oplaadvermogen"
+      },
+      "last_changed": "2026-05-23T13:38:30.498978+00:00",
+      "last_reported": "2026-05-23T13:38:30.498978+00:00",
+      "last_updated": "2026-05-23T13:38:30.498978+00:00",
+      "context": {
+        "id": "01KSAGY3F2JS21EBPSTXRBN8Y0",
+        "parent_id": null,
+        "user_id": "9eb3376ed1de4a269966b44dcdcbb70f"
+      }
+    },
+    "input_number.zendure_2400_ac_max_ontlaadvermogen": {
+      "entity_id": "input_number.zendure_2400_ac_max_ontlaadvermogen",
+      "state": "2400.0",
+      "attributes": {
+        "initial": null,
+        "editable": false,
+        "min": 400.0,
+        "max": 7200.0,
+        "step": 1.0,
+        "mode": "box",
+        "unit_of_measurement": "W",
+        "icon": "mdi:format-vertical-align-bottom",
+        "friendly_name": "Zendure 2400 AC Max. Ontlaadvermogen"
+      },
+      "last_changed": "2026-05-21T17:31:10.508433+00:00",
+      "last_reported": "2026-05-21T17:31:10.508433+00:00",
+      "last_updated": "2026-05-21T17:31:10.508433+00:00",
+      "context": {
+        "id": "01KS5SEP9CBYA8MA5PWVBM58ZF",
+        "parent_id": null,
+        "user_id": null
+      }
+    },
+    "sensor.zendure_2400_ac_modus": {
+      "entity_id": "sensor.zendure_2400_ac_modus",
+      "state": "Ontladen",
+      "attributes": {
+        "icon": "mdi:battery-minus-variant",
+        "friendly_name": "Zendure 2400 AC Modus"
+      },
+      "last_changed": "2026-05-23T18:00:09.375280+00:00",
+      "last_reported": "2026-05-23T18:00:09.375280+00:00",
+      "last_updated": "2026-05-23T18:00:09.375280+00:00",
+      "context": {
+        "id": "01KSAZX6CZWSS2Q6BSAH7Z9KV6",
+        "parent_id": null,
+        "user_id": null
+      }
+    },
+    "sensor.zendure_2400_ac_opslagmodus": {
+      "entity_id": "sensor.zendure_2400_ac_opslagmodus",
+      "state": "Opslaan in RAM",
+      "attributes": {
+        "icon": "mdi:floppy",
+        "friendly_name": "Zendure 2400 AC Opslagmodus"
+      },
+      "last_changed": "2026-05-23T18:00:04.409859+00:00",
+      "last_reported": "2026-05-23T18:00:04.409859+00:00",
+      "last_updated": "2026-05-23T18:00:04.409859+00:00",
+      "context": {
+        "id": "01KSAZX1HSRKFNKK7N82NV47HS",
+        "parent_id": null,
+        "user_id": null
+      }
+    },
+    "sensor.zendure_2400_ac_error": {
+      "entity_id": "sensor.zendure_2400_ac_error",
+      "state": "Geen meldingen",
+      "attributes": {
+        "icon": "mdi:battery-alert",
+        "friendly_name": "Zendure 2400 AC Error"
+      },
+      "last_changed": "2026-05-23T17:46:24.955844+00:00",
+      "last_reported": "2026-05-23T17:46:24.955844+00:00",
+      "last_updated": "2026-05-23T17:46:24.955844+00:00",
+      "context": {
+        "id": "01KSAZ419V7WFQMWJ62ESQKYD3",
+        "parent_id": null,
+        "user_id": null
+      }
+    },
+    "sensor.zendure_2400_ac_kalibreren": {
+      "entity_id": "sensor.zendure_2400_ac_kalibreren",
+      "state": "Nee",
+      "attributes": {
+        "icon": "mdi:battery-heart-variant",
+        "friendly_name": "Zendure 2400 AC Kalibreren"
+      },
+      "last_changed": "2026-05-23T17:46:24.958781+00:00",
+      "last_reported": "2026-05-23T17:46:24.958781+00:00",
+      "last_updated": "2026-05-23T17:46:24.958781+00:00",
+      "context": {
+        "id": "01KSAZ419YRP15ZH377DSSC02K",
+        "parent_id": null,
+        "user_id": null
+      }
+    },
+    "input_text.dynamisch_buitentemperatuur_sensor": {
+      "entity_id": "input_text.dynamisch_buitentemperatuur_sensor",
+      "state": "",
+      "attributes": {
+        "editable": false,
+        "min": 0,
+        "max": 120,
+        "pattern": null,
+        "mode": "text",
+        "icon": "mdi:thermometer",
+        "friendly_name": "Dynamisch Actuele Buitentemperatuur Sensor"
+      },
+      "last_changed": "2026-05-23T15:51:40.184999+00:00",
+      "last_reported": "2026-05-23T16:50:41.270432+00:00",
+      "last_updated": "2026-05-23T16:50:41.270432+00:00",
+      "context": {
+        "id": "01KSAVXZZPTTT2A4HNPSF5P4KV",
+        "parent_id": null,
+        "user_id": null
+      }
+    },
+    "sensor.buienradar_temperature": {
+      "entity_id": "sensor.buienradar_temperature",
+      "state": "22.1",
+      "attributes": {
+        "state_class": "measurement",
+        "attribution": "Data provided by buienradar.nl",
+        "Stationname": "Schiphol (6240)",
+        "Measured": "Sat May 23 19:40:00 2026",
+        "unit_of_measurement": "°C",
+        "device_class": "temperature",
+        "friendly_name": "Temperature"
+      },
+      "last_changed": "2026-05-23T18:00:47.849880+00:00",
+      "last_reported": "2026-05-23T18:00:47.849880+00:00",
+      "last_updated": "2026-05-23T18:00:47.849880+00:00",
+      "context": {
+        "id": "01KSAZYBZ9AAXN6B1ZSPT28E6A",
+        "parent_id": null,
+        "user_id": null
+      }
+    },
+    "input_text.dynamisch_weather_entity": {
+      "entity_id": "input_text.dynamisch_weather_entity",
+      "state": "weather.openweathermap",
+      "attributes": {
+        "editable": false,
+        "min": 0,
+        "max": 120,
+        "pattern": null,
+        "mode": "text",
+        "icon": "mdi:weather-partly-cloudy",
+        "friendly_name": "Dynamisch Forecast Weather Entity"
+      },
+      "last_changed": "2026-05-23T15:47:43.030144+00:00",
+      "last_reported": "2026-05-23T16:50:41.271807+00:00",
+      "last_updated": "2026-05-23T16:50:41.271807+00:00",
+      "context": {
+        "id": "01KSAVXZZQGXNFEY8CDAMN1503",
+        "parent_id": null,
+        "user_id": null
+      }
+    },
+    "weather.openweathermap": {
+      "entity_id": "weather.openweathermap",
+      "state": "unknown",
+      "attributes": {
+        "temperature_unit": "°C",
+        "pressure_unit": "hPa",
+        "wind_speed_unit": "km/h",
+        "visibility_unit": "km",
+        "precipitation_unit": "mm",
+        "attribution": "Data provided by OpenWeatherMap",
+        "friendly_name": "OpenWeatherMap",
+        "supported_features": 2
+      },
+      "last_changed": "2026-05-23T14:39:49.608691+00:00",
+      "last_reported": "2026-05-23T14:39:49.609317+00:00",
+      "last_updated": "2026-05-23T14:39:49.608691+00:00",
+      "context": {
+        "id": "01KSAMECB8F394TXGPK776D1WX",
+        "parent_id": null,
+        "user_id": null
+      }
+    },
+    "input_number.dynamisch_warmte_penalty_laden_factor": {
+      "entity_id": "input_number.dynamisch_warmte_penalty_laden_factor",
+      "state": "1.6",
+      "attributes": {
+        "initial": null,
+        "editable": false,
+        "min": 0.0,
+        "max": 10.0,
+        "step": 0.1,
+        "mode": "slider",
+        "icon": "mdi:thermometer-lines",
+        "friendly_name": "Dynamisch C-waarde Penalty Laden Factor"
+      },
+      "last_changed": "2026-05-23T17:59:29.209159+00:00",
+      "last_reported": "2026-05-23T17:59:29.209159+00:00",
+      "last_updated": "2026-05-23T17:59:29.209159+00:00",
+      "context": {
+        "id": "01KSAZVZ5R1Q8WJJYMXK07RPW1",
+        "parent_id": null,
+        "user_id": "9eb3376ed1de4a269966b44dcdcbb70f"
+      }
+    },
+    "input_number.dynamisch_warmte_penalty_ontladen_factor": {
+      "entity_id": "input_number.dynamisch_warmte_penalty_ontladen_factor",
+      "state": "1.0",
+      "attributes": {
+        "initial": null,
+        "editable": false,
+        "min": 0.0,
+        "max": 10.0,
+        "step": 0.1,
+        "mode": "slider",
+        "icon": "mdi:thermometer-chevron-down",
+        "friendly_name": "Dynamisch C-waarde Penalty Ontladen Factor"
+      },
+      "last_changed": "2026-05-23T16:13:19.583695+00:00",
+      "last_reported": "2026-05-23T16:50:41.275129+00:00",
+      "last_updated": "2026-05-23T16:50:41.275129+00:00",
+      "context": {
+        "id": "01KSAVXZZV1FYNPX370MB16FTR",
+        "parent_id": null,
+        "user_id": null
+      }
+    },
+    "input_number.dynamisch_warmte_afkoeling_halveringstijd_uren": {
+      "entity_id": "input_number.dynamisch_warmte_afkoeling_halveringstijd_uren",
+      "state": "9.0",
+      "attributes": {
+        "initial": null,
+        "editable": false,
+        "min": 0.25,
+        "max": 24.0,
+        "step": 0.25,
+        "mode": "slider",
+        "icon": "mdi:coolant-temperature",
+        "friendly_name": "Dynamisch Packtemp Afkoel Halveringstijd"
+      },
+      "last_changed": "2026-05-23T17:56:48.500619+00:00",
+      "last_reported": "2026-05-23T17:56:48.500619+00:00",
+      "last_updated": "2026-05-23T17:56:48.500619+00:00",
+      "context": {
+        "id": "01KSAZQ27K6C0FN155VK9DQPDH",
+        "parent_id": null,
+        "user_id": "9eb3376ed1de4a269966b44dcdcbb70f"
+      }
+    },
+    "input_number.dynamisch_warmte_stijging_c_per_c2h": {
+      "entity_id": "input_number.dynamisch_warmte_stijging_c_per_c2h",
+      "state": "20.0",
+      "attributes": {
+        "initial": null,
+        "editable": false,
+        "min": 0.0,
+        "max": 20.0,
+        "step": 0.25,
+        "mode": "slider",
+        "icon": "mdi:heat-wave",
+        "friendly_name": "Dynamisch Packtemp Warmte Stijging Per C2h"
+      },
+      "last_changed": "2026-05-23T16:57:31.386191+00:00",
+      "last_reported": "2026-05-23T16:57:31.386191+00:00",
+      "last_updated": "2026-05-23T16:57:31.386191+00:00",
+      "context": {
+        "id": "01KSAWAGFS1AQVA8FXRRRMEH7Y",
+        "parent_id": null,
+        "user_id": "9eb3376ed1de4a269966b44dcdcbb70f"
+      }
+    },
+    "input_number.dynamisch_max_temp_boven_80_soc": {
+      "entity_id": "input_number.dynamisch_max_temp_boven_80_soc",
+      "state": "36.0",
+      "attributes": {
+        "initial": null,
+        "editable": false,
+        "min": 25.0,
+        "max": 50.0,
+        "step": 0.5,
+        "mode": "slider",
+        "icon": "mdi:thermometer-alert",
+        "friendly_name": "Dynamisch Packtemp Limiet Boven 80% SoC"
+      },
+      "last_changed": "2026-05-23T16:10:08.154683+00:00",
+      "last_reported": "2026-05-23T16:50:41.276198+00:00",
+      "last_updated": "2026-05-23T16:50:41.276198+00:00",
+      "context": {
+        "id": "01KSAVXZZWWEXE3QK3EASV4RFE",
+        "parent_id": null,
+        "user_id": null
+      }
+    },
+    "input_number.dynamisch_temp_penalty_factor": {
+      "entity_id": "input_number.dynamisch_temp_penalty_factor",
+      "state": "1.0",
+      "attributes": {
+        "initial": null,
+        "editable": false,
+        "min": 0.0,
+        "max": 10.0,
+        "step": 0.1,
+        "mode": "slider",
+        "icon": "mdi:thermometer-chevron-up",
+        "friendly_name": "Dynamisch Packtemp Overschrijding Penalty Factor"
+      },
+      "last_changed": "2026-05-23T16:10:23.373995+00:00",
+      "last_reported": "2026-05-23T16:50:41.276702+00:00",
+      "last_updated": "2026-05-23T16:50:41.276702+00:00",
+      "context": {
+        "id": "01KSAVXZZW530XXNGK2Y6HBJ3R",
+        "parent_id": null,
+        "user_id": null
+      }
+    },
+    "input_number.dynamisch_minimale_spread": {
+      "entity_id": "input_number.dynamisch_minimale_spread",
+      "state": "8.0",
+      "attributes": {
+        "initial": null,
+        "editable": false,
+        "min": 0.0,
+        "max": 100.0,
+        "step": 1.0,
+        "mode": "box",
+        "unit_of_measurement": "ct/kWh",
+        "icon": "mdi:cash",
+        "friendly_name": "Dynamisch Minimale Spread"
+      },
+      "last_changed": "2026-05-21T17:31:10.510329+00:00",
+      "last_reported": "2026-05-21T17:31:10.510329+00:00",
+      "last_updated": "2026-05-21T17:31:10.510329+00:00",
+      "context": {
+        "id": "01KS5SEP9EFJXWPM21FE731144",
+        "parent_id": null,
+        "user_id": null
+      }
+    }
+  }
+}

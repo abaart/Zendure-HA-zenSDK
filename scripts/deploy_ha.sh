@@ -19,13 +19,15 @@ Environment variables:
   HA_SSH_USER                 Optioneel. SSH-gebruiker. Default: root
   HA_SSH_PORT                 Optioneel. SSH-poort. Default: 22
   HA_CONFIG_DIR               Optioneel. Home Assistant config-map. Default: /config
+  HA_URL                      Optioneel. Home Assistant URL. Default: http://HA_SSH_HOST:8123
+  HA_TOKEN                    Verplicht voor HA reload. Long-lived access token uit Home Assistant.
   HA_APPDAEMON_ADDON_SLUG     Optioneel. AppDaemon app slug. Default: a0d7b954_appdaemon
 
 Het script leest eerst .env uit de repo-root wanneer dat bestand bestaat.
 
 Opties:
   --dry-run       Toon welke bestanden rsync zou kopieren. Voer geen HA check, HA reload, of AppDaemon restart uit.
-  --no-restart    Kopieer bestanden maar herstart AppDaemon niet.
+  --no-restart    Kopieer bestanden, check config, reload Home Assistant YAML, maar herstart AppDaemon niet.
   -h, --help      Toon deze hulptekst.
 EOF
 }
@@ -64,6 +66,8 @@ HA_SSH_HOST="${HA_SSH_HOST:-}"
 HA_SSH_USER="${HA_SSH_USER:-root}"
 HA_SSH_PORT="${HA_SSH_PORT:-22}"
 HA_CONFIG_DIR="${HA_CONFIG_DIR:-/config}"
+HA_URL="${HA_URL:-http://${HA_SSH_HOST}:8123}"
+HA_TOKEN="${HA_TOKEN:-}"
 HA_APPDAEMON_ADDON_SLUG="${HA_APPDAEMON_ADDON_SLUG:-a0d7b954_appdaemon}"
 
 if [[ -z "${HA_SSH_HOST}" ]]; then
@@ -139,20 +143,31 @@ sync_apps_yaml_section() {
 
 check_and_reload_home_assistant() {
   if [[ "${DRY_RUN}" -eq 1 ]]; then
-    echo "Home Assistant config check en reload overgeslagen door --dry-run."
+    echo "Home Assistant config check en YAML reload overgeslagen door --dry-run."
     return
+  fi
+
+  if [[ -z "${HA_TOKEN}" ]]; then
+    echo "HA_TOKEN is verplicht voor Home Assistant YAML reload. Maak in Home Assistant een long-lived access token en zet HA_TOKEN in .env." >&2
+    exit 1
   fi
 
   echo "Controleer Home Assistant YAML-configuratie."
   remote_run "ha core check"
 
-  echo "Reload Home Assistant configuratie."
-  remote_run "ha core reload"
+  echo "Reload Home Assistant YAML-configuratie via ${HA_URL}."
+  curl -fsS \
+    -X POST \
+    -H "Authorization: Bearer ${HA_TOKEN}" \
+    -H "Content-Type: application/json" \
+    "${HA_URL%/}/api/services/homeassistant/reload_all" \
+    >/dev/null
 }
 
 require_command ssh
 require_command rsync
 require_command python3
+require_command curl
 
 echo "Deploy naar ${HA_SSH_USER}@${HA_SSH_HOST}:${HA_CONFIG_DIR}"
 
