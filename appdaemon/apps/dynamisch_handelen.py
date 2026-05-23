@@ -79,9 +79,9 @@ class DynamischHandelen(hass.Hass):
     def initialize(self):
         """
         AppDaemon roept initialize() aan bij opstarten en na een reload.
-        We registreren hier één dagelijkse taak en één knoptrigger.
+        We registreren hier twee uurlijkse taken en knop/config-triggers.
         """
-        self.log("Dynamisch Handelen: gestart, schema wordt dagelijks om 14:35 herberekend")
+        self.log("Dynamisch Handelen: gestart, schema wordt elk uur om :15 en :45 herberekend")
         self._berekening_bezig = False
         self._herberekening_gepland = False
         self._laatste_herberekening_kwargs = None
@@ -89,7 +89,8 @@ class DynamischHandelen(hass.Hass):
         self._zet_berekening_bezig(False)
         self._initialiseer_berekening_duur_sensor()
         self._initialiseer_advies_sensor()
-        self.run_daily(self.bereken_strategie, time(14, 35, 0))
+        self.run_hourly(self.bereken_strategie, time(0, 15, 0))
+        self.run_hourly(self.bereken_strategie, time(0, 45, 0))
         self.run_daily(self.bereken_strategie_advies, time(14, 50, 0))
         self.listen_state(
             self._herbereken_op_knop,
