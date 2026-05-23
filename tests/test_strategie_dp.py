@@ -472,6 +472,55 @@ class TestMinimaleSpread:
         assert met_penalty[0]["warmte_penalty_eur"] > 0
         assert zonder_penalty[0]["warmte_penalty_eur"] == 0.0
 
+    def test_thermisch_model_publiceert_temperatuurvelden(self):
+        slots = maak_slots([0.01, 0.50])
+        for slot in slots:
+            slot["buiten_temp_c"] = 30.0
+
+        schema = los_dp_op(
+            slots,
+            maak_accu(huidig_kwh=0.0),
+            plateau_spreiding=False,
+            batterij_temp_start_c=32.0,
+            temp_limiet_c=35.0,
+        )
+
+        eerste = schema[0]
+        assert "batterij_temp_voor_c" in eerste
+        assert "batterij_temp_na_c" in eerste
+        assert "buiten_temp_c" in eerste
+        assert "c_waarde" in eerste
+        assert "temp_penalty_eur" in eerste
+        assert "temp_limiet_actief" in eerste
+
+    def test_thermisch_model_beperkt_laden_bij_warme_hoge_soc(self):
+        slots_zonder_penalty = maak_slots([0.01, 1.00])
+        slots_met_penalty = maak_slots([0.01, 1.00])
+        for slot in slots_zonder_penalty + slots_met_penalty:
+            slot["buiten_temp_c"] = 40.0
+
+        accu = maak_accu(huidig_kwh=1.8, max_kwh=2.4)
+        zonder_penalty = los_dp_op(
+            slots_zonder_penalty,
+            accu,
+            plateau_spreiding=False,
+            batterij_temp_start_c=40.0,
+            temp_limiet_c=35.0,
+            temp_penalty_factor=0.0,
+        )
+        met_penalty = los_dp_op(
+            slots_met_penalty,
+            accu,
+            plateau_spreiding=False,
+            batterij_temp_start_c=40.0,
+            temp_limiet_c=35.0,
+            temp_penalty_factor=1.0,
+        )
+
+        assert zonder_penalty[0]["soc_na_pct"] > 80.0
+        assert met_penalty[0]["soc_na_pct"] <= 80.0
+        assert met_penalty[0]["vermogen_w"] < zonder_penalty[0]["vermogen_w"]
+
 
 # ── DERATING EFFECT ───────────────────────────────────────────────────────────
 

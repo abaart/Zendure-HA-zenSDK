@@ -24,7 +24,7 @@ Environment variables:
 Het script leest eerst .env uit de repo-root wanneer dat bestand bestaat.
 
 Opties:
-  --dry-run       Toon welke bestanden rsync zou kopieren. Herstart AppDaemon niet.
+  --dry-run       Toon welke bestanden rsync zou kopieren. Voer geen HA check, HA reload, of AppDaemon restart uit.
   --no-restart    Kopieer bestanden maar herstart AppDaemon niet.
   -h, --help      Toon deze hulptekst.
 EOF
@@ -137,6 +137,19 @@ sync_apps_yaml_section() {
   rm -rf "${temp_dir}"
 }
 
+check_and_reload_home_assistant() {
+  if [[ "${DRY_RUN}" -eq 1 ]]; then
+    echo "Home Assistant config check en reload overgeslagen door --dry-run."
+    return
+  fi
+
+  echo "Controleer Home Assistant YAML-configuratie."
+  remote_run "ha core check"
+
+  echo "Reload Home Assistant configuratie."
+  remote_run "ha core reload"
+}
+
 require_command ssh
 require_command rsync
 require_command python3
@@ -148,6 +161,8 @@ sync_file "appdaemon/apps/dynamisch_handelen.py" "appdaemon/apps/dynamisch_hande
 sync_file "appdaemon/apps/strategie_dp.py" "appdaemon/apps/strategie_dp.py"
 sync_file "Dutch (NL) Integration/packages/zendure_gielz1986_nl.yaml" "packages/zendure_gielz1986_nl.yaml"
 sync_file "Dutch (NL) Integration/packages/zendure_local_nl.yaml" "packages/zendure_local_nl.yaml"
+
+check_and_reload_home_assistant
 
 if [[ "${RESTART_APPDAEMON}" -eq 1 ]]; then
   echo "Herstart AppDaemon app: ${HA_APPDAEMON_ADDON_SLUG}"

@@ -26,7 +26,13 @@ Ingangen:
   input_number.dynamisch_minimale_spread                 minimale spread (ct/kWh)
   input_number.dynamisch_warmte_penalty_laden_factor     gewicht voor warmteverlies bij laden
   input_number.dynamisch_warmte_penalty_ontladen_factor  gewicht voor warmteverlies bij ontladen
+  input_number.dynamisch_warmte_afkoeling_halveringstijd_uren  afkoeling richting buitentemperatuur
+  input_number.dynamisch_max_temp_boven_80_soc            packtemperatuurlimiet boven 80% SoC
+  input_number.dynamisch_temp_penalty_factor              gewicht voor temperatuur-overschrijding
+  input_text.dynamisch_buitentemperatuur_sensor           optionele sensor met actuele buitentemperatuur
+  input_text.dynamisch_weather_entity                     optionele weather entity voor forecast
   input_button.dynamisch_handelsstrategie_herberekenen   knop voor handmatige herberekening
+  input_boolean.dynamisch_handelsstrategie_berekening_bezig  laadstatus voor dashboardknop
 
 Uitgang:
   sensor.dynamisch_handelsstrategie   verwachte winst (€) + volledig schema als attribuut
@@ -54,6 +60,9 @@ class DynamischHandelen(hass.Hass):
         We registreren hier één dagelijkse taak en één knoptrigger.
         """
         self.log("Dynamisch Handelen: gestart, schema wordt dagelijks om 14:35 herberekend")
+        self._berekening_bezig = False
+        self._herberekening_gepland = False
+        self._zet_berekening_bezig(False)
         self.run_daily(self.bereken_strategie, time(14, 35, 0))
         self.listen_state(
             self._herbereken_op_knop,
@@ -67,6 +76,14 @@ class DynamischHandelen(hass.Hass):
             self._herbereken_op_config,
             "input_number.dynamisch_warmte_penalty_ontladen_factor",
         )
+        for entity in (
+            "input_number.dynamisch_warmte_afkoeling_halveringstijd_uren",
+            "input_number.dynamisch_max_temp_boven_80_soc",
+            "input_number.dynamisch_temp_penalty_factor",
+            "input_text.dynamisch_buitentemperatuur_sensor",
+            "input_text.dynamisch_weather_entity",
+        ):
+            self.listen_state(self._herbereken_op_config, entity)
 
     # ── HOOFDFUNCTIE ─────────────────────────────────────────────────────────
 
@@ -84,6 +101,48 @@ class DynamischHandelen(hass.Hass):
         self.bereken_strategie({"trigger": entity})
 
     def bereken_strategie(self, kwargs):
+        """
+        Zet de dashboardknop op loading terwijl _bereken_strategie_impl() rekent.
+        Extra triggers tijdens een lopende berekening plannen één nieuwe run.
+        """
+        if self._berekening_bezig:
+            self._herberekening_gepland = True
+            self.log(
+                "Dynamisch Handelen: berekening loopt al; extra herberekening ingepland",
+                level="INFO",
+            )
+            return
+
+        self._berekening_bezig = True
+        self._zet_berekening_bezig(True)
+        try:
+            self._bereken_strategie_impl(kwargs)
+        finally:
+            self._berekening_bezig = False
+            self._zet_berekening_bezig(False)
+            if self._herberekening_gepland:
+                self._herberekening_gepland = False
+                self.run_in(self._voer_geplande_herberekening_uit, 1)
+
+    def _voer_geplande_herberekening_uit(self, kwargs):
+        """Voert één extra herberekening uit na triggers tijdens een lopende run."""
+        self.bereken_strategie({"trigger": "geplande_herberekening"})
+
+    def _zet_berekening_bezig(self, bezig: bool) -> None:
+        """Stuurt de dashboard-helper voor de loading state van de refreshknop."""
+        service = "input_boolean/turn_on" if bezig else "input_boolean/turn_off"
+        try:
+            self.call_service(
+                service,
+                entity_id="input_boolean.dynamisch_handelsstrategie_berekening_bezig",
+            )
+        except Exception as exc:
+            self.log(
+                f"Dynamisch Handelen: kon loading-helper niet bijwerken: {exc}",
+                level="DEBUG",
+            )
+
+    def _bereken_strategie_impl(self, kwargs):
         """
         Haalt data op, berekent de strategie en publiceert het resultaat.
         Fouten worden gelogd maar laten AppDaemon verder draaien.
@@ -122,6 +181,7 @@ class DynamischHandelen(hass.Hass):
         warmte_penalty_laden_factor = self._haal_warmte_penalty_laden_factor()
         warmte_penalty_ontladen_factor = self._haal_warmte_penalty_ontladen_factor()
         plateau_spreiding = self._haal_plateau_spreiding()
+        thermisch = self._haal_thermische_config(slots)
 
         self.log(
             f"Dynamisch Handelen: {len(slots)} slots | "
@@ -131,7 +191,9 @@ class DynamischHandelen(hass.Hass):
             f"min spread {min_spread:.1f} ct/kWh | "
             f"warmte laden {warmte_penalty_laden_factor:.2f} | "
             f"warmte ontladen {warmte_penalty_ontladen_factor:.2f} | "
-            f"plateau {'aan' if plateau_spreiding else 'uit'}",
+            f"plateau {'aan' if plateau_spreiding else 'uit'} | "
+            f"packtemp {thermisch['batterij_temp_start_c'] if thermisch['batterij_temp_start_c'] is not None else '-'} °C | "
+            f"forecast {thermisch['forecast_bron']}",
             level="INFO",
         )
 
@@ -142,6 +204,10 @@ class DynamischHandelen(hass.Hass):
             plateau_spreiding=plateau_spreiding,
             warmte_penalty_laden_factor=warmte_penalty_laden_factor,
             warmte_penalty_ontladen_factor=warmte_penalty_ontladen_factor,
+            batterij_temp_start_c=thermisch["batterij_temp_start_c"],
+            warmte_afkoeling_halveringstijd_h=thermisch["warmte_afkoeling_halveringstijd_h"],
+            temp_limiet_c=thermisch["temp_limiet_c"],
+            temp_penalty_factor=thermisch["temp_penalty_factor"],
         )
         self._corrigeer_actief_slot_vermogen(schema, accu, hw_min_pct, hw_max_pct)
         spread_blokkades = self._markeer_spread_blokkades(schema, accu.eta_laad, min_spread)
@@ -187,6 +253,16 @@ class DynamischHandelen(hass.Hass):
                 "min_spread_ct":       min_spread,
                 "warmte_penalty_laden_factor": warmte_penalty_laden_factor,
                 "warmte_penalty_ontladen_factor": warmte_penalty_ontladen_factor,
+                "batterij_temp_start_c": thermisch["batterij_temp_start_c"],
+                "buiten_temp_huidig_c": thermisch["buiten_temp_huidig_c"],
+                "buiten_temp_bron": thermisch["buiten_temp_bron"],
+                "weather_entity": thermisch["weather_entity"],
+                "forecast_bron": thermisch["forecast_bron"],
+                "forecast_punten": thermisch["forecast_punten"],
+                "warmte_afkoeling_halveringstijd_h": thermisch["warmte_afkoeling_halveringstijd_h"],
+                "temp_limiet_c": thermisch["temp_limiet_c"],
+                "temp_penalty_factor": thermisch["temp_penalty_factor"],
+                "temp_soc_drempel_pct": 80.0,
                 "plateau_spreiding":   plateau_spreiding,
                 "bijgewerkt":          datetime.now().astimezone().isoformat(),
             },
@@ -667,6 +743,196 @@ class DynamischHandelen(hass.Hass):
             return max(0.0, float(waarde))
         except (TypeError, ValueError):
             return 1.0
+
+    def _haal_float_met_default(self, entity_id: str, default: float, minimum: float | None = None) -> float:
+        """Leest een numerieke HA-helper en gebruikt default bij unknown/unavailable."""
+        waarde = self.get_state(entity_id)
+        try:
+            getal = float(waarde)
+        except (TypeError, ValueError):
+            getal = default
+        if minimum is not None:
+            getal = max(minimum, getal)
+        return getal
+
+    def _haal_entity_id_uit_input_text(self, entity_id: str) -> str | None:
+        """Leest een entity_id uit input_text en negeert lege helperwaarden."""
+        waarde = self.get_state(entity_id)
+        if waarde in (None, "unknown", "unavailable"):
+            return None
+        tekst = str(waarde).strip()
+        return tekst or None
+
+    def _float_state(self, entity_id: str) -> float | None:
+        """Leest een state als float; unknown/unavailable geeft None."""
+        try:
+            return float(self.get_state(entity_id))
+        except (TypeError, ValueError):
+            return None
+
+    def _haal_warmste_batterij_temp_c(self) -> float | None:
+        """Neemt de hoogste batterij-packtemperatuur, niet de invertertemperatuur."""
+        warmste = self._float_state("sensor.zendure_2400_ac_warmste_batterij_temperatuur")
+        if warmste is not None:
+            return warmste
+
+        try:
+            aantal = int(float(self.get_state("sensor.zendure_2400_ac_aantal_batterijen") or 0))
+        except (TypeError, ValueError):
+            aantal = 0
+        max_index = aantal if aantal > 0 else 6
+
+        waarden = []
+        for index in range(1, max_index + 1):
+            waarde = self._float_state(f"sensor.zendure_2400_ac_batterij_{index}_temperatuur")
+            if waarde is not None:
+                waarden.append(waarde)
+        return max(waarden) if waarden else None
+
+    def _haal_buitentemperatuur_c(self) -> tuple[float | None, str]:
+        """Leest actuele buitentemperatuur uit de ingestelde sensor of OpenWeatherMap."""
+        sensor_entity = (
+            self._haal_entity_id_uit_input_text("input_text.dynamisch_buitentemperatuur_sensor")
+            or "sensor.openweathermap_temperature"
+        )
+        sensor_temp = self._float_state(sensor_entity)
+        if sensor_temp is not None:
+            return sensor_temp, sensor_entity
+
+        weather_entity = self._haal_weather_entity()
+        if weather_entity:
+            try:
+                weather_temp = float(self.get_state(weather_entity, attribute="temperature"))
+                return weather_temp, f"{weather_entity}.temperature"
+            except (TypeError, ValueError):
+                pass
+
+        return None, "onbekend"
+
+    def _haal_weather_entity(self) -> str | None:
+        """Leest de weather entity voor forecastdata."""
+        ingesteld = self._haal_entity_id_uit_input_text("input_text.dynamisch_weather_entity")
+        if ingesteld:
+            return ingesteld
+
+        standaard = "weather.openweathermap"
+        return standaard if self.get_state(standaard) is not None else None
+
+    def _normaliseer_forecast_punten(self, forecast: list[dict] | None) -> list[tuple[datetime, float]]:
+        """Zet HA weather forecast-items om naar gesorteerde (tijd, temperatuur)-punten."""
+        punten: list[tuple[datetime, float]] = []
+        if not forecast:
+            return punten
+
+        for item in forecast:
+            try:
+                tijd = datetime.fromisoformat(str(item["datetime"])).astimezone()
+                temp = float(item["temperature"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            punten.append((tijd, temp))
+        punten.sort(key=lambda punt: punt[0])
+        return punten
+
+    def _haal_forecast_punten(self, weather_entity: str | None) -> tuple[list[tuple[datetime, float]], str]:
+        """Haalt hourly forecast op via weather.get_forecasts of via oudere forecast-attributen."""
+        if not weather_entity:
+            return [], "geen_weather_entity"
+
+        try:
+            response = self.call_service(
+                "weather/get_forecasts",
+                entity_id=weather_entity,
+                type="hourly",
+                return_response=True,
+            )
+        except Exception as exc:
+            self.log(
+                f"Dynamisch Handelen: forecast service gaf geen resultaat voor {weather_entity}: {exc}",
+                level="DEBUG",
+            )
+            response = None
+
+        kandidaat_mappings = []
+        if isinstance(response, dict):
+            kandidaat_mappings.append(response)
+            result = response.get("result")
+            if isinstance(result, dict):
+                kandidaat_mappings.append(result)
+                response_data = result.get("response")
+                if isinstance(response_data, dict):
+                    kandidaat_mappings.insert(0, response_data)
+
+        for mapping in kandidaat_mappings:
+            payload = mapping.get(weather_entity)
+            if payload is None:
+                payload = next((waarde for waarde in mapping.values() if isinstance(waarde, dict)), None)
+            if not isinstance(payload, dict):
+                continue
+            punten = self._normaliseer_forecast_punten(payload.get("forecast"))
+            if punten:
+                return punten, "weather.get_forecasts"
+
+        forecast_attr = self.get_state(weather_entity, attribute="forecast")
+        punten = self._normaliseer_forecast_punten(forecast_attr if isinstance(forecast_attr, list) else None)
+        if punten:
+            return punten, f"{weather_entity}.forecast"
+
+        return [], "forecast_onbeschikbaar"
+
+    def _forecast_temp_voor_slot(
+        self,
+        punten: list[tuple[datetime, float]],
+        start: datetime,
+    ) -> float | None:
+        """Kiest de laatste forecasttemperatuur op of voor het slot, of anders de eerste erna."""
+        if not punten:
+            return None
+
+        start = start.astimezone()
+        gekozen = punten[0][1]
+        for tijd, temp in punten:
+            if tijd > start:
+                break
+            gekozen = temp
+        return gekozen
+
+    def _haal_thermische_config(self, slots: list[dict]) -> dict:
+        """Leest thermische HA-config en zet buiten_temp_c op ieder prijsslot."""
+        batterij_temp_start_c = self._haal_warmste_batterij_temp_c()
+        buiten_temp_huidig_c, buiten_temp_bron = self._haal_buitentemperatuur_c()
+        weather_entity = self._haal_weather_entity()
+        forecast_punten, forecast_bron = self._haal_forecast_punten(weather_entity)
+
+        for slot in slots:
+            temp = self._forecast_temp_voor_slot(forecast_punten, slot["start"])
+            if temp is None:
+                temp = buiten_temp_huidig_c
+            if temp is not None:
+                slot["buiten_temp_c"] = temp
+
+        return {
+            "batterij_temp_start_c": batterij_temp_start_c,
+            "buiten_temp_huidig_c": buiten_temp_huidig_c,
+            "buiten_temp_bron": buiten_temp_bron,
+            "weather_entity": weather_entity,
+            "forecast_bron": forecast_bron,
+            "forecast_punten": len(forecast_punten),
+            "warmte_afkoeling_halveringstijd_h": self._haal_float_met_default(
+                "input_number.dynamisch_warmte_afkoeling_halveringstijd_uren",
+                2.0,
+                minimum=0.05,
+            ),
+            "temp_limiet_c": self._haal_float_met_default(
+                "input_number.dynamisch_max_temp_boven_80_soc",
+                35.0,
+            ),
+            "temp_penalty_factor": self._haal_float_met_default(
+                "input_number.dynamisch_temp_penalty_factor",
+                1.0,
+                minimum=0.0,
+            ),
+        }
 
     def _haal_plateau_spreiding(self) -> bool:
         """

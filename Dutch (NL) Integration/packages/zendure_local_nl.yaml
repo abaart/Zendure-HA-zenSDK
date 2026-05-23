@@ -3,6 +3,23 @@ input_button:
     name: Dynamisch Handelsstrategie Herberekenen
     icon: mdi:calculator-variant
 
+input_boolean:
+  dynamisch_handelsstrategie_berekening_bezig:
+    name: Dynamisch Handelsstrategie Berekening Bezig
+    icon: mdi:loading
+    initial: false
+
+input_text:
+  dynamisch_buitentemperatuur_sensor:
+    name: Dynamisch Buitentemperatuur Sensor
+    icon: mdi:thermometer
+    max: 120
+
+  dynamisch_weather_entity:
+    name: Dynamisch Weather Entity
+    icon: mdi:weather-partly-cloudy
+    max: 120
+
 input_number:
   dynamisch_warmte_penalty_laden_factor:
     name: Dynamisch Warmte Penalty Laden Factor
@@ -19,3 +36,65 @@ input_number:
     max: 10
     step: 0.1
     mode: slider
+
+  dynamisch_warmte_afkoeling_halveringstijd_uren:
+    name: Dynamisch Warmte Afkoeling Halveringstijd Uren
+    icon: mdi:coolant-temperature
+    min: 0.25
+    max: 24
+    step: 0.25
+    mode: slider
+
+  dynamisch_max_temp_boven_80_soc:
+    name: Dynamisch Max Temp Boven 80 SoC
+    icon: mdi:thermometer-alert
+    min: 25
+    max: 50
+    step: 0.5
+    mode: slider
+
+  dynamisch_temp_penalty_factor:
+    name: Dynamisch Temp Penalty Factor
+    icon: mdi:thermometer-chevron-up
+    min: 0
+    max: 10
+    step: 0.1
+    mode: slider
+
+template:
+  - sensor:
+      - name: "Zendure 2400 AC Warmste Batterij Temperatuur"
+        unique_id: zendure_2400_ac_warmste_batterij_temperatuur
+        icon: mdi:thermometer-alert
+        unit_of_measurement: "°C"
+        device_class: temperature
+        state_class: measurement
+        state: >-
+          {% set count = states('sensor.zendure_2400_ac_aantal_batterijen') | int(0) %}
+          {% set max_index = count if count > 0 else 6 %}
+          {% set ns = namespace(values=[]) %}
+          {% for i in range(1, max_index + 1) %}
+            {% set entity = 'sensor.zendure_2400_ac_batterij_' ~ i ~ '_temperatuur' %}
+            {% set value = states(entity) | float(default=none) %}
+            {% if value is not none %}
+              {% set ns.values = ns.values + [value] %}
+            {% endif %}
+          {% endfor %}
+          {{ ns.values | max if ns.values else 'unknown' }}
+
+      - name: "Zendure 2400 AC Warmste Batterij Index"
+        unique_id: zendure_2400_ac_warmste_batterij_index
+        icon: mdi:battery-search
+        state: >-
+          {% set count = states('sensor.zendure_2400_ac_aantal_batterijen') | int(0) %}
+          {% set max_index = count if count > 0 else 6 %}
+          {% set ns = namespace(max_value=none, max_index=none) %}
+          {% for i in range(1, max_index + 1) %}
+            {% set entity = 'sensor.zendure_2400_ac_batterij_' ~ i ~ '_temperatuur' %}
+            {% set value = states(entity) | float(default=none) %}
+            {% if value is not none and (ns.max_value is none or value > ns.max_value) %}
+              {% set ns.max_value = value %}
+              {% set ns.max_index = i %}
+            {% endif %}
+          {% endfor %}
+          {{ ns.max_index if ns.max_index is not none else 'unknown' }}

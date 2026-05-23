@@ -193,6 +193,15 @@ views:
                     new Date(s.start).getTime(),
                     s.geen_laden_reden === 'spread_te_klein' ? s.spread_tekort_ct : null
                   ]);
+              - entity: input_boolean.dynamisch_handelsstrategie_berekening_bezig
+                name: Refresh trigger
+                type: line
+                show:
+                  in_chart: false
+                  in_header: false
+                  in_legend: false
+                data_generator: |
+                  return [[Date.now(), entity.state === 'on' ? 1 : 0]];
             apex_config:
               tooltip:
                 custom: |
@@ -325,6 +334,15 @@ views:
                     s.actie === 'ontladen' ? -(s.vermogen_w ?? 0) :
                     null
                   ]);
+              - entity: input_boolean.dynamisch_handelsstrategie_berekening_bezig
+                name: Refresh trigger
+                type: line
+                show:
+                  in_chart: false
+                  in_header: false
+                  in_legend: false
+                data_generator: |
+                  return [[Date.now(), entity.state === 'on' ? 1 : 0]];
             apex_config:
               tooltip:
                 x:
@@ -404,6 +422,15 @@ views:
                       ? parseFloat(((s.winst_eur ?? 0) * 100).toFixed(2))
                       : null
                   ]);
+              - entity: input_boolean.dynamisch_handelsstrategie_berekening_bezig
+                name: Refresh trigger
+                type: line
+                show:
+                  in_chart: false
+                  in_header: false
+                  in_legend: false
+                data_generator: |
+                  return [[Date.now(), entity.state === 'on' ? 1 : 0]];
             apex_config:
               tooltip:
                 x:
@@ -461,10 +488,418 @@ views:
                 name: Warmte penalty laden factor
               - entity: input_number.dynamisch_warmte_penalty_ontladen_factor
                 name: Warmte penalty ontladen factor
-              - entity: input_button.dynamisch_handelsstrategie_herberekenen
-                name: Strategie herberekenen
+              - entity: input_number.dynamisch_warmte_afkoeling_halveringstijd_uren
+                name: Afkoeling halveringstijd (uren)
+              - entity: input_number.dynamisch_max_temp_boven_80_soc
+                name: Max temp boven 80% SoC
+              - entity: input_number.dynamisch_temp_penalty_factor
+                name: Temperatuur penalty factor
+              - entity: input_text.dynamisch_buitentemperatuur_sensor
+                name: Buitentemperatuur sensor
+              - entity: input_text.dynamisch_weather_entity
+                name: Weather entity
             show_header_toggle: false
             state_color: false
+
+          - type: markdown
+            title: Parameter uitleg
+            content: |-
+              **Warmte penalty laden factor**: weegt C-waarde warmteverlies tijdens laden. Hoger betekent vaker lager laadvermogen.
+
+              **Warmte penalty ontladen factor**: weegt C-waarde warmteverlies tijdens ontladen. Hoger betekent vaker lager ontlaadvermogen.
+
+              **Afkoeling halveringstijd**: aantal uren waarin het temperatuurverschil tussen batterij en buitenlucht halveert.
+
+              **Max temp boven 80% SoC**: gewenste maximale batterijtemperatuur wanneer de planning boven 80% SoC uitkomt.
+
+              **Temperatuur penalty factor**: weegt overschrijding van de temperatuurgrens. `0` schakelt deze extra penalty uit.
+
+              **Buitentemperatuur sensor**: optionele `sensor.*` voor actuele buitentemperatuur. Laat leeg als je alleen `weather.openweathermap` hebt.
+
+              **Weather entity**: `weather.*` entity voor `weather.get_forecasts`, bijvoorbeeld `weather.openweathermap`.
+
+          - type: conditional
+            conditions:
+              - entity: input_boolean.dynamisch_handelsstrategie_berekening_bezig
+                state_not: 'on'
+            card:
+              type: button
+              entity: input_button.dynamisch_handelsstrategie_herberekenen
+              name: Strategie herberekenen
+              icon: mdi:calculator-variant
+              show_state: false
+              tap_action:
+                action: call-service
+                service: input_button.press
+                target:
+                  entity_id: input_button.dynamisch_handelsstrategie_herberekenen
+
+          - type: conditional
+            conditions:
+              - entity: input_boolean.dynamisch_handelsstrategie_berekening_bezig
+                state: 'on'
+            card:
+              type: button
+              entity: input_boolean.dynamisch_handelsstrategie_berekening_bezig
+              name: Strategie wordt berekend
+              icon: mdi:loading
+              show_state: true
+              tap_action:
+                action: none
+
+          - type: heading
+            heading: Thermisch model
+            heading_style: title
+
+          - type: custom:apexcharts-card
+            cache: false
+            update_delay: 2s
+            header:
+              show: true
+              show_states: false
+              title: Temperatuur over planning
+            graph_span: 48h
+            span:
+              start: hour
+            now:
+              show: true
+              label: Nu
+              color: '#ef5350'
+            series:
+              - entity: sensor.dynamisch_handelsstrategie
+                name: Batterij
+                type: line
+                curve: smooth
+                color: '#009688'
+                stroke_width: 2
+                unit: '°C'
+                yaxis_id: temp
+                data_generator: |
+                  const slots = entity.attributes.slots || [];
+                  const pts = slots.map(s => [
+                    new Date(s.start).getTime(),
+                    s.batterij_temp_voor_c ?? null
+                  ]);
+                  if (slots.length) {
+                    const last = slots[slots.length - 1];
+                    pts.push([
+                      new Date(last.end).getTime(),
+                      last.batterij_temp_na_c ?? null
+                    ]);
+                  }
+                  return pts;
+              - entity: sensor.dynamisch_handelsstrategie
+                name: Buiten
+                type: line
+                curve: stepline
+                color: '#42a5f5'
+                stroke_width: 1
+                unit: '°C'
+                yaxis_id: temp
+                data_generator: |
+                  return (entity.attributes.slots || []).map(s => [
+                    new Date(s.start).getTime(),
+                    s.buiten_temp_c ?? null
+                  ]);
+              - entity: sensor.dynamisch_handelsstrategie
+                name: Limiet
+                type: line
+                curve: stepline
+                color: '#ef5350'
+                stroke_width: 1
+                unit: '°C'
+                yaxis_id: temp
+                data_generator: |
+                  return (entity.attributes.slots || []).map(s => [
+                    new Date(s.start).getTime(),
+                    s.temp_limiet_c ?? entity.attributes.temp_limiet_c ?? null
+                  ]);
+              - entity: sensor.dynamisch_handelsstrategie
+                name: Risico
+                type: column
+                color: '#ef5350'
+                opacity: 0.35
+                unit: '°C'
+                yaxis_id: temp
+                data_generator: |
+                  return (entity.attributes.slots || []).map(s => [
+                    new Date(s.start).getTime(),
+                    s.temp_limiet_actief && (s.temp_penalty_eur ?? 0) > 0
+                      ? s.batterij_temp_na_c
+                      : null
+                  ]);
+              - entity: input_boolean.dynamisch_handelsstrategie_berekening_bezig
+                name: Refresh trigger
+                type: line
+                show:
+                  in_chart: false
+                  in_header: false
+                  in_legend: false
+                data_generator: |
+                  return [[Date.now(), entity.state === 'on' ? 1 : 0]];
+            apex_config:
+              tooltip:
+                x:
+                  format: 'dd-MM HH:mm'
+              yaxis:
+                decimalsInFloat: 1
+                labels:
+                  formatter: |
+                    EVAL:function(v) { return v.toFixed(1) + ' °C' }
+              chart:
+                height: 220px
+                toolbar:
+                  show: false
+                zoom:
+                  enabled: false
+              legend:
+                show: true
+              markers:
+                size: 0
+                hover:
+                  size: 3
+
+          - type: custom:apexcharts-card
+            cache: false
+            update_delay: 2s
+            header:
+              show: true
+              show_states: false
+              title: Warmte-penalty per slot
+            graph_span: 48h
+            span:
+              start: hour
+            now:
+              show: true
+              label: Nu
+              color: '#ef5350'
+            series:
+              - entity: sensor.dynamisch_handelsstrategie
+                name: Laden
+                type: column
+                color: '#66bb6a'
+                unit: 'ct'
+                data_generator: |
+                  return (entity.attributes.slots || []).map(s => [
+                    new Date(s.start).getTime(),
+                    s.actie === 'laden' ? ((s.warmte_penalty_eur ?? 0) * 100) : null
+                  ]);
+              - entity: sensor.dynamisch_handelsstrategie
+                name: Ontladen
+                type: column
+                color: '#ff9800'
+                unit: 'ct'
+                data_generator: |
+                  return (entity.attributes.slots || []).map(s => [
+                    new Date(s.start).getTime(),
+                    s.actie === 'ontladen' ? ((s.warmte_penalty_eur ?? 0) * 100) : null
+                  ]);
+              - entity: sensor.dynamisch_handelsstrategie
+                name: Temp
+                type: column
+                color: '#ef5350'
+                unit: 'ct'
+                data_generator: |
+                  return (entity.attributes.slots || []).map(s => [
+                    new Date(s.start).getTime(),
+                    (s.temp_penalty_eur ?? 0) > 0 ? ((s.temp_penalty_eur ?? 0) * 100) : null
+                  ]);
+              - entity: sensor.dynamisch_handelsstrategie
+                name: Actie
+                type: line
+                stroke_width: 0
+                opacity: 0
+                show:
+                  in_chart: true
+                  in_header: false
+                  in_legend: false
+                data_generator: |
+                  return (entity.attributes.slots || []).map(s => [
+                    new Date(s.start).getTime(),
+                    s.actie === 'laden' ? 1 : s.actie === 'ontladen' ? 2 : 0
+                  ]);
+              - entity: sensor.dynamisch_handelsstrategie
+                name: Vermogen
+                type: line
+                stroke_width: 0
+                opacity: 0
+                show:
+                  in_chart: true
+                  in_header: false
+                  in_legend: false
+                data_generator: |
+                  return (entity.attributes.slots || []).map(s => [
+                    new Date(s.start).getTime(),
+                    s.vermogen_w ?? 0
+                  ]);
+              - entity: sensor.dynamisch_handelsstrategie
+                name: C
+                type: line
+                stroke_width: 0
+                opacity: 0
+                show:
+                  in_chart: true
+                  in_header: false
+                  in_legend: false
+                data_generator: |
+                  return (entity.attributes.slots || []).map(s => [
+                    new Date(s.start).getTime(),
+                    s.c_waarde ?? 0
+                  ]);
+              - entity: sensor.dynamisch_handelsstrategie
+                name: Temp voor
+                type: line
+                stroke_width: 0
+                opacity: 0
+                show:
+                  in_chart: true
+                  in_header: false
+                  in_legend: false
+                data_generator: |
+                  return (entity.attributes.slots || []).map(s => [
+                    new Date(s.start).getTime(),
+                    s.batterij_temp_voor_c ?? null
+                  ]);
+              - entity: sensor.dynamisch_handelsstrategie
+                name: Temp na
+                type: line
+                stroke_width: 0
+                opacity: 0
+                show:
+                  in_chart: true
+                  in_header: false
+                  in_legend: false
+                data_generator: |
+                  return (entity.attributes.slots || []).map(s => [
+                    new Date(s.start).getTime(),
+                    s.batterij_temp_na_c ?? null
+                  ]);
+              - entity: sensor.dynamisch_handelsstrategie
+                name: Warmte ct
+                type: line
+                stroke_width: 0
+                opacity: 0
+                show:
+                  in_chart: true
+                  in_header: false
+                  in_legend: false
+                data_generator: |
+                  return (entity.attributes.slots || []).map(s => [
+                    new Date(s.start).getTime(),
+                    (s.warmte_penalty_eur ?? 0) * 100
+                  ]);
+              - entity: sensor.dynamisch_handelsstrategie
+                name: Temp ct
+                type: line
+                stroke_width: 0
+                opacity: 0
+                show:
+                  in_chart: true
+                  in_header: false
+                  in_legend: false
+                data_generator: |
+                  return (entity.attributes.slots || []).map(s => [
+                    new Date(s.start).getTime(),
+                    (s.temp_penalty_eur ?? 0) * 100
+                  ]);
+              - entity: input_boolean.dynamisch_handelsstrategie_berekening_bezig
+                name: Refresh trigger
+                type: line
+                show:
+                  in_chart: false
+                  in_header: false
+                  in_legend: false
+                data_generator: |
+                  return [[Date.now(), entity.state === 'on' ? 1 : 0]];
+            apex_config:
+              tooltip:
+                custom: |
+                  EVAL:function({ series, dataPointIndex, w }) {
+                    var actionCode = series[3][dataPointIndex];
+                    var vermogen = series[4][dataPointIndex];
+                    var c = series[5][dataPointIndex];
+                    var tempVoor = series[6][dataPointIndex];
+                    var tempNa = series[7][dataPointIndex];
+                    var warmte = series[8][dataPointIndex];
+                    var tempPenalty = series[9][dataPointIndex];
+                    var actieLabel = actionCode === 1 ? 'Laden' : actionCode === 2 ? 'Ontladen' : 'Rust';
+                    var ts = w.globals.seriesX[0] && w.globals.seriesX[0][dataPointIndex];
+                    if (!ts) return '';
+                    var d = new Date(ts);
+                    var pad = function(n) { return String(n).padStart(2, '0'); };
+                    var time = pad(d.getDate()) + '-' + pad(d.getMonth()+1) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+                    var html = '<div style="padding:8px 12px;font-size:0.85em;background:var(--card-background-color);border:1px solid var(--divider-color);border-radius:4px">';
+                    html += '<div style="margin-bottom:4px;font-weight:bold;color:var(--primary-text-color)">' + time + '</div>';
+                    html += '<div style="color:var(--secondary-text-color)">Actie: <span style="color:var(--primary-text-color);font-weight:bold">' + actieLabel + '</span></div>';
+                    html += '<div style="color:var(--secondary-text-color)">Vermogen: <span style="color:var(--primary-text-color);font-weight:bold">' + Math.round(vermogen || 0) + ' W</span></div>';
+                    html += '<div style="color:var(--secondary-text-color)">C-waarde: <span style="color:var(--primary-text-color);font-weight:bold">' + (c != null ? c.toFixed(3) : '-') + '</span></div>';
+                    html += '<div style="color:var(--secondary-text-color)">Pack temp: <span style="color:var(--primary-text-color);font-weight:bold">' + (tempVoor != null ? tempVoor.toFixed(1) : '-') + ' → ' + (tempNa != null ? tempNa.toFixed(1) : '-') + ' °C</span></div>';
+                    html += '<div style="color:var(--secondary-text-color)">Warmte penalty: <span style="color:var(--primary-text-color);font-weight:bold">' + (warmte != null ? warmte.toFixed(2) : '0.00') + ' ct</span></div>';
+                    html += '<div style="color:var(--secondary-text-color)">Temp penalty: <span style="color:var(--primary-text-color);font-weight:bold">' + (tempPenalty != null ? tempPenalty.toFixed(2) : '0.00') + ' ct</span></div>';
+                    html += '</div>';
+                    return html;
+                  }
+              yaxis:
+                decimalsInFloat: 2
+                labels:
+                  formatter: |
+                    EVAL:function(v) { return v.toFixed(1) + ' ct' }
+              chart:
+                height: 220px
+                stacked: true
+                toolbar:
+                  show: false
+                zoom:
+                  enabled: false
+              legend:
+                show: true
+              markers:
+                size: 0
+
+          - type: entities
+            title: Thermische uitleg
+            entities:
+              - entity: sensor.zendure_2400_ac_warmste_batterij_temperatuur
+                name: Warmste batterij
+              - entity: sensor.zendure_2400_ac_warmste_batterij_index
+                name: Warmste batterij index
+              - type: attribute
+                entity: sensor.dynamisch_handelsstrategie
+                attribute: batterij_temp_start_c
+                name: Starttemperatuur
+                icon: mdi:thermometer
+              - type: attribute
+                entity: sensor.dynamisch_handelsstrategie
+                attribute: buiten_temp_huidig_c
+                name: Buitentemperatuur
+                icon: mdi:home-thermometer-outline
+              - type: attribute
+                entity: sensor.dynamisch_handelsstrategie
+                attribute: forecast_bron
+                name: Forecast bron
+                icon: mdi:weather-partly-cloudy
+              - type: attribute
+                entity: sensor.dynamisch_handelsstrategie
+                attribute: forecast_punten
+                name: Forecast punten
+                icon: mdi:chart-timeline-variant
+              - type: attribute
+                entity: sensor.dynamisch_handelsstrategie
+                attribute: warmte_afkoeling_halveringstijd_h
+                name: Afkoeling halveringstijd
+                icon: mdi:coolant-temperature
+              - type: attribute
+                entity: sensor.dynamisch_handelsstrategie
+                attribute: temp_limiet_c
+                name: Temperatuurlimiet
+                icon: mdi:thermometer-alert
+              - type: attribute
+                entity: sensor.dynamisch_handelsstrategie
+                attribute: temp_penalty_factor
+                name: Temp penalty factor
+                icon: mdi:thermometer-chevron-up
+            show_header_toggle: false
+            state_color: true
 
           - type: heading
             heading: Status

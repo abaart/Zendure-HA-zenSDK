@@ -31,13 +31,13 @@ HA_CONFIG_DIR=/config
 HA_APPDAEMON_ADDON_SLUG=a0d7b954_appdaemon
 ```
 
-Controleer de kopieeractie zonder bestanden te wijzigen:
+Controleer de kopieeractie zonder bestanden te wijzigen en zonder Home Assistant te reloaden:
 
 ```bash
 scripts/deploy_ha.sh --dry-run
 ```
 
-Kopieer de bestanden en herstart AppDaemon:
+Kopieer de bestanden, controleer de Home Assistant YAML-configuratie, reload Home Assistant, en herstart AppDaemon:
 
 ```bash
 scripts/deploy_ha.sh
@@ -51,7 +51,9 @@ scripts/deploy_ha.sh
 - `/config/packages/zendure_gielz1986_nl.yaml`
 - `/config/packages/zendure_local_nl.yaml`
 
-`scripts/deploy_ha.sh` herstart AppDaemon met `ha apps restart a0d7b954_appdaemon`. Zet `HA_APPDAEMON_ADDON_SLUG` in `.env` wanneer jouw AppDaemon app slug anders is. Start `scripts/deploy_ha.sh --no-restart` wanneer je alleen bestanden wilt kopieren.
+Na het kopieren voert `scripts/deploy_ha.sh` `ha core check` uit. Wanneer `ha core check` slaagt, voert `scripts/deploy_ha.sh` `ha core reload` uit. Wanneer `ha core check` faalt, stopt `scripts/deploy_ha.sh` zonder `ha core reload` en zonder AppDaemon restart.
+
+`scripts/deploy_ha.sh` herstart AppDaemon met `ha apps restart a0d7b954_appdaemon`. Zet `HA_APPDAEMON_ADDON_SLUG` in `.env` wanneer jouw AppDaemon app slug anders is. Start `scripts/deploy_ha.sh --no-restart` wanneer je AppDaemon niet wilt herstarten na een geslaagde `ha core check` en `ha core reload`.
 
 `scripts/deploy_ha.sh` kopieert `Dutch (NL) Integration/automation_nl.yaml`, `Dutch (NL) Integration/dashboard_nl.yaml`, en `Dutch (NL) Integration/dashboard_strategie.yaml` niet. Beheer deze drie YAML-bestanden handmatig in Home Assistant.
 
