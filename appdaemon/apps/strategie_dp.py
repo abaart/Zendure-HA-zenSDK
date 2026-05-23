@@ -161,7 +161,7 @@ TEMP_PENALTY_100_SOC_FACTOR: float = 2.0
 TEMP_PENALTY_EUR_PER_C2H: float = 0.25
 SOC_VERBLIJF_PENALTY_EUR_PER_KWH_H: float = 0.001
 HOGE_SOC_VERBLIJF_PENALTY_FACTOR: float = 1.0
-LAGE_SOC_VERBLIJF_PENALTY_FACTOR: float = 0.3
+LAGE_SOC_VERBLIJF_PENALTY_FACTOR: float = 0.8
 
 # ── DATATYPE ──────────────────────────────────────────────────────────────────
 
