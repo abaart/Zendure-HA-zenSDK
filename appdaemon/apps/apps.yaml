@@ -1,3 +1,4 @@
 dynamisch_handelen:
   module: dynamisch_handelen
   class: DynamischHandelen
+  plateau_spreiding: false

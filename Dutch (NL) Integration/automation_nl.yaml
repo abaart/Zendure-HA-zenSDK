@@ -332,6 +332,17 @@ actions:
             entity_id: sensor.zendure_2400_ac_kalibreren
             state:
               - Nee
+          - alias: Dynamisch laden of ontladen is niet actief
+            condition: and
+            conditions:
+              - condition: state
+                entity_id: input_boolean.dynamisch_laden_loopt
+                state:
+                  - "off"
+              - condition: state
+                entity_id: input_boolean.dynamisch_ontladen_loopt
+                state:
+                  - "off"
         sequence:
           - action: rest_command.zendure_standby
             data:

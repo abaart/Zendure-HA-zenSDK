@@ -1,0 +1,14 @@
+input_button:
+  dynamisch_handelsstrategie_herberekenen:
+    name: Dynamisch Handelsstrategie Herberekenen
+    icon: mdi:calculator-variant
+
+input_number:
+  dynamisch_warmte_penalty_factor:
+    name: Dynamisch Warmte Penalty Factor
+    icon: mdi:thermometer-lines
+    min: 0
+    max: 10
+    step: 0.1
+    mode: slider
+    initial: 1

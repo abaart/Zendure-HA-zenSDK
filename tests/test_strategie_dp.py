@@ -356,7 +356,8 @@ class TestMinimaleSpread:
         Dit scenario gebruikt de sensorwaarden van 18 mei om 14:39. Het eerste
         slot heeft nog ongeveer 20,5 minuten. Als dat slot per ongeluk als
         volledig uur wordt ingevoerd, kiest de strategie rust; met de resterende
-        duur kiest de strategie laden en benut zij het tweede dure uur.
+        duur kiest de strategie laden. De warmte-penalty kan de gekozen energie
+        bewust lager maken dan het oude maximaal-vermogen schema.
         """
         slots = maak_slots_vanaf_iso(SCENARIO_18_MEI_SLOTS_CT)
         slots[0]["duration_h"] = 20.5 / 60.0
@@ -365,28 +366,105 @@ class TestMinimaleSpread:
             slots,
             maak_accu(huidig_kwh=2.745, max_kwh=5.187, eta=0.922),
             min_spread_ct_per_kwh=8.0,
+            plateau_spreiding=False,
         )
 
         assert schema[0]["actie"] == "laden"
-        assert schema[1]["actie"] == "laden"
-        assert schema[2]["actie"] == "laden"
-        assert schema[2]["soc_na_kwh"] == pytest.approx(3.5, abs=0.01)
+        assert schema[0]["vermogen_w"] >= 100
+        assert schema[0]["soc_na_kwh"] > schema[0]["soc_voor_kwh"]
+
+    def test_warmte_penalty_factor_nul_houdt_oude_maximaal_vermogen_keuze(self):
+        """
+        Met warmte_penalty_factor=0 kiest los_dp_op() dezelfde agressieve
+        laadstap als voor de C-waarde penalty.
+        """
+        slots = maak_slots_vanaf_iso(SCENARIO_18_MEI_SLOTS_CT)
+        slots[0]["duration_h"] = 20.5 / 60.0
+
+        schema = los_dp_op(
+            slots,
+            maak_accu(huidig_kwh=2.745, max_kwh=5.187, eta=0.922),
+            min_spread_ct_per_kwh=8.0,
+            plateau_spreiding=False,
+            warmte_penalty_factor=0.0,
+        )
+
+        assert schema[0]["actie"] == "laden"
+        assert schema[0]["vermogen_w"] == 2400
+        assert schema[0]["soc_na_kwh"] == pytest.approx(3.5, abs=0.01)
+
+    def test_dagplanning_gebruikt_laagste_laaduur_niet_langzamer(self):
+        """
+        Bij de prijzen van 24 mei krijgt het goedkoopste laadslot geen lager
+        vermogen dan het duurdere laadslot erna.
+        """
+        start = datetime.fromisoformat("2026-05-23T13:00:00+02:00")
+        prijzen_ct = [
+            9.725, 11.342, 13.08, 13.529, 18.433, 26.997,
+            30.363, 33.296, 34.44, 31.866, 30.285, 30.056,
+            29.657, 29.074, 28.647, 28.416, 27.884, 27.689,
+            25.45, 16.21, 13.561, 13.261, 11.893, 9.023,
+            4.399, 6.111, 10.728, 13.327, 15.09, 24.384,
+            29.684, 32.02, 31.956, 30.492, 29.348,
+        ]
+        slots = []
+        for i, prijs_ct in enumerate(prijzen_ct):
+            slot_start = start + timedelta(hours=i)
+            slots.append({
+                "start": slot_start,
+                "end": slot_start + timedelta(hours=1),
+                "price": prijs_ct / 100.0,
+                "duration_h": 1.0,
+            })
+
+        schema = los_dp_op(
+            slots,
+            Accustatus(
+                huidig_kwh=2.487,
+                max_kwh=4.605,
+                eta_laad=0.925,
+                eta_ontlaad=0.925,
+                max_laad_w=1800,
+                max_ontlaad_w=2150,
+            ),
+            min_spread_ct_per_kwh=8.0,
+            plateau_spreiding=False,
+        )
+
+        goedkoopste = schema[24]
+        duurder_ernaast = schema[25]
+        assert goedkoopste["prijs_ct"] == pytest.approx(4.399)
+        assert duurder_ernaast["prijs_ct"] == pytest.approx(6.111)
+        assert goedkoopste["actie"] == "laden"
+        assert duurder_ernaast["actie"] == "laden"
+        assert goedkoopste["vermogen_w"] >= duurder_ernaast["vermogen_w"]
+
+    def test_dp_gebruikt_geen_vermogensstap_onder_minimum(self):
+        schema = los_dp_op(
+            maak_slots([0.10, 0.35, 0.09, 0.34]),
+            maak_accu(huidig_kwh=0.0),
+            plateau_spreiding=False,
+            minimum_vermogen_w=100,
+        )
+
+        for slot in schema:
+            assert slot["vermogen_w"] == 0 or slot["vermogen_w"] >= 100
 
 
 # ── DERATING EFFECT ───────────────────────────────────────────────────────────
 
 class TestDeratingEffect:
-    def test_derating_verlaagt_verwacht_vermogen_maar_niet_aansturing(self):
+    def test_derating_laat_dp_kleinere_vermogensstap_kiezen(self):
         """
         Bij bijna volle accu verlaagt bereken_derating() het verwachte
-        laadvermogen. De vermogensopdracht vermogen_w blijft max_laad_w, omdat
-        het BMS de werkelijke laadstroom zelf begrenst.
+        laadvermogen. los_dp_op() mag nu een kleinere vermogensstap kiezen,
+        omdat vermogen_w onderdeel van de DP-keuze is.
         """
         accu   = maak_accu(huidig_kwh=2.4 * 0.95, max_kwh=2.4)  # 95 % SoC
-        schema = los_dp_op(maak_slots([0.01, 1.00]), accu)
+        schema = los_dp_op(maak_slots([0.01, 1.00]), accu, plateau_spreiding=False)
 
         assert schema[0]["actie"] == "laden"
-        assert schema[0]["vermogen_w"] == accu.max_laad_w
+        assert 100 <= schema[0]["vermogen_w"] < accu.max_laad_w
         assert schema[0]["verwacht_vermogen_w"] < accu.max_laad_w
 
     def test_derating_niet_actief_bij_lage_soc(self):

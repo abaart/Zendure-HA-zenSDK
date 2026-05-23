@@ -2,8 +2,8 @@
 Dynamisch Handelen - Home Assistant integratie (AppDaemon)
 ==========================================================
 
-AppDaemon app die elke minuut de optimale laad/ontlaad strategie
-berekent en publiceert als sensor.dynamisch_handelsstrategie.
+AppDaemon app die dagelijks om 14:35 en op verzoek de optimale
+laad/ontlaad strategie berekent en publiceert als sensor.dynamisch_handelsstrategie.
 
 BESTANDSLOCATIES IN HA
 -----------------------
@@ -24,13 +24,15 @@ Ingangen:
   input_number.zendure_2400_ac_max_oplaadvermogen        max laadvermogen (W)
   input_number.zendure_2400_ac_max_ontlaadvermogen       max ontlaadvermogen (W)
   input_number.dynamisch_minimale_spread                 minimale spread (ct/kWh)
+  input_number.dynamisch_warmte_penalty_factor           gewicht voor warmteverlies in DP
+  input_button.dynamisch_handelsstrategie_herberekenen   knop voor handmatige herberekening
 
 Uitgang:
   sensor.dynamisch_handelsstrategie   verwachte winst (€) + volledig schema als attribuut
 """
 
 import math
-from datetime import datetime
+from datetime import datetime, time
 
 import appdaemon.plugins.hass.hassapi as hass
 
@@ -43,19 +45,26 @@ from strategie_dp import (
     rond_vermogen_omhoog,
 )
 
-
 class DynamischHandelen(hass.Hass):
 
     def initialize(self):
         """
         AppDaemon roept initialize() aan bij opstarten en na een reload.
-        We registreren hier één terugkerende taak: elke minuut herberekenen.
-        'now' zorgt dat de eerste berekening meteen bij het opstarten plaatsvindt.
+        We registreren hier één dagelijkse taak en één knoptrigger.
         """
-        self.log("Dynamisch Handelen: gestart, schema wordt elke minuut herberekend")
-        self.run_every(self.bereken_strategie, "now", 60)
+        self.log("Dynamisch Handelen: gestart, schema wordt dagelijks om 14:35 herberekend")
+        self.run_daily(self.bereken_strategie, time(14, 35, 0))
+        self.listen_state(
+            self._herbereken_op_knop,
+            "input_button.dynamisch_handelsstrategie_herberekenen",
+        )
 
     # ── HOOFDFUNCTIE ─────────────────────────────────────────────────────────
+
+    def _herbereken_op_knop(self, entity, attribute, old, new, kwargs):
+        """Herberekent de strategie na een druk op de HA-knop."""
+        self.log("Dynamisch Handelen: handmatige herberekening gestart via HA-knop")
+        self.bereken_strategie({"trigger": entity})
 
     def bereken_strategie(self, kwargs):
         """
@@ -93,17 +102,27 @@ class DynamischHandelen(hass.Hass):
             return
 
         min_spread = self._haal_minimale_spread()
+        warmte_penalty_factor = self._haal_warmte_penalty_factor()
+        plateau_spreiding = self._haal_plateau_spreiding()
 
         self.log(
             f"Dynamisch Handelen: {len(slots)} slots | "
             f"accu {accu.huidig_kwh:.2f}/{accu.max_kwh:.2f} kWh | "
             f"eta={accu.eta_laad:.3f} | "
             f"laad {accu.max_laad_w:.0f} W / ontlaad {accu.max_ontlaad_w:.0f} W | "
-            f"min spread {min_spread:.1f} ct/kWh",
+            f"min spread {min_spread:.1f} ct/kWh | "
+            f"warmtefactor {warmte_penalty_factor:.2f} | "
+            f"plateau {'aan' if plateau_spreiding else 'uit'}",
             level="INFO",
         )
 
-        schema = los_dp_op(slots, accu, min_spread_ct_per_kwh=min_spread)
+        schema = los_dp_op(
+            slots,
+            accu,
+            min_spread_ct_per_kwh=min_spread,
+            plateau_spreiding=plateau_spreiding,
+            warmte_penalty_factor=warmte_penalty_factor,
+        )
         self._corrigeer_actief_slot_vermogen(schema, accu, hw_min_pct, hw_max_pct)
         spread_blokkades = self._markeer_spread_blokkades(schema, accu.eta_laad, min_spread)
 
@@ -146,6 +165,8 @@ class DynamischHandelen(hass.Hass):
                 "accu_max_kwh":        round(accu.max_kwh,    3),
                 "eta":                 round(accu.eta_laad,   3),
                 "min_spread_ct":       min_spread,
+                "warmte_penalty_factor": warmte_penalty_factor,
+                "plateau_spreiding":   plateau_spreiding,
                 "bijgewerkt":          datetime.now().isoformat(),
             },
         )
@@ -293,15 +314,15 @@ class DynamischHandelen(hass.Hass):
         if actief is None or actief_index is None or actief.get("actie") not in ("laden", "ontladen"):
             return
 
-        actuele_soc_kwh = self._haal_actuele_soc_kwh_via_laadpercentage(
+        raw_actuele_soc_kwh = self._haal_actuele_soc_kwh_via_laadpercentage(
             accu.max_kwh,
             hw_min_pct,
             hw_max_pct,
         )
-        if actuele_soc_kwh is None:
+        if raw_actuele_soc_kwh is None:
             return
 
-        doel = self._haal_actief_slot_doel(actief, actuele_soc_kwh)
+        doel = self._haal_actief_slot_doel(actief, raw_actuele_soc_kwh)
         actie = doel["actie"]
         target_kwh = doel["target_kwh"]
         begin_kwh = doel["begin_kwh"]
@@ -314,6 +335,14 @@ class DynamischHandelen(hass.Hass):
         resterend_h = max(0.0, (eindtijd - nu).total_seconds() / 3600.0)
         if resterend_h <= 0.0:
             return
+
+        actuele_soc_kwh, soc_bron = self._schat_actuele_soc_kwh(
+            actief,
+            actie,
+            raw_actuele_soc_kwh,
+            accu,
+            nu,
+        )
 
         if actie == "laden":
             target_kwh = self._verhoog_actief_laadslot_doel(
@@ -354,9 +383,18 @@ class DynamischHandelen(hass.Hass):
             accu.max_laad_w * derating if actie == "laden" else accu.max_ontlaad_w,
         )
         actief["actief_slot_begin_kwh"] = round(begin_kwh, 3)
+        actief["actief_slot_raw_soc_kwh"] = round(raw_actuele_soc_kwh, 3)
         actief["actuele_soc_kwh"] = round(actuele_soc_kwh, 3)
+        actief["actuele_soc_bron"] = soc_bron
         actief["doel_soc_kwh"] = round(target_kwh, 3)
+        actief["actief_slot_delta_kwh"] = round(
+            target_kwh - actuele_soc_kwh if actie == "laden" else actuele_soc_kwh - target_kwh,
+            3,
+        )
+        actief["actief_slot_resterend_h"] = round(resterend_h, 3)
         actief["doel_bereikt"] = doel_bereikt
+        if doel_bereikt:
+            actief["actief_slot_stopreden"] = "doel_bereikt"
 
     def _verhoog_actief_laadslot_doel(
         self,
@@ -446,6 +484,68 @@ class DynamischHandelen(hass.Hass):
             "target_kwh": float(actief["soc_na_kwh"]),
         }
 
+    def _schat_actuele_soc_kwh(
+        self,
+        actief: dict,
+        actie: str,
+        raw_soc_kwh: float,
+        accu: "Accustatus",
+        nu: datetime,
+    ) -> tuple[float, str]:
+        """
+        Schat de actuele SoC binnen hetzelfde actieve slot wanneer electricLevel
+        nog hetzelfde hele percentage meldt.
+        """
+        start = str(actief["start"])
+        end = str(actief["end"])
+        vorige_slots = self.get_state("sensor.dynamisch_handelsstrategie", attribute="slots") or []
+        vorige_slot = None
+        for slot in vorige_slots:
+            if str(slot.get("start")) == start and str(slot.get("end")) == end:
+                vorige_slot = slot
+                break
+
+        if vorige_slot is None:
+            return raw_soc_kwh, "laadpercentage"
+
+        vorige_actie = vorige_slot.get("geplande_actie") or vorige_slot.get("actie")
+        if vorige_actie != actie:
+            return raw_soc_kwh, "laadpercentage"
+
+        try:
+            vorige_raw_soc_kwh = float(vorige_slot["actief_slot_raw_soc_kwh"])
+            vorige_soc_kwh = float(vorige_slot["actuele_soc_kwh"])
+        except (KeyError, TypeError, ValueError):
+            return raw_soc_kwh, "laadpercentage"
+
+        if abs(raw_soc_kwh - vorige_raw_soc_kwh) > 0.001:
+            return raw_soc_kwh, "laadpercentage"
+
+        bijgewerkt = self.get_state("sensor.dynamisch_handelsstrategie", attribute="bijgewerkt")
+        try:
+            vorige_tijd = datetime.fromisoformat(str(bijgewerkt)).astimezone()
+        except (TypeError, ValueError):
+            return raw_soc_kwh, "laadpercentage"
+
+        verstreken_h = max(0.0, (nu - vorige_tijd).total_seconds() / 3600.0)
+        if verstreken_h <= 0.0 or verstreken_h > 5.0 / 60.0:
+            return raw_soc_kwh, "laadpercentage"
+
+        try:
+            vermogen_w = float(self.get_state("sensor.zendure_2400_ac_vermogen_aansturing") or 0)
+        except (TypeError, ValueError):
+            return raw_soc_kwh, "laadpercentage"
+
+        geschat_soc_kwh = vorige_soc_kwh
+        if actie == "laden" and vermogen_w > 0 and accu.eta_laad > 0:
+            geschat_soc_kwh += vermogen_w / 1000.0 * verstreken_h * accu.eta_laad
+        elif actie == "ontladen" and vermogen_w < 0 and accu.eta_ontlaad > 0:
+            geschat_soc_kwh -= abs(vermogen_w) / 1000.0 * verstreken_h / accu.eta_ontlaad
+        else:
+            return raw_soc_kwh, "laadpercentage"
+
+        return min(accu.max_kwh, max(0.0, geschat_soc_kwh)), "vermogen_aansturing"
+
     def _haal_actuele_soc_kwh_via_laadpercentage(
         self,
         max_kwh: float,
@@ -524,3 +624,22 @@ class DynamischHandelen(hass.Hass):
         winstgevend zijn maar in de praktijk onzeker zijn.
         """
         return float(self.get_state("input_number.dynamisch_minimale_spread") or 0)
+
+    def _haal_warmte_penalty_factor(self) -> float:
+        """
+        Leest hoeveel gewicht de DP aan C-waarde warmteverlies moet geven.
+        """
+        waarde = self.get_state("input_number.dynamisch_warmte_penalty_factor")
+        try:
+            return max(0.0, float(waarde))
+        except (TypeError, ValueError):
+            return 1.0
+
+    def _haal_plateau_spreiding(self) -> bool:
+        """
+        Leest uit apps.yaml of de plateau-nabewerking actief mag zijn.
+        """
+        waarde = self.args.get("plateau_spreiding", True)
+        if isinstance(waarde, bool):
+            return waarde
+        return str(waarde).strip().lower() in ("1", "true", "yes", "on", "aan")
