@@ -254,7 +254,12 @@ class TestArbitrage:
         Break-even: p_verkoop / p_inkoop = 1/η²
         Bij η = 0.949: 1/η² ≈ 1.111 → 10 ct → 11 ct (ratio 1.10) is verlieslatend.
         """
-        schema = los_dp_op(maak_slots([0.10, 0.11]), maak_accu(huidig_kwh=0.0, eta=0.949))
+        schema = los_dp_op(
+            maak_slots([0.10, 0.11]),
+            maak_accu(huidig_kwh=0.0, eta=0.949),
+            hoge_soc_verblijf_penalty_factor=0.0,
+            lage_soc_verblijf_penalty_factor=0.0,
+        )
         assert all(s["actie"] == "rust" for s in schema)
 
     def test_meerdere_cycli_worden_benut(self):
@@ -305,6 +310,8 @@ class TestMinimaleSpread:
             maak_slots([0.10, 0.30]),
             maak_accu(huidig_kwh=0.0),
             min_spread_ct_per_kwh=30.0,
+            hoge_soc_verblijf_penalty_factor=0.0,
+            lage_soc_verblijf_penalty_factor=0.0,
         )
         assert all(s["actie"] == "rust" for s in schema)
 
@@ -330,6 +337,8 @@ class TestMinimaleSpread:
             maak_slots_vanaf_iso(SCENARIO_18_MEI_SLOTS_CT),
             maak_accu(huidig_kwh=2.636, max_kwh=5.217, eta=0.922),
             min_spread_ct_per_kwh=8.0,
+            hoge_soc_verblijf_penalty_factor=0.0,
+            lage_soc_verblijf_penalty_factor=0.0,
         )
 
         laad_19_mei = [
@@ -399,6 +408,8 @@ class TestMinimaleSpread:
             plateau_spreiding=False,
             warmte_penalty_laden_factor=0.0,
             warmte_penalty_ontladen_factor=0.0,
+            hoge_soc_verblijf_penalty_factor=0.0,
+            lage_soc_verblijf_penalty_factor=0.0,
         )
 
         assert schema[0]["actie"] == "laden"
@@ -745,6 +756,108 @@ class TestMinimaleSpread:
         assert schema[0]["temp_limiet_lage_soc_c"] == 45.0
         assert schema[0]["temp_limiet_actief"] is True
         assert schema[0]["overtemp_penalty_eur"] > 0.0
+
+    def test_overtemp_penalty_weegt_100_soc_zwaarder_dan_90_soc(self):
+        slots_90 = maak_slots([0.10])
+        slots_100 = maak_slots([0.10])
+        for slot in slots_90 + slots_100:
+            slot["buiten_temp_c"] = 41.0
+
+        schema_90 = los_dp_op(
+            slots_90,
+            maak_accu(huidig_kwh=2.4 * 0.90, max_kwh=2.4, max_laad_w=0.0, max_ontlaad_w=0.0),
+            plateau_spreiding=False,
+            batterij_temp_start_c=41.0,
+            warmte_afkoeling_halveringstijd_h=1.0,
+            temp_limiet_c=40.0,
+            temp_penalty_factor=1.0,
+            temp_penalty_100_soc_factor=2.0,
+        )
+        schema_100 = los_dp_op(
+            slots_100,
+            maak_accu(huidig_kwh=2.4, max_kwh=2.4, max_laad_w=0.0, max_ontlaad_w=0.0),
+            plateau_spreiding=False,
+            batterij_temp_start_c=41.0,
+            warmte_afkoeling_halveringstijd_h=1.0,
+            temp_limiet_c=40.0,
+            temp_penalty_factor=1.0,
+            temp_penalty_100_soc_factor=2.0,
+        )
+
+        assert schema_90[0]["temp_penalty_soc_factor"] == 1.0
+        assert schema_100[0]["temp_penalty_soc_factor"] == 2.0
+        assert schema_100[0]["overtemp_penalty_eur"] == pytest.approx(
+            schema_90[0]["overtemp_penalty_eur"] * 2.0
+        )
+
+    def test_soc_multiplier_gebruikt_echte_soc_schaal(self):
+        slots = maak_slots([0.10])
+        slots[0]["buiten_temp_c"] = 41.0
+
+        schema = los_dp_op(
+            slots,
+            maak_accu(huidig_kwh=2.4, max_kwh=2.4, max_laad_w=0.0, max_ontlaad_w=0.0),
+            plateau_spreiding=False,
+            batterij_temp_start_c=41.0,
+            warmte_afkoeling_halveringstijd_h=1.0,
+            temp_limiet_c=40.0,
+            temp_penalty_factor=1.0,
+            temp_penalty_100_soc_factor=2.0,
+            soc_min_pct=0.0,
+            soc_max_pct=90.0,
+        )
+
+        assert schema[0]["soc_na_pct"] == 100.0
+        assert schema[0]["temp_penalty_soc_factor"] == 1.0
+
+    def test_hoge_soc_verblijf_penalty_start_boven_90_soc(self):
+        schema_90 = los_dp_op(
+            maak_slots([0.10]),
+            maak_accu(huidig_kwh=2.4 * 0.90, max_kwh=2.4, max_laad_w=0.0, max_ontlaad_w=0.0),
+            plateau_spreiding=False,
+            hoge_soc_verblijf_penalty_factor=1.0,
+        )
+        schema_100 = los_dp_op(
+            maak_slots([0.10]),
+            maak_accu(huidig_kwh=2.4, max_kwh=2.4, max_laad_w=0.0, max_ontlaad_w=0.0),
+            plateau_spreiding=False,
+            hoge_soc_verblijf_penalty_factor=1.0,
+        )
+
+        assert schema_90[0]["hoge_soc_verblijf_penalty_eur"] == 0.0
+        assert schema_100[0]["hoge_soc_verblijf_penalty_eur"] > 0.0
+        assert schema_100[0]["soc_verblijf_penalty_eur"] == schema_100[0]["hoge_soc_verblijf_penalty_eur"]
+
+    def test_lage_soc_verblijf_penalty_start_onder_10_soc(self):
+        schema_10 = los_dp_op(
+            maak_slots([0.10]),
+            maak_accu(huidig_kwh=2.4 * 0.10, max_kwh=2.4, max_laad_w=0.0, max_ontlaad_w=0.0),
+            plateau_spreiding=False,
+            lage_soc_verblijf_penalty_factor=1.0,
+        )
+        schema_5 = los_dp_op(
+            maak_slots([0.10]),
+            maak_accu(huidig_kwh=2.4 * 0.05, max_kwh=2.4, max_laad_w=0.0, max_ontlaad_w=0.0),
+            plateau_spreiding=False,
+            lage_soc_verblijf_penalty_factor=1.0,
+        )
+
+        assert schema_10[0]["lage_soc_verblijf_penalty_eur"] == 0.0
+        assert schema_5[0]["lage_soc_verblijf_penalty_eur"] > 0.0
+        assert schema_5[0]["soc_verblijf_penalty_eur"] == schema_5[0]["lage_soc_verblijf_penalty_eur"]
+
+    def test_soc_verblijf_penalty_factor_nul_schakelt_uit(self):
+        schema = los_dp_op(
+            maak_slots([0.10]),
+            maak_accu(huidig_kwh=2.4, max_kwh=2.4, max_laad_w=0.0, max_ontlaad_w=0.0),
+            plateau_spreiding=False,
+            hoge_soc_verblijf_penalty_factor=0.0,
+            lage_soc_verblijf_penalty_factor=0.0,
+        )
+
+        assert schema[0]["soc_verblijf_penalty_eur"] == 0.0
+        assert schema[0]["hoge_soc_verblijf_penalty_eur"] == 0.0
+        assert schema[0]["lage_soc_verblijf_penalty_eur"] == 0.0
 
 
 # ── DERATING EFFECT ───────────────────────────────────────────────────────────

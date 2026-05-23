@@ -105,6 +105,33 @@ input_number:
     step: 0.01
     mode: slider
 
+  dynamisch_temp_penalty_100_soc_factor:
+    name: Dynamisch Packtemp 100% SoC Penalty Factor
+    icon: mdi:battery-alert-variant-outline
+    initial: 2.0
+    min: 1.0
+    max: 3.0
+    step: 0.1
+    mode: slider
+
+  dynamisch_hoge_soc_verblijf_penalty_factor:
+    name: Dynamisch Hoge SoC Verblijf Penalty Factor
+    icon: mdi:battery-high
+    initial: 1.0
+    min: 0
+    max: 10
+    step: 0.1
+    mode: slider
+
+  dynamisch_lage_soc_verblijf_penalty_factor:
+    name: Dynamisch Lage SoC Verblijf Penalty Factor
+    icon: mdi:battery-low
+    initial: 0.3
+    min: 0
+    max: 10
+    step: 0.1
+    mode: slider
+
 template:
   - sensor:
       - name: "Zendure 2400 AC Warmste Batterij Temperatuur"

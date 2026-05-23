@@ -157,7 +157,11 @@ WARMTE_PENALTY_ONTLADEN_FACTOR: float = 0.8
 TEMP_LIMIET_C: float = 40.0
 TEMP_LIMIET_LAGE_SOC_C: float = 45.0
 TEMP_PENALTY_FACTOR: float = 0.06
+TEMP_PENALTY_100_SOC_FACTOR: float = 2.0
 TEMP_PENALTY_EUR_PER_C2H: float = 0.25
+SOC_VERBLIJF_PENALTY_EUR_PER_KWH_H: float = 0.001
+HOGE_SOC_VERBLIJF_PENALTY_FACTOR: float = 1.0
+LAGE_SOC_VERBLIJF_PENALTY_FACTOR: float = 0.3
 
 # ── DATATYPE ──────────────────────────────────────────────────────────────────
 
@@ -424,7 +428,12 @@ def los_dp_op(
     temp_limiet_c: float = TEMP_LIMIET_C,
     temp_limiet_lage_soc_c: float = TEMP_LIMIET_LAGE_SOC_C,
     temp_penalty_factor: float = TEMP_PENALTY_FACTOR,
+    temp_penalty_100_soc_factor: float = TEMP_PENALTY_100_SOC_FACTOR,
+    hoge_soc_verblijf_penalty_factor: float = HOGE_SOC_VERBLIJF_PENALTY_FACTOR,
+    lage_soc_verblijf_penalty_factor: float = LAGE_SOC_VERBLIJF_PENALTY_FACTOR,
     temp_soc_drempel_pct: float = 80.0,
+    soc_min_pct: float = 0.0,
+    soc_max_pct: float = 100.0,
     annuleer_check: Callable[[], bool] | None = None,
 ) -> list[dict[str, Any]]:
     """
@@ -483,10 +492,15 @@ def los_dp_op(
     waar de packtemperatuur elk slot naartoe beweegt. Laden en ontladen voegen
     daarna warmte toe via C² × duur.
 
-    Vanaf temp_soc_drempel_pct gebruikt los_dp_op() temp_limiet_c als
+    Vanaf temp_soc_drempel_pct op de echte Zendure-SoC-schaal gebruikt
+    los_dp_op() temp_limiet_c als
     packtemperatuurgrens. Onder temp_soc_drempel_pct gebruikt los_dp_op()
     temp_limiet_lage_soc_c als hogere grens. Boven de gekozen grens telt
-    temp_penalty_factor mee als extra euro-penalty.
+    temp_penalty_factor mee als extra euro-penalty. Vanaf 90% SoC loopt die
+    penalty lineair op tot temp_penalty_100_soc_factor bij 100% SoC.
+    Daarnaast telt los_dp_op() zachte verblijfskosten mee voor lang boven 90%
+    of onder 10% echte SoC staan. Die kosten zijn bewust economisch: voldoende
+    spread kan hoge of lage SoC nog steeds rechtvaardigen.
 
     PLATEAU SPREIDING
     -----------------
@@ -517,7 +531,12 @@ def los_dp_op(
         temp_limiet_c:           Packtemperatuurgrens vanaf temp_soc_drempel_pct.
         temp_limiet_lage_soc_c:  Packtemperatuurgrens onder temp_soc_drempel_pct.
         temp_penalty_factor:     Gewicht voor overschrijding van de gekozen grens.
+        temp_penalty_100_soc_factor: Multiplier op overtemp-penalty bij 100% SoC.
+        hoge_soc_verblijf_penalty_factor: Gewicht voor verblijf boven 90% SoC.
+        lage_soc_verblijf_penalty_factor: Gewicht voor verblijf onder 10% SoC.
         temp_soc_drempel_pct:    SoC-percentage waarboven temp_limiet_c actief is.
+        soc_min_pct:             Echte Zendure-SoC bij DP-interne 0 kWh.
+        soc_max_pct:             Echte Zendure-SoC bij DP-interne max_kwh.
         annuleer_check:          Callback die True teruggeeft als AppDaemon deze
                                  DP-run moet stoppen voor een nieuwere berekening.
 
@@ -527,7 +546,8 @@ def los_dp_op(
         soc_voor_pct, soc_na_pct, winst_eur, c_waarde, warmte_penalty_eur.
         Als het thermisch model actief is, bevat elk slot ook batterij_temp_voor_c,
         batterij_temp_na_c, buiten_temp_c, overtemp_penalty_eur, temp_limiet_c,
-        temp_limiet_hoge_soc_c, temp_limiet_lage_soc_c en temp_limiet_actief.
+        temp_limiet_hoge_soc_c, temp_limiet_lage_soc_c, temp_penalty_soc_factor
+        en temp_limiet_actief.
     """
     n = len(slots)
     if n == 0:
@@ -570,7 +590,12 @@ def los_dp_op(
     temp_limiet_c = float(temp_limiet_c)
     temp_limiet_lage_soc_c = float(temp_limiet_lage_soc_c)
     temp_penalty_factor = max(0.0, float(temp_penalty_factor))
+    temp_penalty_100_soc_factor = max(1.0, float(temp_penalty_100_soc_factor))
+    hoge_soc_verblijf_penalty_factor = max(0.0, float(hoge_soc_verblijf_penalty_factor))
+    lage_soc_verblijf_penalty_factor = max(0.0, float(lage_soc_verblijf_penalty_factor))
     temp_soc_drempel_pct = min(100.0, max(0.0, float(temp_soc_drempel_pct)))
+    soc_min_pct = min(100.0, max(0.0, float(soc_min_pct)))
+    soc_max_pct = min(100.0, max(soc_min_pct, float(soc_max_pct)))
     thermisch_actief = batterij_temp_start_c is not None
     batterij_temp_start = float(batterij_temp_start_c) if thermisch_actief else None
     controleer_annulering()
@@ -660,14 +685,73 @@ def los_dp_op(
 
         return temp_na_c
 
+    def echte_soc_pct(soc_kwh: float) -> float:
+        if max_kwh <= 0:
+            return soc_min_pct
+
+        venster_pct = min(1.0, max(0.0, soc_kwh / max_kwh))
+        return soc_min_pct + venster_pct * (soc_max_pct - soc_min_pct)
+
     def temp_limiet_voor_soc_kwh(soc_kwh: float) -> float:
         if max_kwh <= 0:
             return temp_limiet_c
 
-        soc_pct = soc_kwh / max_kwh * 100.0
+        soc_pct = echte_soc_pct(soc_kwh)
         if soc_pct >= temp_soc_drempel_pct:
             return temp_limiet_c
         return temp_limiet_lage_soc_c
+
+    def temp_penalty_soc_factor(soc_kwh: float) -> float:
+        if max_kwh <= 0:
+            return 1.0
+
+        soc_pct = echte_soc_pct(soc_kwh)
+        if soc_pct <= 90.0:
+            return 1.0
+
+        t = min(1.0, max(0.0, (soc_pct - 90.0) / 10.0))
+        return 1.0 + t * (temp_penalty_100_soc_factor - 1.0)
+
+    def soc_verblijf_penalty_componenten(
+        soc_kwh: float,
+        temp_c: float | None,
+        duur_h: float,
+    ) -> tuple[float, float, float, float, float, float]:
+        if max_kwh <= 0 or duur_h <= 0:
+            return 0.0, 0.0, 0.0, 0.0, 0.0, 1.0
+
+        soc_pct = echte_soc_pct(soc_kwh)
+        hoge_fractie = min(1.0, max(0.0, (soc_pct - 90.0) / 10.0))
+        lage_fractie = min(1.0, max(0.0, (10.0 - soc_pct) / 10.0))
+        temp_factor = 1.0
+        if temp_c is not None and temp_c > 35.0:
+            temp_factor += ((temp_c - 35.0) / 10.0) ** 2
+
+        basis = SOC_VERBLIJF_PENALTY_EUR_PER_KWH_H * max_kwh * duur_h
+        hoge_penalty = (
+            hoge_soc_verblijf_penalty_factor
+            * basis
+            * hoge_fractie
+            * hoge_fractie
+            * temp_factor
+        )
+        lage_penalty = (
+            lage_soc_verblijf_penalty_factor
+            * basis
+            * lage_fractie
+            * lage_fractie
+        )
+        return (
+            hoge_penalty + lage_penalty,
+            hoge_penalty,
+            lage_penalty,
+            hoge_fractie,
+            lage_fractie,
+            temp_factor,
+        )
+
+    def soc_verblijf_penalty_eur(soc_kwh: float, temp_c: float | None, duur_h: float) -> float:
+        return soc_verblijf_penalty_componenten(soc_kwh, temp_c, duur_h)[0]
 
     def overtemp_penalty_eur(temp_na_c: float | None, soc_na_kwh: float, duur_h: float) -> float:
         gekozen_temp_limiet_c = temp_limiet_voor_soc_kwh(soc_na_kwh)
@@ -680,7 +764,14 @@ def los_dp_op(
         ):
             return 0.0
         overschrijding_c = temp_na_c - gekozen_temp_limiet_c
-        return temp_penalty_factor * TEMP_PENALTY_EUR_PER_C2H * overschrijding_c * overschrijding_c * duur_h
+        return (
+            temp_penalty_factor
+            * temp_penalty_soc_factor(soc_na_kwh)
+            * TEMP_PENALTY_EUR_PER_C2H
+            * overschrijding_c
+            * overschrijding_c
+            * duur_h
+        )
 
     if thermisch_actief:
         buiten_temperaturen = [
@@ -748,7 +839,12 @@ def los_dp_op(
                     soc_kwh,
                     duur_h,
                 )
-                beste = V[t + 1][s][q_rust] - kosten_overtemp_rust
+                kosten_soc_verblijf = soc_verblijf_penalty_eur(
+                    soc_kwh,
+                    idx_naar_temp(q_rust),
+                    duur_h,
+                )
+                beste = V[t + 1][s][q_rust] - kosten_overtemp_rust - kosten_soc_verblijf
                 beste_keuze = (0, 0, s, q_rust)
 
                 # ── Optie: LADEN ──────────────────────────────────────────────
@@ -780,7 +876,18 @@ def los_dp_op(
                         idx_naar_kwh(s_laden),
                         duur_h,
                     )
-                    waarde = -kosten_laden - kosten_warmte - kosten_temp + V[t + 1][s_laden][q_laden]
+                    kosten_soc_verblijf = soc_verblijf_penalty_eur(
+                        (soc_kwh + idx_naar_kwh(s_laden)) / 2.0,
+                        idx_naar_temp(q_laden),
+                        duur_h,
+                    )
+                    waarde = (
+                        -kosten_laden
+                        - kosten_warmte
+                        - kosten_temp
+                        - kosten_soc_verblijf
+                        + V[t + 1][s_laden][q_laden]
+                    )
 
                     if waarde > beste + 1e-12:
                         beste = waarde
@@ -812,10 +919,16 @@ def los_dp_op(
                         idx_naar_kwh(s_ontladen),
                         duur_h,
                     )
+                    kosten_soc_verblijf = soc_verblijf_penalty_eur(
+                        (soc_kwh + idx_naar_kwh(s_ontladen)) / 2.0,
+                        idx_naar_temp(q_ontladen),
+                        duur_h,
+                    )
                     waarde = (
                         opbrengst_ontladen
                         - kosten_warmte
                         - kosten_temp
+                        - kosten_soc_verblijf
                         + V[t + 1][s_ontladen][q_ontladen]
                     )
 
@@ -900,6 +1013,11 @@ def los_dp_op(
             huidig_temp_c = temp_na_c
         start = slot["start"]
         end   = slot["end"]
+        soc_verblijf = soc_verblijf_penalty_componenten(
+            (soc_kwh + soc_na_kwh) / 2.0,
+            temp_na_c,
+            duur_h,
+        )
 
         slot_resultaat = {
             "start":        start.isoformat() if hasattr(start, "isoformat") else start,
@@ -917,6 +1035,14 @@ def los_dp_op(
             "soc_na_pct":   round(soc_na_kwh / max_kwh * 100, 1) if max_kwh > 0 else 0.0,
             "winst_eur":    round(winst, 4),
             "warmte_penalty_eur": round(warmte_penalty, 4),
+            "soc_verblijf_penalty_eur": round(soc_verblijf[0], 6),
+            "hoge_soc_verblijf_penalty_eur": round(soc_verblijf[1], 6),
+            "lage_soc_verblijf_penalty_eur": round(soc_verblijf[2], 6),
+            "hoge_soc_verblijf_factor": round(hoge_soc_verblijf_penalty_factor, 3),
+            "lage_soc_verblijf_factor": round(lage_soc_verblijf_penalty_factor, 3),
+            "hoge_soc_verblijf_fractie": round(soc_verblijf[3], 3),
+            "lage_soc_verblijf_fractie": round(soc_verblijf[4], 3),
+            "soc_verblijf_temp_factor": round(soc_verblijf[5], 3),
             "c_waarde": round(c_waarde(energie_accu_voor_model, duur_h), 3),
         }
         if thermisch_actief:
@@ -932,6 +1058,8 @@ def los_dp_op(
                 "temp_limiet_c": round(gekozen_temp_limiet_c, 2),
                 "temp_limiet_hoge_soc_c": round(temp_limiet_c, 2),
                 "temp_limiet_lage_soc_c": round(temp_limiet_lage_soc_c, 2),
+                "temp_penalty_soc_factor": round(temp_penalty_soc_factor(soc_na_kwh), 3),
+                "temp_penalty_100_soc_factor": round(temp_penalty_100_soc_factor, 3),
                 "temp_limiet_actief": bool(overtemp_penalty > 0.0),
             })
 
@@ -964,8 +1092,18 @@ def los_dp_op(
 
             s_r["warmte_penalty_eur"] = round(warmte_penalty_eur(energie_accu, duur_h, factor), 4)
             s_r["c_waarde"] = round(c_waarde(energie_accu, duur_h), 3)
+            avg_soc = (soc_voor + soc_na) / 2.0
 
             if not thermisch_actief:
+                soc_verblijf = soc_verblijf_penalty_componenten(avg_soc, None, duur_h)
+                s_r["soc_verblijf_penalty_eur"] = round(soc_verblijf[0], 6)
+                s_r["hoge_soc_verblijf_penalty_eur"] = round(soc_verblijf[1], 6)
+                s_r["lage_soc_verblijf_penalty_eur"] = round(soc_verblijf[2], 6)
+                s_r["hoge_soc_verblijf_factor"] = round(hoge_soc_verblijf_penalty_factor, 3)
+                s_r["lage_soc_verblijf_factor"] = round(lage_soc_verblijf_penalty_factor, 3)
+                s_r["hoge_soc_verblijf_fractie"] = round(soc_verblijf[3], 3)
+                s_r["lage_soc_verblijf_fractie"] = round(soc_verblijf[4], 3)
+                s_r["soc_verblijf_temp_factor"] = round(soc_verblijf[5], 3)
                 continue
 
             buiten_c = slot_buiten_temp_c(k)
@@ -979,12 +1117,23 @@ def los_dp_op(
             s_r["batterij_temp_na_c"] = round(temp_c, 2) if temp_c is not None else None
             s_r["buiten_temp_c"] = round(buiten_c, 2) if buiten_c is not None else None
             overtemp_penalty = round(overtemp_penalty_eur(temp_c, soc_na, duur_h), 6)
+            soc_verblijf = soc_verblijf_penalty_componenten(avg_soc, temp_c, duur_h)
             s_r["overtemp_penalty_eur"] = overtemp_penalty
             # Backwards-compatible alias voor bestaande dashboards of automations.
             s_r["temp_penalty_eur"] = overtemp_penalty
+            s_r["soc_verblijf_penalty_eur"] = round(soc_verblijf[0], 6)
+            s_r["hoge_soc_verblijf_penalty_eur"] = round(soc_verblijf[1], 6)
+            s_r["lage_soc_verblijf_penalty_eur"] = round(soc_verblijf[2], 6)
+            s_r["hoge_soc_verblijf_factor"] = round(hoge_soc_verblijf_penalty_factor, 3)
+            s_r["lage_soc_verblijf_factor"] = round(lage_soc_verblijf_penalty_factor, 3)
+            s_r["hoge_soc_verblijf_fractie"] = round(soc_verblijf[3], 3)
+            s_r["lage_soc_verblijf_fractie"] = round(soc_verblijf[4], 3)
+            s_r["soc_verblijf_temp_factor"] = round(soc_verblijf[5], 3)
             s_r["temp_limiet_c"] = round(gekozen_temp_limiet_c, 2)
             s_r["temp_limiet_hoge_soc_c"] = round(temp_limiet_c, 2)
             s_r["temp_limiet_lage_soc_c"] = round(temp_limiet_lage_soc_c, 2)
+            s_r["temp_penalty_soc_factor"] = round(temp_penalty_soc_factor(soc_na), 3)
+            s_r["temp_penalty_100_soc_factor"] = round(temp_penalty_100_soc_factor, 3)
             s_r["temp_limiet_actief"] = bool(overtemp_penalty > 0.0)
 
     herbereken_modelvelden(resultaat)

@@ -32,6 +32,9 @@ Ingangen:
   input_number.dynamisch_max_temp_boven_80_soc            packtemperatuurlimiet boven 80% SoC
   input_number.dynamisch_max_temp_onder_80_soc            packtemperatuurlimiet onder 80% SoC
   input_number.dynamisch_temp_penalty_factor              gewicht voor temperatuur-overschrijding
+  input_number.dynamisch_temp_penalty_100_soc_factor      extra overtemp-gewicht bij 100% SoC
+  input_number.dynamisch_hoge_soc_verblijf_penalty_factor verblijfskosten boven 90% SoC
+  input_number.dynamisch_lage_soc_verblijf_penalty_factor verblijfskosten onder 10% SoC
   input_text.dynamisch_buitentemperatuur_sensor           optionele sensor met actuele buitentemperatuur
   input_text.dynamisch_weather_entity                     optionele weather entity voor forecast
   input_button.dynamisch_handelsstrategie_herberekenen   knop voor handmatige herberekening
@@ -54,6 +57,8 @@ import appdaemon.plugins.hass.hassapi as hass
 # strategie_dp.py staat in dezelfde apps-map; AppDaemon zet die map op sys.path.
 from strategie_dp import (
     Accustatus,
+    HOGE_SOC_VERBLIJF_PENALTY_FACTOR,
+    LAGE_SOC_VERBLIJF_PENALTY_FACTOR,
     StrategieBerekeningGeannuleerd,
     WARMTE_STIJGING_LADEN_C_PER_C2H,
     WARMTE_STIJGING_ONTLADEN_C_PER_C2H,
@@ -61,6 +66,7 @@ from strategie_dp import (
     WARMTE_PENALTY_ONTLADEN_FACTOR,
     TEMP_LIMIET_C,
     TEMP_LIMIET_LAGE_SOC_C,
+    TEMP_PENALTY_100_SOC_FACTOR,
     TEMP_PENALTY_FACTOR,
     bereken_derating,
     bereken_laadvermogen_voor_aansturing,
@@ -114,6 +120,9 @@ class DynamischHandelen(hass.Hass):
             "input_number.dynamisch_max_temp_boven_80_soc",
             "input_number.dynamisch_max_temp_onder_80_soc",
             "input_number.dynamisch_temp_penalty_factor",
+            "input_number.dynamisch_temp_penalty_100_soc_factor",
+            "input_number.dynamisch_hoge_soc_verblijf_penalty_factor",
+            "input_number.dynamisch_lage_soc_verblijf_penalty_factor",
             "input_text.dynamisch_buitentemperatuur_sensor",
             "input_text.dynamisch_weather_entity",
         ):
@@ -759,6 +768,8 @@ class DynamischHandelen(hass.Hass):
             f"warmte stijging laden {thermisch['warmte_stijging_laden_c_per_c2h']:.2f} °C/C²h | "
             f"warmte stijging ontladen {thermisch['warmte_stijging_ontladen_c_per_c2h']:.2f} °C/C²h | "
             f"temp limiet hoog/laag {thermisch['temp_limiet_c']:.1f}/{thermisch['temp_limiet_lage_soc_c']:.1f} °C | "
+            f"100% SoC temp factor {thermisch['temp_penalty_100_soc_factor']:.2f} | "
+            f"SoC verblijf hoog/laag {thermisch['hoge_soc_verblijf_penalty_factor']:.2f}/{thermisch['lage_soc_verblijf_penalty_factor']:.2f} | "
             f"forecast {thermisch['forecast_bron']}",
             level="INFO",
         )
@@ -777,6 +788,11 @@ class DynamischHandelen(hass.Hass):
             temp_limiet_c=thermisch["temp_limiet_c"],
             temp_limiet_lage_soc_c=thermisch["temp_limiet_lage_soc_c"],
             temp_penalty_factor=thermisch["temp_penalty_factor"],
+            temp_penalty_100_soc_factor=thermisch["temp_penalty_100_soc_factor"],
+            hoge_soc_verblijf_penalty_factor=thermisch["hoge_soc_verblijf_penalty_factor"],
+            lage_soc_verblijf_penalty_factor=thermisch["lage_soc_verblijf_penalty_factor"],
+            soc_min_pct=hw_min_pct,
+            soc_max_pct=hw_max_pct,
             annuleer_check=is_geannuleerd,
         )
         stop_als_geannuleerd()
@@ -841,6 +857,9 @@ class DynamischHandelen(hass.Hass):
                 "temp_limiet_c": thermisch["temp_limiet_c"],
                 "temp_limiet_lage_soc_c": thermisch["temp_limiet_lage_soc_c"],
                 "temp_penalty_factor": thermisch["temp_penalty_factor"],
+                "temp_penalty_100_soc_factor": thermisch["temp_penalty_100_soc_factor"],
+                "hoge_soc_verblijf_penalty_factor": thermisch["hoge_soc_verblijf_penalty_factor"],
+                "lage_soc_verblijf_penalty_factor": thermisch["lage_soc_verblijf_penalty_factor"],
                 "temp_soc_drempel_pct": 80.0,
                 "plateau_spreiding":   plateau_spreiding,
                 "bijgewerkt":          datetime.now().astimezone().isoformat(),
@@ -1549,6 +1568,21 @@ class DynamischHandelen(hass.Hass):
             "temp_penalty_factor": self._haal_float_met_default(
                 "input_number.dynamisch_temp_penalty_factor",
                 TEMP_PENALTY_FACTOR,
+                minimum=0.0,
+            ),
+            "temp_penalty_100_soc_factor": self._haal_float_met_default(
+                "input_number.dynamisch_temp_penalty_100_soc_factor",
+                TEMP_PENALTY_100_SOC_FACTOR,
+                minimum=1.0,
+            ),
+            "hoge_soc_verblijf_penalty_factor": self._haal_float_met_default(
+                "input_number.dynamisch_hoge_soc_verblijf_penalty_factor",
+                HOGE_SOC_VERBLIJF_PENALTY_FACTOR,
+                minimum=0.0,
+            ),
+            "lage_soc_verblijf_penalty_factor": self._haal_float_met_default(
+                "input_number.dynamisch_lage_soc_verblijf_penalty_factor",
+                LAGE_SOC_VERBLIJF_PENALTY_FACTOR,
                 minimum=0.0,
             ),
         }
