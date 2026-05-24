@@ -33,9 +33,10 @@ views:
               show: true
               show_states: true
               title: Geplande SoC en prijzen
-            graph_span: 48h
+            graph_span: 54h
             span:
               start: hour
+              offset: -6h
             now:
               show: true
               label: Nu
@@ -44,6 +45,7 @@ views:
               - entity: sensor.dynamisch_handelsstrategie
                 name: SoC
                 type: area
+                extend_to: false
                 curve: stepline
                 color: '#01a180'
                 opacity: 0.2
@@ -56,7 +58,7 @@ views:
                   in_header: true
                   in_legend: true
                 data_generator: |
-                  const slots = entity.attributes.slots || [];
+                  const slots = entity.attributes.slots_grafiek || entity.attributes.slots || [];
                   const pts = slots.map(s => [new Date(s.start).getTime(), s.soc_voor_pct ?? 0]);
                   if (slots.length) {
                     const last = slots[slots.length - 1];
@@ -66,6 +68,7 @@ views:
               - entity: sensor.dynamisch_handelsstrategie
                 name: Prijs
                 type: line
+                extend_to: false
                 curve: stepline
                 color: '#ff9800'
                 stroke_width: 2
@@ -77,13 +80,14 @@ views:
                   in_header: true
                   in_legend: true
                 data_generator: |
-                  return (entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     s.prijs_ct
                   ]);
               - entity: sensor.dynamisch_handelsstrategie
                 name: Vermogen
                 type: line
+                extend_to: false
                 stroke_width: 0
                 opacity: 0
                 yaxis_id: extra
@@ -92,13 +96,14 @@ views:
                   in_header: false
                   in_legend: false
                 data_generator: |
-                  return (entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     s.actie !== 'rust' ? (s.vermogen_w ?? 0) : null
                   ]);
               - entity: sensor.dynamisch_handelsstrategie
                 name: Actie
                 type: line
+                extend_to: false
                 stroke_width: 0
                 opacity: 0
                 yaxis_id: extra
@@ -107,7 +112,7 @@ views:
                   in_header: false
                   in_legend: false
                 data_generator: |
-                  return (entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     s.actie === 'laden' ? 1 : s.actie === 'ontladen' ? 2 : 0
                   ]);
@@ -124,7 +129,7 @@ views:
                   in_header: false
                   in_legend: true
                 data_generator: |
-                  const slots = entity.attributes.slots || [];
+                  const slots = entity.attributes.slots_grafiek || entity.attributes.slots || [];
                   return slots.map(s => {
                     const ts = new Date(s.start).getTime();
                     const prijs = Number(s.prijs_ct);
@@ -136,6 +141,7 @@ views:
               - entity: sensor.dynamisch_handelsstrategie
                 name: Beste verkoop
                 type: line
+                extend_to: false
                 stroke_width: 0
                 opacity: 0
                 yaxis_id: extra
@@ -144,13 +150,14 @@ views:
                   in_header: false
                   in_legend: false
                 data_generator: |
-                  return (entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     s.geen_laden_reden === 'spread_te_klein' ? s.beste_verkoop_ct : null
                   ]);
               - entity: sensor.dynamisch_handelsstrategie
                 name: Nodig bij drempel
                 type: line
+                extend_to: false
                 stroke_width: 0
                 opacity: 0
                 yaxis_id: extra
@@ -159,13 +166,14 @@ views:
                   in_header: false
                   in_legend: false
                 data_generator: |
-                  return (entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     s.geen_laden_reden === 'spread_te_klein' ? s.benodigde_verkoop_ct : null
                   ]);
               - entity: sensor.dynamisch_handelsstrategie
                 name: Min spread
                 type: line
+                extend_to: false
                 stroke_width: 0
                 opacity: 0
                 yaxis_id: extra
@@ -174,13 +182,14 @@ views:
                   in_header: false
                   in_legend: false
                 data_generator: |
-                  return (entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     s.geen_laden_reden === 'spread_te_klein' ? s.min_spread_ct : null
                   ]);
               - entity: sensor.dynamisch_handelsstrategie
                 name: Spread tekort
                 type: line
+                extend_to: false
                 stroke_width: 0
                 opacity: 0
                 yaxis_id: extra
@@ -189,13 +198,14 @@ views:
                   in_header: false
                   in_legend: false
                 data_generator: |
-                  return (entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     s.geen_laden_reden === 'spread_te_klein' ? s.spread_tekort_ct : null
                   ]);
               - entity: input_boolean.dynamisch_handelsstrategie_berekening_bezig
                 name: Refresh trigger
                 type: line
+                extend_to: false
                 show:
                   in_chart: false
                   in_header: false
@@ -309,9 +319,10 @@ views:
               show: true
               show_states: false
               title: Geplande acties (groen = laden, oranje = ontladen)
-            graph_span: 48h
+            graph_span: 54h
             span:
               start: hour
+              offset: -6h
             now:
               show: true
               label: Nu
@@ -328,7 +339,7 @@ views:
                   - value: 0
                     color: '#66bb6a'
                 data_generator: |
-                  return (entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     s.actie === 'laden'    ?  (s.vermogen_w ?? 0) :
                     s.actie === 'ontladen' ? -(s.vermogen_w ?? 0) :
@@ -337,6 +348,7 @@ views:
               - entity: input_boolean.dynamisch_handelsstrategie_berekening_bezig
                 name: Refresh trigger
                 type: line
+                extend_to: false
                 show:
                   in_chart: false
                   in_header: false
@@ -397,9 +409,10 @@ views:
               show: true
               show_states: false
               title: Verwachte winst per slot (groen = opbrengst, rood = kosten)
-            graph_span: 48h
+            graph_span: 54h
             span:
               start: hour
+              offset: -6h
             now:
               show: true
               label: Nu
@@ -416,7 +429,7 @@ views:
                   - value: 0
                     color: '#66bb6a'
                 data_generator: |
-                  return (entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     (s.winst_eur ?? 0) !== 0
                       ? parseFloat(((s.winst_eur ?? 0) * 100).toFixed(2))
@@ -425,6 +438,7 @@ views:
               - entity: input_boolean.dynamisch_handelsstrategie_berekening_bezig
                 name: Refresh trigger
                 type: line
+                extend_to: false
                 show:
                   in_chart: false
                   in_header: false
@@ -597,9 +611,10 @@ views:
               show: true
               show_states: false
               title: Temperatuur over planning
-            graph_span: 48h
+            graph_span: 54h
             span:
               start: hour
+              offset: -6h
             now:
               show: true
               label: Nu
@@ -608,13 +623,14 @@ views:
               - entity: sensor.dynamisch_handelsstrategie
                 name: Batterij
                 type: line
+                extend_to: false
                 curve: straight
                 color: '#009688'
                 stroke_width: 2
                 unit: '°C'
                 yaxis_id: temp
                 data_generator: |
-                  const slots = entity.attributes.slots || [];
+                  const slots = entity.attributes.slots_grafiek || entity.attributes.slots || [];
                   const pts = slots.map(s => [
                     new Date(s.start).getTime(),
                     s.batterij_temp_voor_c ?? null
@@ -630,26 +646,28 @@ views:
               - entity: sensor.dynamisch_handelsstrategie
                 name: Buiten
                 type: line
+                extend_to: false
                 curve: stepline
                 color: '#42a5f5'
                 stroke_width: 1
                 unit: '°C'
                 yaxis_id: temp
                 data_generator: |
-                  return (entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     s.buiten_temp_c ?? null
                   ]);
               - entity: sensor.dynamisch_handelsstrategie
                 name: Limiet
                 type: line
+                extend_to: false
                 curve: stepline
                 color: '#ef5350'
                 stroke_width: 1
                 unit: '°C'
                 yaxis_id: temp
                 data_generator: |
-                  return (entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     s.temp_limiet_c ?? entity.attributes.temp_limiet_c ?? null
                   ]);
@@ -661,7 +679,7 @@ views:
                 unit: '°C'
                 yaxis_id: temp
                 data_generator: |
-                  return (entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     s.temp_limiet_actief && (s.overtemp_penalty_eur ?? s.temp_penalty_eur ?? 0) > 0
                       ? s.batterij_temp_na_c
@@ -675,7 +693,7 @@ views:
                 unit: '°C'
                 yaxis_id: delta
                 data_generator: |
-                  return (entity.attributes.slots || []).map(s => {
+                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => {
                     const voor = Number(s.batterij_temp_voor_c);
                     const na = Number(s.batterij_temp_na_c);
                     return [
@@ -688,6 +706,7 @@ views:
               - entity: input_boolean.dynamisch_handelsstrategie_berekening_bezig
                 name: Refresh trigger
                 type: line
+                extend_to: false
                 yaxis_id: helper
                 show:
                   in_chart: false
@@ -735,9 +754,10 @@ views:
               show: true
               show_states: false
               title: Penalty per slot
-            graph_span: 48h
+            graph_span: 54h
             span:
               start: hour
+              offset: -6h
             now:
               show: true
               label: Nu
@@ -750,7 +770,7 @@ views:
                 unit: 'ct'
                 yaxis_id: penalty
                 data_generator: |
-                  return (entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     s.actie === 'laden' ? ((s.warmte_penalty_eur ?? 0) * 100) : null
                   ]);
@@ -761,7 +781,7 @@ views:
                 unit: 'ct'
                 yaxis_id: penalty
                 data_generator: |
-                  return (entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     s.actie === 'ontladen' ? ((s.warmte_penalty_eur ?? 0) * 100) : null
                   ]);
@@ -772,7 +792,7 @@ views:
                 unit: 'ct'
                 yaxis_id: penalty
                 data_generator: |
-                  return (entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     (s.overtemp_penalty_eur ?? s.temp_penalty_eur ?? 0) > 0
                       ? ((s.overtemp_penalty_eur ?? s.temp_penalty_eur ?? 0) * 100)
@@ -785,7 +805,7 @@ views:
                 unit: 'ct'
                 yaxis_id: penalty
                 data_generator: |
-                  return (entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     (s.soc_verblijf_penalty_eur ?? 0) > 0
                       ? ((s.soc_verblijf_penalty_eur ?? 0) * 100)
@@ -794,6 +814,7 @@ views:
               - entity: sensor.dynamisch_handelsstrategie
                 name: Actie
                 type: line
+                extend_to: false
                 yaxis_id: helper
                 stroke_width: 0
                 opacity: 0
@@ -802,13 +823,14 @@ views:
                   in_header: false
                   in_legend: false
                 data_generator: |
-                  return (entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     s.actie === 'laden' ? 1 : s.actie === 'ontladen' ? 2 : 0
                   ]);
               - entity: sensor.dynamisch_handelsstrategie
                 name: Vermogen
                 type: line
+                extend_to: false
                 yaxis_id: helper
                 stroke_width: 0
                 opacity: 0
@@ -817,13 +839,14 @@ views:
                   in_header: false
                   in_legend: false
                 data_generator: |
-                  return (entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     s.vermogen_w ?? 0
                   ]);
               - entity: sensor.dynamisch_handelsstrategie
                 name: C
                 type: line
+                extend_to: false
                 yaxis_id: helper
                 stroke_width: 0
                 opacity: 0
@@ -832,13 +855,14 @@ views:
                   in_header: false
                   in_legend: false
                 data_generator: |
-                  return (entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     s.c_waarde ?? 0
                   ]);
               - entity: sensor.dynamisch_handelsstrategie
                 name: Temp voor
                 type: line
+                extend_to: false
                 yaxis_id: helper
                 stroke_width: 0
                 opacity: 0
@@ -847,13 +871,14 @@ views:
                   in_header: false
                   in_legend: false
                 data_generator: |
-                  return (entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     s.batterij_temp_voor_c ?? null
                   ]);
               - entity: sensor.dynamisch_handelsstrategie
                 name: Temp na
                 type: line
+                extend_to: false
                 yaxis_id: helper
                 stroke_width: 0
                 opacity: 0
@@ -862,13 +887,14 @@ views:
                   in_header: false
                   in_legend: false
                 data_generator: |
-                  return (entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     s.batterij_temp_na_c ?? null
                   ]);
               - entity: sensor.dynamisch_handelsstrategie
                 name: Warmte ct
                 type: line
+                extend_to: false
                 yaxis_id: helper
                 stroke_width: 0
                 opacity: 0
@@ -877,13 +903,14 @@ views:
                   in_header: false
                   in_legend: false
                 data_generator: |
-                  return (entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     (s.warmte_penalty_eur ?? 0) * 100
                   ]);
               - entity: sensor.dynamisch_handelsstrategie
                 name: Overtemp ct
                 type: line
+                extend_to: false
                 yaxis_id: helper
                 stroke_width: 0
                 opacity: 0
@@ -892,13 +919,14 @@ views:
                   in_header: false
                   in_legend: false
                 data_generator: |
-                  return (entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     (s.overtemp_penalty_eur ?? s.temp_penalty_eur ?? 0) * 100
                   ]);
               - entity: sensor.dynamisch_handelsstrategie
                 name: SoC verblijf ct
                 type: line
+                extend_to: false
                 yaxis_id: helper
                 stroke_width: 0
                 opacity: 0
@@ -907,13 +935,14 @@ views:
                   in_header: false
                   in_legend: false
                 data_generator: |
-                  return (entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     (s.soc_verblijf_penalty_eur ?? 0) * 100
                   ]);
               - entity: sensor.dynamisch_handelsstrategie
                 name: Hoge SoC verblijf ct
                 type: line
+                extend_to: false
                 yaxis_id: helper
                 stroke_width: 0
                 opacity: 0
@@ -922,13 +951,14 @@ views:
                   in_header: false
                   in_legend: false
                 data_generator: |
-                  return (entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     (s.hoge_soc_verblijf_penalty_eur ?? 0) * 100
                   ]);
               - entity: sensor.dynamisch_handelsstrategie
                 name: Lage SoC verblijf ct
                 type: line
+                extend_to: false
                 yaxis_id: helper
                 stroke_width: 0
                 opacity: 0
@@ -937,13 +967,14 @@ views:
                   in_header: false
                   in_legend: false
                 data_generator: |
-                  return (entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     (s.lage_soc_verblijf_penalty_eur ?? 0) * 100
                   ]);
               - entity: input_boolean.dynamisch_handelsstrategie_berekening_bezig
                 name: Refresh trigger
                 type: line
+                extend_to: false
                 yaxis_id: helper
                 show:
                   in_chart: false
