@@ -101,6 +101,82 @@ def _lees_slot_datetimes(slot: dict) -> tuple[datetime, datetime] | None:
         return None
 
 
+def _lees_datetime_waarde(waarde) -> datetime | None:
+    """Leest een datetime-waarde uit HA history of sensorattributen."""
+    if isinstance(waarde, datetime):
+        return waarde.astimezone()
+
+    if waarde is None:
+        return None
+
+    tekst = str(waarde).strip()
+    if not tekst:
+        return None
+
+    try:
+        return datetime.fromisoformat(tekst.replace("Z", "+00:00")).astimezone()
+    except ValueError:
+        return None
+
+
+def haal_grafiek_slots_uit_history_items(
+    strategie_items: list[dict],
+    nu: datetime,
+    historie_uren: float = GRAFIEK_HISTORIE_UREN,
+) -> list[dict]:
+    """
+    Leest recente verlopen strategieslots uit recorder-history voor dashboardgrafieken.
+
+    De functie gebruikt alleen `attributes.slots` uit oude sensorstates.
+    `attributes.slots_grafiek` wordt genegeerd, zodat oude dashboard-history niet
+    opnieuw in zichzelf wordt opgenomen.
+    """
+    grens = nu.astimezone() - timedelta(hours=historie_uren)
+    gekozen: dict[tuple[str, str], tuple[datetime | None, dict]] = {}
+
+    for item in strategie_items:
+        attrs = item.get("attributes") or {}
+        slots = attrs.get("slots") or []
+        if not isinstance(slots, list):
+            continue
+
+        item_tijd = _lees_datetime_waarde(
+            item.get("last_changed") or item.get("last_updated")
+        )
+
+        for slot in slots:
+            if not isinstance(slot, dict):
+                continue
+
+            datetimes = _lees_slot_datetimes(slot)
+            if datetimes is None:
+                continue
+            start, end = datetimes
+            if end <= grens or start >= nu:
+                continue
+            if item_tijd is not None and item_tijd > end:
+                continue
+
+            sleutel = (start.isoformat(), end.isoformat())
+            vorige = gekozen.get(sleutel)
+            vorige_tijd = vorige[0] if vorige else None
+            if vorige is not None:
+                if item_tijd is None:
+                    continue
+                if vorige_tijd is not None and item_tijd <= vorige_tijd:
+                    continue
+
+            gekozen[sleutel] = (item_tijd, dict(slot))
+
+    return [
+        slot
+        for _, (_, slot) in sorted(
+            gekozen.items(),
+            key=lambda item: item[0][0],
+        )
+    ]
+
+
 def bouw_grafiek_slots(
     vorige_slots: list[dict],
     nieuwe_slots: list[dict],
@@ -453,20 +529,7 @@ class DynamischHandelen(hass.Hass):
         return []
 
     def _parse_datetime(self, waarde) -> datetime | None:
-        if isinstance(waarde, datetime):
-            return waarde.astimezone()
-
-        if waarde is None:
-            return None
-
-        tekst = str(waarde).strip()
-        if not tekst:
-            return None
-
-        try:
-            return datetime.fromisoformat(tekst.replace("Z", "+00:00")).astimezone()
-        except ValueError:
-            return None
+        return _lees_datetime_waarde(waarde)
 
     def _haal_geanalyseerde_strategie_slots(
         self,
@@ -884,6 +947,22 @@ class DynamischHandelen(hass.Hass):
         ontlaad_slots   = [s for s in schema if s["actie"] == "ontladen"]
         volgende        = next((s for s in schema if s["actie"] != "rust"), None)
         nu_publicatie   = datetime.now().astimezone()
+        history_grafiek_slots: list[dict] = []
+        try:
+            strategie_history_items = self._haal_history_items(
+                "sensor.dynamisch_handelsstrategie",
+                1,
+            )
+            history_grafiek_slots = haal_grafiek_slots_uit_history_items(
+                strategie_history_items,
+                nu_publicatie,
+                GRAFIEK_HISTORIE_UREN,
+            )
+        except Exception as exc:
+            self.log(
+                f"Dynamisch Handelen: kon grafiek-history niet lezen: {exc}",
+                level="DEBUG",
+            )
         vorige_grafiek_slots = (
             self.get_state("sensor.dynamisch_handelsstrategie", attribute="slots_grafiek")
             or self.get_state("sensor.dynamisch_handelsstrategie", attribute="slots")
@@ -892,7 +971,7 @@ class DynamischHandelen(hass.Hass):
         if not isinstance(vorige_grafiek_slots, list):
             vorige_grafiek_slots = []
         grafiek_slots = bouw_grafiek_slots(
-            vorige_grafiek_slots,
+            history_grafiek_slots + vorige_grafiek_slots,
             schema,
             nu_publicatie,
             GRAFIEK_HISTORIE_UREN,
