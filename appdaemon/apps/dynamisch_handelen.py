@@ -74,6 +74,74 @@ from strategie_dp import (
     rond_vermogen_omhoog,
 )
 
+
+GRAFIEK_HISTORIE_UREN = 6.0
+
+
+def _lees_slot_datetimes(slot: dict) -> tuple[datetime, datetime] | None:
+    """Leest start en end uit een strategieslot als timezone-aware datetimes."""
+    try:
+        start_raw = slot["start"]
+        end_raw = slot["end"]
+    except KeyError:
+        return None
+
+    def parse(value) -> datetime:
+        if isinstance(value, datetime):
+            dt = value
+        else:
+            dt = datetime.fromisoformat(str(value))
+        if dt.tzinfo is None:
+            return dt.astimezone()
+        return dt.astimezone()
+
+    try:
+        return parse(start_raw), parse(end_raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def bouw_grafiek_slots(
+    vorige_slots: list[dict],
+    nieuwe_slots: list[dict],
+    nu: datetime,
+    historie_uren: float = GRAFIEK_HISTORIE_UREN,
+) -> list[dict]:
+    """
+    Combineert recente verlopen slots met de nieuwe strategie voor dashboardgrafieken.
+
+    `nieuwe_slots` blijft de actuele planning voor automatiseringen.
+    `bouw_grafiek_slots` bewaart alleen oude slots waarvan `end` binnen het
+    historievenster valt.
+    """
+    grens = nu.astimezone() - timedelta(hours=historie_uren)
+    gecombineerd: dict[tuple[str, str], dict] = {}
+
+    for slot in vorige_slots:
+        datetimes = _lees_slot_datetimes(slot)
+        if datetimes is None:
+            continue
+        start, end = datetimes
+        if end <= grens or start >= nu:
+            continue
+        gecombineerd[(start.isoformat(), end.isoformat())] = dict(slot)
+
+    for slot in nieuwe_slots:
+        datetimes = _lees_slot_datetimes(slot)
+        if datetimes is None:
+            continue
+        start, end = datetimes
+        gecombineerd[(start.isoformat(), end.isoformat())] = dict(slot)
+
+    return [
+        slot
+        for _, slot in sorted(
+            gecombineerd.items(),
+            key=lambda item: item[0][0],
+        )
+    ]
+
+
 class DynamischHandelen(hass.Hass):
 
     def initialize(self):
@@ -81,7 +149,7 @@ class DynamischHandelen(hass.Hass):
         AppDaemon roept initialize() aan bij opstarten en na een reload.
         We registreren hier twee uurlijkse taken en knop/config-triggers.
         """
-        self.log("Dynamisch Handelen: gestart, schema wordt elk uur om :15 en :45 herberekend")
+        self.log("Dynamisch Handelen: gestart, schema wordt elk uur om :15, :30, :45 en :58 herberekend")
         self._berekening_bezig = False
         self._herberekening_gepland = False
         self._laatste_herberekening_kwargs = None
@@ -90,8 +158,9 @@ class DynamischHandelen(hass.Hass):
         self._initialiseer_berekening_duur_sensor()
         self._initialiseer_advies_sensor()
         self.run_hourly(self.bereken_strategie, time(0, 15, 0))
+        self.run_hourly(self.bereken_strategie, time(0, 30, 0))
         self.run_hourly(self.bereken_strategie, time(0, 45, 0))
-        self.run_daily(self.bereken_strategie_advies, time(14, 50, 0))
+        self.run_hourly(self.bereken_strategie, time(0, 58, 0))
         self.listen_state(
             self._herbereken_op_knop,
             "input_button.dynamisch_handelsstrategie_herberekenen",
@@ -814,6 +883,22 @@ class DynamischHandelen(hass.Hass):
         laad_slots      = [s for s in schema if s["actie"] == "laden"]
         ontlaad_slots   = [s for s in schema if s["actie"] == "ontladen"]
         volgende        = next((s for s in schema if s["actie"] != "rust"), None)
+        nu_publicatie   = datetime.now().astimezone()
+        vorige_grafiek_slots = (
+            self.get_state("sensor.dynamisch_handelsstrategie", attribute="slots_grafiek")
+            or self.get_state("sensor.dynamisch_handelsstrategie", attribute="slots")
+            or []
+        )
+        if not isinstance(vorige_grafiek_slots, list):
+            vorige_grafiek_slots = []
+        grafiek_slots = bouw_grafiek_slots(
+            vorige_grafiek_slots,
+            schema,
+            nu_publicatie,
+            GRAFIEK_HISTORIE_UREN,
+        )
+        grafiek_start = grafiek_slots[0]["start"] if grafiek_slots else None
+        strategie_einde = schema[-1]["end"] if schema else None
 
         self.log(
             f"Dynamisch Handelen: verwacht EUR {verwachte_winst:.3f} | "
@@ -832,6 +917,10 @@ class DynamischHandelen(hass.Hass):
                 "icon":                "mdi:cash-plus",
                 "device_class":        "monetary",
                 "slots":               schema,
+                "slots_grafiek":       grafiek_slots,
+                "grafiek_historie_uren": GRAFIEK_HISTORIE_UREN,
+                "grafiek_start":       grafiek_start,
+                "strategie_einde":     strategie_einde,
                 "laad_slots":          len(laad_slots),
                 "ontlaad_slots":       len(ontlaad_slots),
                 "spread_blokkades":    spread_blokkades,
@@ -863,7 +952,7 @@ class DynamischHandelen(hass.Hass):
                 "lage_soc_verblijf_penalty_factor": thermisch["lage_soc_verblijf_penalty_factor"],
                 "temp_soc_drempel_pct": 80.0,
                 "plateau_spreiding":   plateau_spreiding,
-                "bijgewerkt":          datetime.now().astimezone().isoformat(),
+                "bijgewerkt":          nu_publicatie.isoformat(),
             },
         )
 
