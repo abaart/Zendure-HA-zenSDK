@@ -965,19 +965,28 @@ views:
             apex_config:
               tooltip:
                 custom: |
-                  EVAL:function({ series, dataPointIndex, w }) {
-                    var actionCode = series[4][dataPointIndex];
-                    var vermogen = series[5][dataPointIndex];
-                    var c = series[6][dataPointIndex];
-                    var tempVoor = series[7][dataPointIndex];
-                    var tempNa = series[8][dataPointIndex];
-                    var warmte = series[9][dataPointIndex];
-                    var overtempPenalty = series[10][dataPointIndex];
-                    var socVerblijfPenalty = series[11][dataPointIndex];
-                    var hogeSocPenalty = series[12][dataPointIndex];
-                    var lageSocPenalty = series[13][dataPointIndex];
+                  EVAL:function({ series, seriesIndex, dataPointIndex, w }) {
+                    var currentX = w.globals.seriesX[seriesIndex] || [];
+                    var ts = currentX[dataPointIndex];
+                    var valueAtTimestamp = function(idx) {
+                      var xs = w.globals.seriesX[idx] || [];
+                      var ys = series[idx] || [];
+                      for (var i = 0; i < xs.length; i++) {
+                        if (xs[i] === ts) return ys[i];
+                      }
+                      return null;
+                    };
+                    var actionCode = valueAtTimestamp(4);
+                    var vermogen = valueAtTimestamp(5);
+                    var c = valueAtTimestamp(6);
+                    var tempVoor = valueAtTimestamp(7);
+                    var tempNa = valueAtTimestamp(8);
+                    var warmte = valueAtTimestamp(9);
+                    var overtempPenalty = valueAtTimestamp(10);
+                    var socVerblijfPenalty = valueAtTimestamp(11);
+                    var hogeSocPenalty = valueAtTimestamp(12);
+                    var lageSocPenalty = valueAtTimestamp(13);
                     var actieLabel = actionCode === 1 ? 'Laden' : actionCode === 2 ? 'Ontladen' : 'Rust';
-                    var ts = w.globals.seriesX[0] && w.globals.seriesX[0][dataPointIndex];
                     if (!ts) return '';
                     var d = new Date(ts);
                     var pad = function(n) { return String(n).padStart(2, '0'); };
