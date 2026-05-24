@@ -357,13 +357,88 @@ class DynamischHandelen(hass.Hass):
                 level="DEBUG",
             )
 
-    def _haal_history_items(self, entity_id: str, dagen: int) -> list[dict]:
+    def _haal_history_items(
+        self,
+        entity_id: str,
+        dagen: int | None = None,
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+    ) -> list[dict]:
         """Leest HA history en normaliseert AppDaemon's verschillende return-vormen."""
+        kwargs = {"entity_id": entity_id}
+        if dagen is not None:
+            kwargs["days"] = dagen
+        if start_time is not None:
+            kwargs["start_time"] = start_time
+        if end_time is not None:
+            kwargs["end_time"] = end_time
+
         try:
-            history = self.get_history(entity_id=entity_id, days=dagen) or []
+            history = self.get_history(**kwargs) or []
         except TypeError:
-            history = self.get_history(entity_id, days=dagen) or []
+            if start_time is not None or end_time is not None:
+                try:
+                    history = self.get_history(entity_id, start_time=start_time, end_time=end_time) or []
+                except TypeError:
+                    history = self.get_history(entity_id, days=dagen or 1) or []
+            else:
+                history = self.get_history(entity_id, days=dagen or 1) or []
         return self._flatten_history_items(history)
+
+    def _historische_float_state(
+        self,
+        entity_id: str,
+        tijd: datetime | None,
+        default: float | None = None,
+    ) -> tuple[float | None, str]:
+        """Leest de laatst bekende numerieke state op of voor `tijd`."""
+        if tijd is None:
+            waarde = self._float_state(entity_id)
+            return (waarde if waarde is not None else default), "huidig"
+
+        start_time = tijd - timedelta(hours=6)
+        end_time = tijd + timedelta(minutes=1)
+        items = self._haal_history_items(entity_id, start_time=start_time, end_time=end_time)
+
+        beste_voor = None
+        beste_voor_tijd = None
+        eerste_na = None
+        eerste_na_tijd = None
+
+        for item in items:
+            try:
+                waarde = float(item.get("state"))
+            except (TypeError, ValueError):
+                continue
+
+            item_tijd = (
+                self._parse_datetime(item.get("last_changed"))
+                or self._parse_datetime(item.get("last_updated"))
+            )
+            if item_tijd is None:
+                continue
+
+            if item_tijd <= tijd:
+                if beste_voor_tijd is None or item_tijd > beste_voor_tijd:
+                    beste_voor = waarde
+                    beste_voor_tijd = item_tijd
+                continue
+
+            if eerste_na_tijd is None or item_tijd < eerste_na_tijd:
+                eerste_na = waarde
+                eerste_na_tijd = item_tijd
+
+        if beste_voor is not None:
+            return beste_voor, "history"
+
+        if eerste_na is not None and eerste_na_tijd is not None:
+            if (eerste_na_tijd - tijd).total_seconds() <= 120:
+                return eerste_na, "history_na_start"
+
+        waarde = self._float_state(entity_id)
+        if waarde is not None:
+            return waarde, "huidig_wegens_history_onbeschikbaar"
+        return default, "default_wegens_history_onbeschikbaar"
 
     def _flatten_history_items(self, value) -> list[dict]:
         if isinstance(value, dict):
@@ -736,7 +811,8 @@ class DynamischHandelen(hass.Hass):
             return
 
         try:
-            accu, hw_min_pct, hw_max_pct = self._haal_accustatus()
+            dp_start_tijd = self._bepaal_dp_start_tijd(slots)
+            accu, hw_min_pct, hw_max_pct, accu_bronnen = self._haal_accustatus(dp_start_tijd)
         except Exception as exc:
             self.log(f"Dynamisch Handelen: fout bij ophalen accustatus: {exc}", level="ERROR")
             return
@@ -753,7 +829,7 @@ class DynamischHandelen(hass.Hass):
         warmte_penalty_laden_factor = self._haal_warmte_penalty_laden_factor()
         warmte_penalty_ontladen_factor = self._haal_warmte_penalty_ontladen_factor()
         plateau_spreiding = self._haal_plateau_spreiding()
-        thermisch = self._haal_thermische_config(slots)
+        thermisch = self._haal_thermische_config(slots, dp_start_tijd)
         stop_als_geannuleerd()
 
         self.log(
@@ -840,11 +916,14 @@ class DynamischHandelen(hass.Hass):
                 "volgende_start":      volgende["start"] if volgende else None,
                 "accu_huidig_kwh":     round(accu.huidig_kwh, 3),
                 "accu_max_kwh":        round(accu.max_kwh,    3),
+                "dp_start":            dp_start_tijd.isoformat() if dp_start_tijd else None,
+                "accu_bronnen":        accu_bronnen,
                 "eta":                 round(accu.eta_laad,   3),
                 "min_spread_ct":       min_spread,
                 "warmte_penalty_laden_factor": warmte_penalty_laden_factor,
                 "warmte_penalty_ontladen_factor": warmte_penalty_ontladen_factor,
                 "batterij_temp_start_c": thermisch["batterij_temp_start_c"],
+                "batterij_temp_bron": thermisch["batterij_temp_bron"],
                 "buiten_temp_huidig_c": thermisch["buiten_temp_huidig_c"],
                 "buiten_temp_bron": thermisch["buiten_temp_bron"],
                 "weather_entity": thermisch["weather_entity"],
@@ -899,16 +978,28 @@ class DynamischHandelen(hass.Hass):
             if end <= nu:
                 continue
 
-            effectieve_start = max(start, nu)
             slots.append({
                 "start":      start,
                 "end":        end,
                 "price":      float(item["value"]),
-                "duration_h": (end - effectieve_start).total_seconds() / 3600.0,
+                "duration_h": (end - start).total_seconds() / 3600.0,
             })
 
         slots.sort(key=lambda s: s["start"])
         return slots
+
+    def _bepaal_dp_start_tijd(self, slots: list[dict]) -> datetime | None:
+        """Gebruikt het begin van het lopende prijsslot als starttijd voor de DP."""
+        nu = datetime.now().astimezone()
+        for slot in slots:
+            try:
+                start = datetime.fromisoformat(str(slot["start"])).astimezone()
+                end = datetime.fromisoformat(str(slot["end"])).astimezone()
+            except (KeyError, ValueError, TypeError):
+                continue
+            if start <= nu < end:
+                return start
+        return None
 
     # ── SPREAD-UITLEG ────────────────────────────────────────────────────────
 
@@ -988,15 +1079,13 @@ class DynamischHandelen(hass.Hass):
         Corrigeert alleen het lopende slot op basis van de actuele Zendure-SoC.
 
         los_dp_op() maakt een target voor het einde van elk prijsslot. Binnen het
-        huidige slot gebruiken we die target als vaste opdracht. Bij laden met
-        bereken_derating(actuele_soc_kwh, accu.max_kwh) lager dan 1.0 blijft
-        vermogen_w gelijk aan accu.max_laad_w; verwacht_vermogen_w krijgt dan de
-        lagere verwachte BMS-opname.
+        huidige slot gebruikt deze correctie alleen dat DP-target als opdracht.
+        Deze functie haalt geen energie uit latere slots naar voren, omdat de DP
+        dan thermische penalties en SoC-verblijfskosten niet opnieuw evalueert.
         """
         nu = datetime.now().astimezone()
         actief = None
-        actief_index = None
-        for index, slot in enumerate(schema):
+        for slot in schema:
             try:
                 start = datetime.fromisoformat(str(slot["start"])).astimezone()
                 end = datetime.fromisoformat(str(slot["end"])).astimezone()
@@ -1004,10 +1093,9 @@ class DynamischHandelen(hass.Hass):
                 continue
             if start <= nu < end:
                 actief = slot
-                actief_index = index
                 break
 
-        if actief is None or actief_index is None or actief.get("actie") not in ("laden", "ontladen"):
+        if actief is None or actief.get("actie") not in ("laden", "ontladen"):
             return
 
         raw_actuele_soc_kwh = self._haal_actuele_soc_kwh_via_laadpercentage(
@@ -1018,10 +1106,12 @@ class DynamischHandelen(hass.Hass):
         if raw_actuele_soc_kwh is None:
             return
 
-        doel = self._haal_actief_slot_doel(actief, raw_actuele_soc_kwh)
-        actie = doel["actie"]
-        target_kwh = doel["target_kwh"]
-        begin_kwh = doel["begin_kwh"]
+        actie = actief["actie"]
+        try:
+            target_kwh = self._begrens_kwh_naar_accu(float(actief["soc_na_kwh"]), accu.max_kwh)
+            begin_kwh = float(actief.get("soc_voor_kwh", raw_actuele_soc_kwh))
+        except (KeyError, TypeError, ValueError):
+            return
 
         try:
             eindtijd = datetime.fromisoformat(str(actief["end"])).astimezone()
@@ -1041,14 +1131,6 @@ class DynamischHandelen(hass.Hass):
         )
 
         if actie == "laden":
-            target_kwh = self._verhoog_actief_laadslot_doel(
-                schema,
-                actief_index,
-                target_kwh,
-                actuele_soc_kwh,
-                accu,
-                resterend_h,
-            )
             delta_kwh = max(0.0, target_kwh - actuele_soc_kwh)
             energie_net_kwh = delta_kwh / accu.eta_laad if accu.eta_laad > 0 else 0.0
             verwacht_vermogen_w = min(
@@ -1062,6 +1144,7 @@ class DynamischHandelen(hass.Hass):
                 derating,
             )
         else:
+            target_kwh = self._begrens_kwh_naar_accu(target_kwh, accu.max_kwh)
             delta_kwh = max(0.0, actuele_soc_kwh - target_kwh)
             energie_net_kwh = delta_kwh * accu.eta_ontlaad
             verwacht_vermogen_w = min(
@@ -1082,7 +1165,10 @@ class DynamischHandelen(hass.Hass):
         actief["actief_slot_raw_soc_kwh"] = round(raw_actuele_soc_kwh, 3)
         actief["actuele_soc_kwh"] = round(actuele_soc_kwh, 3)
         actief["actuele_soc_bron"] = soc_bron
+        actief["actief_slot_doel_kwh"] = round(target_kwh, 3)
         actief["doel_soc_kwh"] = round(target_kwh, 3)
+        actief["soc_na_kwh"] = round(target_kwh, 3)
+        actief["soc_na_pct"] = round(target_kwh / accu.max_kwh * 100, 1) if accu.max_kwh > 0 else 0.0
         actief["actief_slot_delta_kwh"] = round(
             target_kwh - actuele_soc_kwh if actie == "laden" else actuele_soc_kwh - target_kwh,
             3,
@@ -1092,46 +1178,6 @@ class DynamischHandelen(hass.Hass):
         if doel_bereikt:
             actief["actief_slot_stopreden"] = "doel_bereikt"
 
-    def _verhoog_actief_laadslot_doel(
-        self,
-        schema: list[dict],
-        actief_index: int,
-        basis_doel_kwh: float,
-        actuele_soc_kwh: float,
-        accu: "Accustatus",
-        resterend_h: float,
-    ) -> float:
-        """
-        Verhoogt het actieve laadslotdoel als latere laadslots niet goedkoper zijn.
-
-        Het actieve slot mag energie uit latere aaneengesloten laadslots naar
-        voren halen wanneer die latere slots dezelfde of een hogere prijs hebben.
-        Een goedkoper volgend laadslot stopt de verhoging.
-        """
-        actieve_prijs = self._prijs_ct(schema[actief_index])
-        if actieve_prijs is None:
-            return basis_doel_kwh
-
-        doel_kwh = basis_doel_kwh
-        for volgend in schema[actief_index + 1:]:
-            if volgend.get("actie") != "laden":
-                break
-
-            volgende_prijs = self._prijs_ct(volgend)
-            if volgende_prijs is None or volgende_prijs < actieve_prijs:
-                break
-
-            try:
-                doel_kwh = max(doel_kwh, float(volgend["soc_na_kwh"]))
-            except (KeyError, TypeError, ValueError):
-                break
-
-        maximaal_haalbaar_kwh = (
-            actuele_soc_kwh
-            + accu.max_laad_w / 1000.0 * resterend_h * accu.eta_laad
-        )
-        return min(doel_kwh, max(basis_doel_kwh, maximaal_haalbaar_kwh))
-
     def _prijs_ct(self, slot: dict) -> float | None:
         """Leest prijs_ct als getal uit een schema-slot."""
         try:
@@ -1139,46 +1185,9 @@ class DynamischHandelen(hass.Hass):
         except (KeyError, TypeError, ValueError):
             return None
 
-    def _haal_actueel_slot_doel_uit_vorige_sensor(self, start: str, end: str) -> dict | None:
-        """Leest begin-SoC en target-SoC voor het actieve slot uit de vorige sensorstate."""
-        vorige_slots = self.get_state("sensor.dynamisch_handelsstrategie", attribute="slots") or []
-        for slot in vorige_slots:
-            if str(slot.get("start")) != start or str(slot.get("end")) != end:
-                continue
-            actie = slot.get("geplande_actie") or slot.get("actie")
-            if actie not in ("laden", "ontladen"):
-                return None
-            try:
-                return {
-                    "actie": actie,
-                    "begin_kwh": float(slot.get("actief_slot_begin_kwh", slot["soc_voor_kwh"])),
-                    "target_kwh": float(slot.get("doel_soc_kwh", slot["soc_na_kwh"])),
-                }
-            except (KeyError, TypeError, ValueError):
-                return None
-        return None
-
-    def _haal_actief_slot_doel(self, actief: dict, actuele_soc_kwh: float) -> dict:
-        """
-        Geeft de vaste opdracht voor het actieve slot terug.
-
-        De vorige sensorstate is de bron voor hetzelfde actieve slot. Als er nog
-        geen vorige sensorstate is, gebruikt de functie de nieuwe DP-uitkomst en
-        sensor.zendure_2400_ac_laadpercentage als begin-SoC.
-        """
-        start = str(actief["start"])
-        end = str(actief["end"])
-        actie = actief["actie"]
-
-        vorig = self._haal_actueel_slot_doel_uit_vorige_sensor(start, end)
-        if vorig is not None and vorig["actie"] == actie:
-            return vorig
-
-        return {
-            "actie": actie,
-            "begin_kwh": actuele_soc_kwh,
-            "target_kwh": float(actief["soc_na_kwh"]),
-        }
+    def _begrens_kwh_naar_accu(self, waarde_kwh: float, max_kwh: float) -> float:
+        """Begrenst een DP-interne kWh-waarde op de huidige accugrootte."""
+        return min(max(0.0, waarde_kwh), max(0.0, max_kwh))
 
     def _schat_actuele_soc_kwh(
         self,
@@ -1267,7 +1276,7 @@ class DynamischHandelen(hass.Hass):
         venster_pct = (soc_pct - hw_min_pct) / hw_range
         return min(max_kwh, max(0.0, venster_pct * max_kwh))
 
-    def _haal_accustatus(self) -> tuple["Accustatus", float, float]:
+    def _haal_accustatus(self, dp_start_tijd: datetime | None = None) -> tuple["Accustatus", float, float, dict]:
         """
         Leest de actuele batterijstatus uit HA en converteert naar interne eenheden.
 
@@ -1290,19 +1299,66 @@ class DynamischHandelen(hass.Hass):
         Geeft ook hw_min_pct en hw_max_pct terug zodat de DP-uitvoer vertaald
         kan worden naar echte battery-SoC% (0–100 % van totale capaciteit).
         """
-        beschikbaar_kwh = float(self.get_state("sensor.zendure_2400_ac_indicatie_beschikbare_energie") or 0)
-        benodigde_kwh   = float(self.get_state("sensor.zendure_2400_ac_indicatie_benodigde_energie")   or 0)
-        rte_pct         = float(self.get_state("sensor.zendure_2400_ac_rte_totaal")                    or 90)
-        max_laad_w      = float(self.get_state("input_number.zendure_2400_ac_max_oplaadvermogen")       or 2400)
-        max_ontlaad_w   = float(self.get_state("input_number.zendure_2400_ac_max_ontlaadvermogen")      or 2400)
-        hw_min_pct      = float(self.get_state("sensor.zendure_2400_ac_minimale_laadpercentage")        or 0)
-        hw_max_pct      = float(self.get_state("sensor.zendure_2400_ac_maximale_laadpercentage")        or 100)
+        beschikbaar_kwh, beschikbaar_bron = self._historische_float_state(
+            "sensor.zendure_2400_ac_indicatie_beschikbare_energie",
+            dp_start_tijd,
+            0.0,
+        )
+        benodigde_kwh, benodigde_bron = self._historische_float_state(
+            "sensor.zendure_2400_ac_indicatie_benodigde_energie",
+            dp_start_tijd,
+            0.0,
+        )
+        rte_pct, rte_bron = self._historische_float_state(
+            "sensor.zendure_2400_ac_rte_totaal",
+            dp_start_tijd,
+            90.0,
+        )
+        max_laad_w, max_laad_bron = self._historische_float_state(
+            "input_number.zendure_2400_ac_max_oplaadvermogen",
+            dp_start_tijd,
+            2400.0,
+        )
+        max_ontlaad_w, max_ontlaad_bron = self._historische_float_state(
+            "input_number.zendure_2400_ac_max_ontlaadvermogen",
+            dp_start_tijd,
+            2400.0,
+        )
+        hw_min_pct, hw_min_bron = self._historische_float_state(
+            "sensor.zendure_2400_ac_minimale_laadpercentage",
+            dp_start_tijd,
+            0.0,
+        )
+        hw_max_pct, hw_max_bron = self._historische_float_state(
+            "sensor.zendure_2400_ac_maximale_laadpercentage",
+            dp_start_tijd,
+            100.0,
+        )
+
+        beschikbaar_kwh = float(beschikbaar_kwh or 0.0)
+        benodigde_kwh = float(benodigde_kwh or 0.0)
+        rte_pct = float(rte_pct or 90.0)
+        max_laad_w = float(max_laad_w or 2400.0)
+        max_ontlaad_w = float(max_ontlaad_w or 2400.0)
+        hw_min_pct = float(hw_min_pct or 0.0)
+        hw_max_pct = float(hw_max_pct or 100.0)
 
         rte_pct = max(50.0, min(100.0, rte_pct))
         eta     = math.sqrt(rte_pct / 100.0)
 
         stored_current = beschikbaar_kwh / eta
         stored_ruimte  = benodigde_kwh   * eta
+
+        bronnen = {
+            "tijd": dp_start_tijd.isoformat() if dp_start_tijd else None,
+            "beschikbare_energie": beschikbaar_bron,
+            "benodigde_energie": benodigde_bron,
+            "rte_totaal": rte_bron,
+            "max_laad_w": max_laad_bron,
+            "max_ontlaad_w": max_ontlaad_bron,
+            "hw_min_pct": hw_min_bron,
+            "hw_max_pct": hw_max_bron,
+        }
 
         return Accustatus(
             huidig_kwh    = stored_current,
@@ -1311,7 +1367,7 @@ class DynamischHandelen(hass.Hass):
             eta_ontlaad   = eta,
             max_laad_w    = max_laad_w,
             max_ontlaad_w = max_ontlaad_w,
-        ), hw_min_pct, hw_max_pct
+        ), hw_min_pct, hw_max_pct, bronnen
 
     def _haal_minimale_spread(self) -> float:
         """
@@ -1416,12 +1472,48 @@ class DynamischHandelen(hass.Hass):
                 waarden.append(waarde)
         return max(waarden) if waarden else None
 
-    def _haal_buitentemperatuur_c(self) -> tuple[float | None, str]:
-        """Leest actuele buitentemperatuur uit de ingestelde sensor of OpenWeatherMap."""
+    def _haal_warmste_batterij_temp_c_op_tijd(self, tijd: datetime | None) -> tuple[float | None, str]:
+        """Leest de warmste batterij-packtemperatuur op de DP-starttijd."""
+        warmste, warmste_bron = self._historische_float_state(
+            "sensor.zendure_2400_ac_warmste_batterij_temperatuur",
+            tijd,
+        )
+        if warmste is not None:
+            return warmste, warmste_bron
+
+        try:
+            aantal = int(float(self.get_state("sensor.zendure_2400_ac_aantal_batterijen") or 0))
+        except (TypeError, ValueError):
+            aantal = 0
+        max_index = aantal if aantal > 0 else 6
+
+        waarden = []
+        bronnen = []
+        for index in range(1, max_index + 1):
+            waarde, bron = self._historische_float_state(
+                f"sensor.zendure_2400_ac_batterij_{index}_temperatuur",
+                tijd,
+            )
+            if waarde is not None:
+                waarden.append(waarde)
+                bronnen.append(bron)
+
+        if waarden:
+            return max(waarden), ",".join(sorted(set(bronnen)))
+        return None, "onbekend"
+
+    def _haal_buitentemperatuur_c(self, tijd: datetime | None = None) -> tuple[float | None, str]:
+        """Leest buitentemperatuur uit de ingestelde sensor of OpenWeatherMap."""
         sensor_entity = (
             self._haal_entity_id_uit_input_text("input_text.dynamisch_buitentemperatuur_sensor")
             or "sensor.openweathermap_temperature"
         )
+
+        if tijd is not None:
+            sensor_temp, sensor_bron = self._historische_float_state(sensor_entity, tijd)
+            if sensor_temp is not None:
+                return sensor_temp, f"{sensor_entity}:{sensor_bron}"
+
         sensor_temp = self._float_state(sensor_entity)
         if sensor_temp is not None:
             return sensor_temp, sensor_entity
@@ -1524,10 +1616,10 @@ class DynamischHandelen(hass.Hass):
             gekozen = temp
         return gekozen
 
-    def _haal_thermische_config(self, slots: list[dict]) -> dict:
+    def _haal_thermische_config(self, slots: list[dict], dp_start_tijd: datetime | None = None) -> dict:
         """Leest thermische HA-config en zet buiten_temp_c op ieder prijsslot."""
-        batterij_temp_start_c = self._haal_warmste_batterij_temp_c()
-        buiten_temp_huidig_c, buiten_temp_bron = self._haal_buitentemperatuur_c()
+        batterij_temp_start_c, batterij_temp_bron = self._haal_warmste_batterij_temp_c_op_tijd(dp_start_tijd)
+        buiten_temp_huidig_c, buiten_temp_bron = self._haal_buitentemperatuur_c(dp_start_tijd)
         weather_entity = self._haal_weather_entity()
         forecast_punten, forecast_bron = self._haal_forecast_punten(weather_entity)
 
@@ -1540,6 +1632,7 @@ class DynamischHandelen(hass.Hass):
 
         return {
             "batterij_temp_start_c": batterij_temp_start_c,
+            "batterij_temp_bron": batterij_temp_bron,
             "buiten_temp_huidig_c": buiten_temp_huidig_c,
             "buiten_temp_bron": buiten_temp_bron,
             "weather_entity": weather_entity,

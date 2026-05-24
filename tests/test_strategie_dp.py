@@ -940,10 +940,10 @@ class TestActiefSlotVermogen:
         assert schema[0]["vermogen_w"] == 488
         assert schema[0]["doel_soc_kwh"] == 5.15
 
-    def test_lopend_laadslot_verhoogt_doel_bij_voorsprong_en_duurder_vervolg(self):
+    def test_lopend_laadslot_haalt_geen_energie_uit_duurder_vervolg(self):
         """
-        Als de actuele SoC voorloopt en het volgende laadslot duurder is, mag het
-        actieve slot extra energie naar voren halen.
+        De actieve-slot-correctie mag alleen naar het eigen DP-einddoel sturen.
+        Een duurder volgend laadslot mag het actieve doel niet verhogen.
         """
         nu = datetime.fromisoformat("2026-05-21T14:30:00+02:00")
         schema = [
@@ -973,8 +973,8 @@ class TestActiefSlotVermogen:
         corrigeer_actief_slot_vermogen(schema, accu, nu)
 
         assert schema[0]["actie"] == "laden"
-        assert schema[0]["vermogen_w"] == 2400
-        assert schema[0]["doel_soc_kwh"] == pytest.approx(5.106, abs=0.001)
+        assert schema[0]["vermogen_w"] == 1518
+        assert schema[0]["doel_soc_kwh"] == 4.7
 
     def test_lopend_laadslot_verhoogt_doel_niet_als_vervolg_goedkoper_is(self):
         """
@@ -1012,10 +1012,10 @@ class TestActiefSlotVermogen:
         assert schema[0]["vermogen_w"] == 1518
         assert schema[0]["doel_soc_kwh"] == 4.7
 
-    def test_lopend_ontlaadslot_verlaagt_doel_bij_duurder_actief_slot(self):
+    def test_lopend_ontlaadslot_haalt_geen_energie_uit_later_slot(self):
         """
-        Als het actieve ontlaadslot duurder is dan het volgende ontlaadslot, mag
-        het actieve slot extra energie naar voren halen.
+        De actieve-slot-correctie mag alleen naar het eigen DP-einddoel sturen.
+        Een goedkoper volgend ontlaadslot mag het actieve doel niet verlagen.
         """
         nu = datetime.fromisoformat("2026-05-21T20:06:28.030751+02:00")
         schema = [
@@ -1045,8 +1045,8 @@ class TestActiefSlotVermogen:
         corrigeer_actief_slot_vermogen(schema, accu, nu)
 
         assert schema[0]["actie"] == "ontladen"
-        assert schema[0]["vermogen_w"] == 2400
-        assert schema[0]["doel_soc_kwh"] == pytest.approx(1.605, abs=0.001)
+        assert schema[0]["vermogen_w"] == 1993
+        assert schema[0]["doel_soc_kwh"] == 2.0
 
     def test_lopend_ontlaadslot_verlaagt_doel_niet_als_vervolg_duurder_is(self):
         """
