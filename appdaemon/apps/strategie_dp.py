@@ -722,23 +722,39 @@ def los_dp_op(
         )
         return hoge_basis, lage_penalty
 
-    def overtemp_penalty_eur(temp_na_c: float | None, soc_na_kwh: float, duur_h: float) -> float:
-        gekozen_temp_limiet_c = temp_limiet_voor_soc_kwh(soc_na_kwh)
+    def overtemp_penalty_rate_eur_per_h(temp_c: float | None, soc_kwh: float) -> float:
+        gekozen_temp_limiet_c = temp_limiet_voor_soc_kwh(soc_kwh)
         if (
-            temp_na_c is None
+            temp_c is None
             or temp_penalty_factor <= 0
-            or duur_h <= 0
             or max_kwh <= 0
-            or temp_na_c <= gekozen_temp_limiet_c
+            or temp_c <= gekozen_temp_limiet_c
         ):
             return 0.0
-        overschrijding_c = temp_na_c - gekozen_temp_limiet_c
+        overschrijding_c = temp_c - gekozen_temp_limiet_c
         return (
             temp_penalty_factor
-            * temp_penalty_soc_factor(soc_na_kwh)
+            * temp_penalty_soc_factor(soc_kwh)
             * TEMP_PENALTY_EUR_PER_C2H
             * overschrijding_c
             * overschrijding_c
+        )
+
+    def overtemp_penalty_eur(
+        temp_voor_c: float | None,
+        soc_voor_kwh: float,
+        temp_na_c: float | None,
+        soc_na_kwh: float,
+        duur_h: float,
+    ) -> float:
+        if duur_h <= 0:
+            return 0.0
+        return (
+            0.5
+            * (
+                overtemp_penalty_rate_eur_per_h(temp_voor_c, soc_voor_kwh)
+                + overtemp_penalty_rate_eur_per_h(temp_na_c, soc_na_kwh)
+            )
             * duur_h
         )
 
@@ -788,24 +804,40 @@ def los_dp_op(
             factor += ((temp_c - 35.0) / 10.0) ** 2
         temp_factor_per_idx.append(factor)
 
-    def overtemp_penalty_eur_idx(temp_idx: int, soc_idx: int, duur_h: float) -> float:
-        temp_na_c = temp_c_per_idx[temp_idx]
+    def overtemp_penalty_rate_eur_per_h_idx(temp_idx: int, soc_idx: int) -> float:
+        temp_c = temp_c_per_idx[temp_idx]
         gekozen_temp_limiet_c = temp_limiet_per_idx[soc_idx]
         if (
-            temp_na_c is None
+            temp_c is None
             or temp_penalty_factor <= 0
-            or duur_h <= 0
             or max_kwh <= 0
-            or temp_na_c <= gekozen_temp_limiet_c
+            or temp_c <= gekozen_temp_limiet_c
         ):
             return 0.0
-        overschrijding_c = temp_na_c - gekozen_temp_limiet_c
+        overschrijding_c = temp_c - gekozen_temp_limiet_c
         return (
             temp_penalty_factor
             * temp_penalty_soc_factor_per_idx[soc_idx]
             * TEMP_PENALTY_EUR_PER_C2H
             * overschrijding_c
             * overschrijding_c
+        )
+
+    def overtemp_penalty_eur_idx(
+        temp_voor_idx: int,
+        soc_voor_idx: int,
+        temp_na_idx: int,
+        soc_na_idx: int,
+        duur_h: float,
+    ) -> float:
+        if duur_h <= 0:
+            return 0.0
+        return (
+            0.5
+            * (
+                overtemp_penalty_rate_eur_per_h_idx(temp_voor_idx, soc_voor_idx)
+                + overtemp_penalty_rate_eur_per_h_idx(temp_na_idx, soc_na_idx)
+            )
             * duur_h
         )
 
@@ -923,7 +955,7 @@ def los_dp_op(
                 # ── Optie: RUST ───────────────────────────────────────────────
                 # Geen actie, SoC ongewijzigd, temperatuur koelt wel richting buiten.
                 q_rust = volgende_temp_idx(q, t, 0.0, "rust")
-                kosten_overtemp_rust = overtemp_penalty_eur_idx(q_rust, s, duur_h)
+                kosten_overtemp_rust = overtemp_penalty_eur_idx(q, s, q_rust, s, duur_h)
                 kosten_soc_verblijf = soc_verblijf_penalty_eur_idx(s, q_rust, duur_h)
                 beste = V[t + 1][s][q_rust] - kosten_overtemp_rust - kosten_soc_verblijf
                 beste_keuze = (0, 0, s, q_rust)
@@ -942,7 +974,7 @@ def los_dp_op(
                     if stap_index % 16 == 0:
                         controleer_annulering()
                     q_laden = volgende_temp_idx(q, t, energie_naar_accu_q, "laden")
-                    kosten_temp = overtemp_penalty_eur_idx(q_laden, s_laden, duur_h)
+                    kosten_temp = overtemp_penalty_eur_idx(q, s, q_laden, s_laden, duur_h)
                     kosten_soc_verblijf = (
                         hoge_soc_verblijf_basis * temp_factor_per_idx[q_laden]
                         + lage_soc_verblijf_penalty
@@ -972,7 +1004,7 @@ def los_dp_op(
                     if stap_index % 16 == 0:
                         controleer_annulering()
                     q_ontladen = volgende_temp_idx(q, t, energie_uit_accu_q, "ontladen")
-                    kosten_temp = overtemp_penalty_eur_idx(q_ontladen, s_ontladen, duur_h)
+                    kosten_temp = overtemp_penalty_eur_idx(q, s, q_ontladen, s_ontladen, duur_h)
                     kosten_soc_verblijf = (
                         hoge_soc_verblijf_basis * temp_factor_per_idx[q_ontladen]
                         + lage_soc_verblijf_penalty
@@ -1099,8 +1131,18 @@ def los_dp_op(
             "c_waarde": round(c_waarde(energie_accu_voor_model, duur_h), 3),
         }
         if thermisch_actief:
-            gekozen_temp_limiet_c = temp_limiet_voor_soc_kwh(soc_na_kwh)
-            overtemp_penalty = round(overtemp_penalty_eur(temp_na_c, soc_na_kwh, duur_h), 6)
+            temp_limiet_voor_c = temp_limiet_voor_soc_kwh(soc_kwh)
+            temp_limiet_na_c = temp_limiet_voor_soc_kwh(soc_na_kwh)
+            overtemp_penalty = round(
+                overtemp_penalty_eur(
+                    temp_voor_c,
+                    soc_kwh,
+                    temp_na_c,
+                    soc_na_kwh,
+                    duur_h,
+                ),
+                6,
+            )
             slot_resultaat.update({
                 "batterij_temp_voor_c": round(temp_voor_c, 2) if temp_voor_c is not None else None,
                 "batterij_temp_na_c": round(temp_na_c, 2) if temp_na_c is not None else None,
@@ -1108,10 +1150,14 @@ def los_dp_op(
                 "overtemp_penalty_eur": overtemp_penalty,
                 # Backwards-compatible alias voor bestaande dashboards of automations.
                 "temp_penalty_eur": overtemp_penalty,
-                "temp_limiet_c": round(gekozen_temp_limiet_c, 2),
+                "temp_limiet_c": round(temp_limiet_na_c, 2),
+                "temp_limiet_voor_c": round(temp_limiet_voor_c, 2),
+                "temp_limiet_na_c": round(temp_limiet_na_c, 2),
                 "temp_limiet_hoge_soc_c": round(temp_limiet_c, 2),
                 "temp_limiet_lage_soc_c": round(temp_limiet_lage_soc_c, 2),
                 "temp_penalty_soc_factor": round(temp_penalty_soc_factor(soc_na_kwh), 3),
+                "temp_penalty_soc_factor_voor": round(temp_penalty_soc_factor(soc_kwh), 3),
+                "temp_penalty_soc_factor_na": round(temp_penalty_soc_factor(soc_na_kwh), 3),
                 "temp_penalty_100_soc_factor": round(temp_penalty_100_soc_factor, 3),
                 "temp_limiet_actief": bool(overtemp_penalty > 0.0),
             })
@@ -1165,11 +1211,21 @@ def los_dp_op(
             if temp_na_c is not None:
                 temp_c = temp_na_c
 
-            gekozen_temp_limiet_c = temp_limiet_voor_soc_kwh(soc_na)
+            temp_limiet_voor_c = temp_limiet_voor_soc_kwh(soc_voor)
+            temp_limiet_na_c = temp_limiet_voor_soc_kwh(soc_na)
             s_r["batterij_temp_voor_c"] = round(temp_voor_c, 2) if temp_voor_c is not None else None
             s_r["batterij_temp_na_c"] = round(temp_c, 2) if temp_c is not None else None
             s_r["buiten_temp_c"] = round(buiten_c, 2) if buiten_c is not None else None
-            overtemp_penalty = round(overtemp_penalty_eur(temp_c, soc_na, duur_h), 6)
+            overtemp_penalty = round(
+                overtemp_penalty_eur(
+                    temp_voor_c,
+                    soc_voor,
+                    temp_c,
+                    soc_na,
+                    duur_h,
+                ),
+                6,
+            )
             soc_verblijf = soc_verblijf_penalty_componenten(avg_soc, temp_c, duur_h)
             s_r["overtemp_penalty_eur"] = overtemp_penalty
             # Backwards-compatible alias voor bestaande dashboards of automations.
@@ -1182,10 +1238,14 @@ def los_dp_op(
             s_r["hoge_soc_verblijf_fractie"] = round(soc_verblijf[3], 3)
             s_r["lage_soc_verblijf_fractie"] = round(soc_verblijf[4], 3)
             s_r["soc_verblijf_temp_factor"] = round(soc_verblijf[5], 3)
-            s_r["temp_limiet_c"] = round(gekozen_temp_limiet_c, 2)
+            s_r["temp_limiet_c"] = round(temp_limiet_na_c, 2)
+            s_r["temp_limiet_voor_c"] = round(temp_limiet_voor_c, 2)
+            s_r["temp_limiet_na_c"] = round(temp_limiet_na_c, 2)
             s_r["temp_limiet_hoge_soc_c"] = round(temp_limiet_c, 2)
             s_r["temp_limiet_lage_soc_c"] = round(temp_limiet_lage_soc_c, 2)
             s_r["temp_penalty_soc_factor"] = round(temp_penalty_soc_factor(soc_na), 3)
+            s_r["temp_penalty_soc_factor_voor"] = round(temp_penalty_soc_factor(soc_voor), 3)
+            s_r["temp_penalty_soc_factor_na"] = round(temp_penalty_soc_factor(soc_na), 3)
             s_r["temp_penalty_100_soc_factor"] = round(temp_penalty_100_soc_factor, 3)
             s_r["temp_limiet_actief"] = bool(overtemp_penalty > 0.0)
 

@@ -989,6 +989,38 @@ views:
                     new Date(s.start).getTime(),
                     (s.lage_soc_verblijf_penalty_eur ?? 0) * 100
                   ]);
+              - entity: sensor.dynamisch_handelsstrategie
+                name: Temp limiet voor
+                type: line
+                extend_to: false
+                yaxis_id: helper
+                stroke_width: 0
+                opacity: 0
+                show:
+                  in_chart: true
+                  in_header: false
+                  in_legend: false
+                data_generator: |
+                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
+                    new Date(s.start).getTime(),
+                    s.temp_limiet_voor_c ?? s.temp_limiet_c ?? null
+                  ]);
+              - entity: sensor.dynamisch_handelsstrategie
+                name: Temp limiet na
+                type: line
+                extend_to: false
+                yaxis_id: helper
+                stroke_width: 0
+                opacity: 0
+                show:
+                  in_chart: true
+                  in_header: false
+                  in_legend: false
+                data_generator: |
+                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
+                    new Date(s.start).getTime(),
+                    s.temp_limiet_na_c ?? s.temp_limiet_c ?? null
+                  ]);
               - entity: input_boolean.dynamisch_handelsstrategie_berekening_bezig
                 name: Refresh trigger
                 type: line
@@ -1035,6 +1067,8 @@ views:
                     var socVerblijfPenalty = valueAtTimestamp(11);
                     var hogeSocPenalty = valueAtTimestamp(12);
                     var lageSocPenalty = valueAtTimestamp(13);
+                    var tempLimietVoor = valueAtTimestamp(14);
+                    var tempLimietNa = valueAtTimestamp(15);
                     var actieLabel = actionCode === 1 ? 'Laden' : actionCode === 2 ? 'Ontladen' : 'Rust';
                     if (!ts) return '';
                     var d = new Date(ts);
@@ -1046,6 +1080,7 @@ views:
                     html += '<div style="color:var(--secondary-text-color)">Vermogen: <span style="color:var(--primary-text-color);font-weight:bold">' + Math.round(vermogen || 0) + ' W</span></div>';
                     html += '<div style="color:var(--secondary-text-color)">C-waarde: <span style="color:var(--primary-text-color);font-weight:bold">' + (c != null ? c.toFixed(3) : '-') + '</span></div>';
                     html += '<div style="color:var(--secondary-text-color)">Pack temp: <span style="color:var(--primary-text-color);font-weight:bold">' + (tempVoor != null ? tempVoor.toFixed(1) : '-') + ' → ' + (tempNa != null ? tempNa.toFixed(1) : '-') + ' °C</span></div>';
+                    html += '<div style="color:var(--secondary-text-color)">Temp limiet: <span style="color:var(--primary-text-color);font-weight:bold">' + (tempLimietVoor != null ? tempLimietVoor.toFixed(1) : '-') + ' → ' + (tempLimietNa != null ? tempLimietNa.toFixed(1) : '-') + ' °C</span></div>';
                     html += '<div style="color:var(--secondary-text-color)">Warmte penalty: <span style="color:var(--primary-text-color);font-weight:bold">' + (warmte != null ? warmte.toFixed(2) : '0.00') + ' ct</span></div>';
                     html += '<div style="color:var(--secondary-text-color)">Overtemp penalty: <span style="color:var(--primary-text-color);font-weight:bold">' + (overtempPenalty != null ? overtempPenalty.toFixed(3) : '0.000') + ' ct</span></div>';
                     html += '<div style="color:var(--secondary-text-color)">SoC verblijf: <span style="color:var(--primary-text-color);font-weight:bold">' + (socVerblijfPenalty != null ? socVerblijfPenalty.toFixed(3) : '0.000') + ' ct</span></div>';

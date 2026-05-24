@@ -757,6 +757,31 @@ class TestMinimaleSpread:
         assert schema[0]["temp_limiet_actief"] is True
         assert schema[0]["overtemp_penalty_eur"] > 0.0
 
+    def test_overtemp_penalty_telt_startconditie_bij_ontladen_onder_soc_drempel(self):
+        slots = maak_slots([1.00])
+        slots[0]["buiten_temp_c"] = 41.0
+
+        schema = los_dp_op(
+            slots,
+            maak_accu(huidig_kwh=2.16, max_kwh=2.4, eta=1.0, max_laad_w=0.0),
+            plateau_spreiding=False,
+            batterij_temp_start_c=41.0,
+            warmte_afkoeling_halveringstijd_h=1.0,
+            warmte_stijging_ontladen_c_per_c2h=0.0,
+            temp_limiet_c=37.5,
+            temp_limiet_lage_soc_c=45.0,
+            temp_penalty_factor=0.1,
+        )
+
+        assert schema[0]["actie"] == "ontladen"
+        assert schema[0]["soc_voor_pct"] > 80.0
+        assert schema[0]["soc_na_pct"] < 80.0
+        assert schema[0]["temp_limiet_voor_c"] == 37.5
+        assert schema[0]["temp_limiet_na_c"] == 45.0
+        assert schema[0]["temp_limiet_c"] == 45.0
+        assert schema[0]["overtemp_penalty_eur"] == pytest.approx(0.153125, abs=0.000001)
+        assert schema[0]["temp_limiet_actief"] is True
+
     def test_overtemp_penalty_weegt_100_soc_zwaarder_dan_90_soc(self):
         slots_90 = maak_slots([0.10])
         slots_100 = maak_slots([0.10])
