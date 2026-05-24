@@ -1074,6 +1074,7 @@ def los_dp_op(
         slot_resultaat = {
             "start":        start.isoformat() if hasattr(start, "isoformat") else start,
             "end":          end.isoformat()   if hasattr(end,   "isoformat") else end,
+            "slot_duur_min": round(duur_h * 60.0, 1),
             "prijs_ct":     round(prijs * 100, 3),
             "actie":        actie,
             "vermogen_w":   vermogen_w,

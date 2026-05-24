@@ -76,6 +76,8 @@ from strategie_dp import (
 
 
 GRAFIEK_HISTORIE_UREN = 6.0
+FIJNMAZIGE_SLOT_MINUTEN = 15
+FIJNMAZIGE_HORIZON_UREN = 3.0
 
 
 def _lees_slot_datetimes(slot: dict) -> tuple[datetime, datetime] | None:
@@ -223,9 +225,9 @@ class DynamischHandelen(hass.Hass):
     def initialize(self):
         """
         AppDaemon roept initialize() aan bij opstarten en na een reload.
-        We registreren hier twee uurlijkse taken en knop/config-triggers.
+        We registreren hier vier uurlijkse taken en knop/config-triggers.
         """
-        self.log("Dynamisch Handelen: gestart, schema wordt elk uur om :15, :30, :45 en :58 herberekend")
+        self.log("Dynamisch Handelen: gestart, schema wordt elk kwartier herberekend")
         self._berekening_bezig = False
         self._herberekening_gepland = False
         self._laatste_herberekening_kwargs = None
@@ -233,10 +235,10 @@ class DynamischHandelen(hass.Hass):
         self._zet_berekening_bezig(False)
         self._initialiseer_berekening_duur_sensor()
         self._initialiseer_advies_sensor()
+        self.run_hourly(self.bereken_strategie, time(0, 0, 0))
         self.run_hourly(self.bereken_strategie, time(0, 15, 0))
         self.run_hourly(self.bereken_strategie, time(0, 30, 0))
         self.run_hourly(self.bereken_strategie, time(0, 45, 0))
-        self.run_hourly(self.bereken_strategie, time(0, 58, 0))
         self.listen_state(
             self._herbereken_op_knop,
             "input_button.dynamisch_handelsstrategie_herberekenen",
@@ -963,9 +965,14 @@ class DynamischHandelen(hass.Hass):
         plateau_spreiding = self._haal_plateau_spreiding()
         thermisch = self._haal_thermische_config(slots, dp_start_tijd)
         stop_als_geannuleerd()
+        fijnmazige_slots = [
+            s for s in slots
+            if s.get("resolutie") == "fijnmazig_kwartier"
+        ]
 
         self.log(
-            f"Dynamisch Handelen: {len(slots)} slots | "
+            f"Dynamisch Handelen: {len(slots)} slots "
+            f"({len(fijnmazige_slots)} kwartierslots in eerste {FIJNMAZIGE_HORIZON_UREN:.0f} uur) | "
             f"accu {accu.huidig_kwh:.2f}/{accu.max_kwh:.2f} kWh | "
             f"eta={accu.eta_laad:.3f} | "
             f"laad {accu.max_laad_w:.0f} W / ontlaad {accu.max_ontlaad_w:.0f} W | "
@@ -1076,6 +1083,11 @@ class DynamischHandelen(hass.Hass):
                 "grafiek_historie_uren": GRAFIEK_HISTORIE_UREN,
                 "grafiek_start":       grafiek_start,
                 "strategie_einde":     strategie_einde,
+                "planning_resolutie":   "eerste 3 uur per 15 min, daarna bronresolutie",
+                "fijnmazige_horizon_h": FIJNMAZIGE_HORIZON_UREN,
+                "fijnmazige_slot_minuten": FIJNMAZIGE_SLOT_MINUTEN,
+                "fijnmazige_slots":     len(fijnmazige_slots),
+                "bron_slots":           len(slots) - len(fijnmazige_slots),
                 "laad_slots":          len(laad_slots),
                 "ontlaad_slots":       len(ontlaad_slots),
                 "spread_blokkades":    spread_blokkades,
@@ -1125,7 +1137,9 @@ class DynamischHandelen(hass.Hass):
         We gebruiken raw_today én raw_tomorrow zodat we altijd zo ver mogelijk
         vooruit plannen — morgen is beschikbaar vanaf ±14:00.
 
-        Slots die al volledig zijn verstreken worden overgeslagen.
+        Slots die al volledig zijn verstreken worden overgeslagen. De eerste
+        drie uur worden opgesplitst in kwartierslots zodat de DP sneller kan
+        reageren op temperatuur- en SoC-drempels.
         """
         attr         = self.get_state("sensor.dynamisch_nordpool", attribute="all") or {}
         attributes   = attr.get("attributes", {})
@@ -1154,7 +1168,63 @@ class DynamischHandelen(hass.Hass):
             })
 
         slots.sort(key=lambda s: s["start"])
-        return slots
+        return self._verdeel_eerste_uren_in_kwartierslots(slots, nu)
+
+    @staticmethod
+    def _verdeel_eerste_uren_in_kwartierslots(
+        slots: list[dict],
+        nu: datetime,
+        horizon_h: float = FIJNMAZIGE_HORIZON_UREN,
+        slot_minuten: int = FIJNMAZIGE_SLOT_MINUTEN,
+    ) -> list[dict]:
+        """Splitst nabije prijsslots in kwartieren voor thermische sturing."""
+        if horizon_h <= 0 or slot_minuten <= 0:
+            return slots
+
+        horizon_start = nu.replace(
+            minute=(nu.minute // slot_minuten) * slot_minuten,
+            second=0,
+            microsecond=0,
+        )
+        horizon = horizon_start + timedelta(hours=horizon_h)
+        stap = timedelta(minutes=slot_minuten)
+        verdeelde_slots: list[dict] = []
+
+        for slot in slots:
+            start = slot["start"]
+            end = slot["end"]
+            if end <= nu:
+                continue
+
+            if start >= horizon:
+                nieuw_slot = dict(slot)
+                nieuw_slot.setdefault("resolutie", "bron")
+                nieuw_slot["duration_h"] = (end - start).total_seconds() / 3600.0
+                verdeelde_slots.append(nieuw_slot)
+                continue
+
+            deel_start = start
+            while deel_start < end and deel_start < horizon:
+                deel_end = min(deel_start + stap, end, horizon)
+                if deel_end > nu:
+                    nieuw_slot = dict(slot)
+                    nieuw_slot["start"] = deel_start
+                    nieuw_slot["end"] = deel_end
+                    nieuw_slot["duration_h"] = (deel_end - deel_start).total_seconds() / 3600.0
+                    nieuw_slot["resolutie"] = "fijnmazig_kwartier"
+                    verdeelde_slots.append(nieuw_slot)
+                deel_start = deel_end
+
+            if deel_start < end:
+                nieuw_slot = dict(slot)
+                nieuw_slot["start"] = deel_start
+                nieuw_slot["end"] = end
+                nieuw_slot["duration_h"] = (end - deel_start).total_seconds() / 3600.0
+                nieuw_slot["resolutie"] = "bron"
+                verdeelde_slots.append(nieuw_slot)
+
+        verdeelde_slots.sort(key=lambda s: s["start"])
+        return verdeelde_slots
 
     def _bepaal_dp_start_tijd(self, slots: list[dict]) -> datetime | None:
         """Gebruikt het begin van het lopende prijsslot als starttijd voor de DP."""

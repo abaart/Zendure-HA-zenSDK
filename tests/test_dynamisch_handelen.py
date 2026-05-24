@@ -79,6 +79,74 @@ def _slot(start: datetime, duur_uren: float, label: str) -> dict:
     }
 
 
+def _prijs_slot(start: datetime, duur_uren: float, prijs: float = 0.10) -> dict:
+    return {
+        "start": start,
+        "end": start + timedelta(hours=duur_uren),
+        "price": prijs,
+        "duration_h": duur_uren,
+    }
+
+
+class TestFijnmazigePrijsslots:
+    def test_verdeelt_eerste_drie_uur_in_kwartierslots(self):
+        nu = datetime(2026, 5, 24, 15, 0, tzinfo=timezone.utc)
+        slots = [
+            _prijs_slot(nu, 1, 0.10),
+            _prijs_slot(nu + timedelta(hours=1), 1, 0.20),
+            _prijs_slot(nu + timedelta(hours=2), 1, 0.30),
+            _prijs_slot(nu + timedelta(hours=3), 1, 0.40),
+        ]
+
+        resultaat = DynamischHandelen._verdeel_eerste_uren_in_kwartierslots(slots, nu)
+
+        assert len(resultaat) == 13
+        assert [slot["duration_h"] for slot in resultaat[:12]] == [0.25] * 12
+        assert resultaat[0]["start"] == nu
+        assert resultaat[11]["end"] == nu + timedelta(hours=3)
+        assert resultaat[12]["start"] == nu + timedelta(hours=3)
+        assert resultaat[12]["duration_h"] == 1.0
+        assert resultaat[12]["resolutie"] == "bron"
+
+    def test_verdeelt_lopend_uur_vanaf_actief_kwartier(self):
+        uur_start = datetime(2026, 5, 24, 15, 0, tzinfo=timezone.utc)
+        nu = uur_start + timedelta(minutes=16)
+        slots = [
+            _prijs_slot(uur_start, 1, 0.10),
+            _prijs_slot(uur_start + timedelta(hours=1), 1, 0.20),
+        ]
+
+        resultaat = DynamischHandelen._verdeel_eerste_uren_in_kwartierslots(slots, nu)
+
+        assert resultaat[0]["start"] == uur_start + timedelta(minutes=15)
+        assert resultaat[0]["end"] == uur_start + timedelta(minutes=30)
+        assert resultaat[0]["duration_h"] == 0.25
+        assert all(slot["end"] > nu for slot in resultaat)
+
+    def test_stopt_fijnmazige_slots_op_actief_kwartier_plus_drie_uur(self):
+        uur_start = datetime(2026, 5, 24, 15, 0, tzinfo=timezone.utc)
+        nu = uur_start + timedelta(minutes=16)
+        slots = [
+            _prijs_slot(uur_start + timedelta(hours=i), 1, 0.10 + i / 100.0)
+            for i in range(5)
+        ]
+
+        resultaat = DynamischHandelen._verdeel_eerste_uren_in_kwartierslots(slots, nu)
+        horizon = uur_start + timedelta(hours=3, minutes=15)
+        laatste_kwartier = [
+            slot for slot in resultaat
+            if slot["resolutie"] == "fijnmazig_kwartier"
+        ][-1]
+        eerste_bron = [
+            slot for slot in resultaat
+            if slot["resolutie"] == "bron"
+        ][0]
+
+        assert laatste_kwartier["end"] == horizon
+        assert eerste_bron["start"] == horizon
+        assert eerste_bron["end"] == uur_start + timedelta(hours=4)
+
+
 class TestHistorischeStates:
     def test_historische_float_state_gebruikt_laatst_bekende_waarde_op_starttijd(self):
         app = _maak_app(
