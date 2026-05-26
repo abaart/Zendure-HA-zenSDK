@@ -101,9 +101,9 @@ input_number:
     icon: mdi:thermometer-chevron-up
     initial: 0.06
     min: 0
-    max: 10
-    step: 0.01
-    mode: slider
+    max: 1
+    step: 0.005
+    mode: box
 
   dynamisch_temp_penalty_100_soc_factor:
     name: Dynamisch Packtemp 100% SoC Penalty Factor

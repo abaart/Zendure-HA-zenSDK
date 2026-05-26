@@ -25,7 +25,6 @@ views:
                 color: '#01a180'
                 tap_action:
                   action: more-info
-
           - type: custom:apexcharts-card
             cache: false
             update_delay: 2s
@@ -33,10 +32,9 @@ views:
               show: true
               show_states: true
               title: Geplande SoC en prijzen
-            graph_span: 54h
+            graph_span: 48h
             span:
               start: hour
-              offset: -6h
             now:
               show: true
               label: Nu
@@ -45,7 +43,6 @@ views:
               - entity: sensor.dynamisch_handelsstrategie
                 name: SoC
                 type: area
-                extend_to: false
                 curve: stepline
                 color: '#01a180'
                 opacity: 0.2
@@ -57,37 +54,39 @@ views:
                   in_chart: true
                   in_header: true
                   in_legend: true
-                data_generator: |
-                  const slots = entity.attributes.slots_grafiek || entity.attributes.slots || [];
-                  const pts = slots.map(s => [new Date(s.start).getTime(), s.soc_voor_pct ?? 0]);
+                data_generator: >
+                  const slots = entity.attributes.slots || [];
+
+                  const pts = slots.map(s => [new Date(s.start).getTime(),
+                  s.soc_voor_pct ?? 0]);
+
                   if (slots.length) {
                     const last = slots[slots.length - 1];
                     pts.push([new Date(last.end).getTime(), last.soc_na_pct ?? 0]);
                   }
+
                   return pts;
               - entity: sensor.dynamisch_handelsstrategie
                 name: Prijs
                 type: line
-                extend_to: false
                 curve: stepline
                 color: '#ff9800'
                 stroke_width: 2
                 float_precision: 1
-                unit: 'ct/kWh'
+                unit: ct/kWh
                 yaxis_id: prijs
                 show:
                   in_chart: true
                   in_header: true
                   in_legend: true
                 data_generator: |
-                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     s.prijs_ct
                   ]);
               - entity: sensor.dynamisch_handelsstrategie
                 name: Vermogen
                 type: line
-                extend_to: false
                 stroke_width: 0
                 opacity: 0
                 yaxis_id: extra
@@ -96,14 +95,13 @@ views:
                   in_header: false
                   in_legend: false
                 data_generator: |
-                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     s.actie !== 'rust' ? (s.vermogen_w ?? 0) : null
                   ]);
               - entity: sensor.dynamisch_handelsstrategie
                 name: Actie
                 type: line
-                extend_to: false
                 stroke_width: 0
                 opacity: 0
                 yaxis_id: extra
@@ -112,7 +110,7 @@ views:
                   in_header: false
                   in_legend: false
                 data_generator: |
-                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     s.actie === 'laden' ? 1 : s.actie === 'ontladen' ? 2 : 0
                   ]);
@@ -123,13 +121,13 @@ views:
                 opacity: 0.45
                 yaxis_id: prijs
                 float_precision: 1
-                unit: 'ct/kWh'
+                unit: ct/kWh
                 show:
                   in_chart: true
                   in_header: false
                   in_legend: true
                 data_generator: |
-                  const slots = entity.attributes.slots_grafiek || entity.attributes.slots || [];
+                  const slots = entity.attributes.slots || [];
                   return slots.map(s => {
                     const ts = new Date(s.start).getTime();
                     const prijs = Number(s.prijs_ct);
@@ -141,7 +139,6 @@ views:
               - entity: sensor.dynamisch_handelsstrategie
                 name: Beste verkoop
                 type: line
-                extend_to: false
                 stroke_width: 0
                 opacity: 0
                 yaxis_id: extra
@@ -150,14 +147,13 @@ views:
                   in_header: false
                   in_legend: false
                 data_generator: |
-                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     s.geen_laden_reden === 'spread_te_klein' ? s.beste_verkoop_ct : null
                   ]);
               - entity: sensor.dynamisch_handelsstrategie
                 name: Nodig bij drempel
                 type: line
-                extend_to: false
                 stroke_width: 0
                 opacity: 0
                 yaxis_id: extra
@@ -166,14 +162,13 @@ views:
                   in_header: false
                   in_legend: false
                 data_generator: |
-                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     s.geen_laden_reden === 'spread_te_klein' ? s.benodigde_verkoop_ct : null
                   ]);
               - entity: sensor.dynamisch_handelsstrategie
                 name: Min spread
                 type: line
-                extend_to: false
                 stroke_width: 0
                 opacity: 0
                 yaxis_id: extra
@@ -182,14 +177,13 @@ views:
                   in_header: false
                   in_legend: false
                 data_generator: |
-                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     s.geen_laden_reden === 'spread_te_klein' ? s.min_spread_ct : null
                   ]);
               - entity: sensor.dynamisch_handelsstrategie
                 name: Spread tekort
                 type: line
-                extend_to: false
                 stroke_width: 0
                 opacity: 0
                 yaxis_id: extra
@@ -198,30 +192,13 @@ views:
                   in_header: false
                   in_legend: false
                 data_generator: |
-                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     s.geen_laden_reden === 'spread_te_klein' ? s.spread_tekort_ct : null
-                  ]);
-              - entity: sensor.dynamisch_handelsstrategie
-                name: Slotduur
-                type: line
-                extend_to: false
-                stroke_width: 0
-                opacity: 0
-                yaxis_id: extra
-                show:
-                  in_chart: true
-                  in_header: false
-                  in_legend: false
-                data_generator: |
-                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
-                    new Date(s.start).getTime(),
-                    s.slot_duur_min ?? null
                   ]);
               - entity: input_boolean.dynamisch_handelsstrategie_berekening_bezig
                 name: Refresh trigger
                 type: line
-                extend_to: false
                 show:
                   in_chart: false
                   in_header: false
@@ -241,7 +218,6 @@ views:
                     var nodigeVerkoop = series[6][dataPointIndex];
                     var minSpread = series[7][dataPointIndex];
                     var spreadTekort = series[8][dataPointIndex];
-                    var slotDuur = series[9][dataPointIndex];
                     var actieLabel = actieCode === 1 ? 'Laden' : actieCode === 2 ? 'Ontladen' : 'Rust';
                     var ts = w.globals.seriesX[0] && w.globals.seriesX[0][dataPointIndex];
                     if (!ts) return '';
@@ -252,7 +228,6 @@ views:
                     html += '<div style="margin-bottom:4px;font-weight:bold;color:var(--primary-text-color)">' + time + '</div>';
                     html += '<div style="color:var(--secondary-text-color)">SoC&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;: <span style="color:var(--primary-text-color);font-weight:bold">' + (soc != null ? soc.toFixed(0) + ' %' : '\u2014') + '</span></div>';
                     html += '<div style="color:var(--secondary-text-color)">Prijs&nbsp;&nbsp;&nbsp;&nbsp;: <span style="color:var(--primary-text-color);font-weight:bold">' + (prijs != null ? prijs.toFixed(1) + ' ct/kWh' : '\u2014') + '</span></div>';
-                    html += '<div style="color:var(--secondary-text-color)">Slotduur : <span style="color:var(--primary-text-color);font-weight:bold">' + (slotDuur != null ? Math.round(slotDuur) + ' min' : '\u2014') + '</span></div>';
                     html += '<div style="color:var(--secondary-text-color)">Actie&nbsp;&nbsp;&nbsp;&nbsp;: <span style="color:var(--primary-text-color);font-weight:bold">' + actieLabel + '</span></div>';
                     if (actieCode) { html += '<div style="color:var(--secondary-text-color)">Vermogen : <span style="color:var(--primary-text-color);font-weight:bold">' + (vermogen != null ? Math.round(vermogen) + ' W' : '\u2014') + '</span></div>'; }
                     if (spreadBlokkade != null && besteVerkoop != null && nodigeVerkoop != null && minSpread != null && spreadTekort != null) {
@@ -274,9 +249,7 @@ views:
                 axisTicks:
                   show: false
                 axisBorder:
-                  color: >-
-                    color-mix(in srgb, var(--divider-color) 50%,
-                    transparent)
+                  color: color-mix(in srgb, var(--divider-color) 50%, transparent)
               yaxis:
                 - id: percentage
                   seriesName: SoC
@@ -306,9 +279,7 @@ views:
                   show: false
               grid:
                 strokeDashArray: 0
-                borderColor: >-
-                  color-mix(in srgb, var(--divider-color) 50%,
-                  transparent)
+                borderColor: color-mix(in srgb, var(--divider-color) 50%, transparent)
                 show: true
               chart:
                 height: 300px
@@ -326,7 +297,6 @@ views:
                 size: 0
                 hover:
                   size: 0
-
           - type: custom:apexcharts-card
             experimental:
               hidden_by_default: true
@@ -337,10 +307,9 @@ views:
               show: true
               show_states: false
               title: Geplande acties (groen = laden, oranje = ontladen)
-            graph_span: 54h
+            graph_span: 48h
             span:
               start: hour
-              offset: -6h
             now:
               show: true
               label: Nu
@@ -350,14 +319,14 @@ views:
                 name: Vermogen
                 type: column
                 float_precision: 0
-                unit: 'W'
+                unit: W
                 color_threshold:
                   - value: -9999
                     color: '#ff7043'
                   - value: 0
                     color: '#66bb6a'
                 data_generator: |
-                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     s.actie === 'laden'    ?  (s.vermogen_w ?? 0) :
                     s.actie === 'ontladen' ? -(s.vermogen_w ?? 0) :
@@ -366,7 +335,6 @@ views:
               - entity: input_boolean.dynamisch_handelsstrategie_berekening_bezig
                 name: Refresh trigger
                 type: line
-                extend_to: false
                 show:
                   in_chart: false
                   in_header: false
@@ -376,7 +344,7 @@ views:
             apex_config:
               tooltip:
                 x:
-                  format: 'dd-MM HH:mm'
+                  format: dd-MM HH:mm
               xaxis:
                 labels:
                   style:
@@ -386,9 +354,7 @@ views:
                 axisTicks:
                   show: false
                 axisBorder:
-                  color: >-
-                    color-mix(in srgb, var(--divider-color) 50%,
-                    transparent)
+                  color: color-mix(in srgb, var(--divider-color) 50%, transparent)
               yaxis:
                 decimalsInFloat: 0
                 labels:
@@ -400,9 +366,7 @@ views:
                     EVAL:function(v) { return Math.abs(v).toFixed(0) + ' W' }
               grid:
                 strokeDashArray: 0
-                borderColor: >-
-                  color-mix(in srgb, var(--divider-color) 50%,
-                  transparent)
+                borderColor: color-mix(in srgb, var(--divider-color) 50%, transparent)
                 show: true
               chart:
                 height: 220px
@@ -416,7 +380,6 @@ views:
                 size: 0
                 hover:
                   size: 0
-
           - type: custom:apexcharts-card
             experimental:
               hidden_by_default: true
@@ -427,10 +390,9 @@ views:
               show: true
               show_states: false
               title: Verwachte winst per slot (groen = opbrengst, rood = kosten)
-            graph_span: 54h
+            graph_span: 48h
             span:
               start: hour
-              offset: -6h
             now:
               show: true
               label: Nu
@@ -440,14 +402,14 @@ views:
                 name: Winst
                 type: column
                 float_precision: 2
-                unit: 'ct'
+                unit: ct
                 color_threshold:
                   - value: -9999
                     color: '#ef5350'
                   - value: 0
                     color: '#66bb6a'
                 data_generator: |
-                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     (s.winst_eur ?? 0) !== 0
                       ? parseFloat(((s.winst_eur ?? 0) * 100).toFixed(2))
@@ -456,7 +418,6 @@ views:
               - entity: input_boolean.dynamisch_handelsstrategie_berekening_bezig
                 name: Refresh trigger
                 type: line
-                extend_to: false
                 show:
                   in_chart: false
                   in_header: false
@@ -466,7 +427,7 @@ views:
             apex_config:
               tooltip:
                 x:
-                  format: 'dd-MM HH:mm'
+                  format: dd-MM HH:mm
               xaxis:
                 labels:
                   style:
@@ -476,9 +437,7 @@ views:
                 axisTicks:
                   show: false
                 axisBorder:
-                  color: >-
-                    color-mix(in srgb, var(--divider-color) 50%,
-                    transparent)
+                  color: color-mix(in srgb, var(--divider-color) 50%, transparent)
               yaxis:
                 decimalsInFloat: 1
                 labels:
@@ -490,9 +449,7 @@ views:
                     EVAL:function(v) { return v.toFixed(1) + ' ct' }
               grid:
                 strokeDashArray: 0
-                borderColor: >-
-                  color-mix(in srgb, var(--divider-color) 50%,
-                  transparent)
+                borderColor: color-mix(in srgb, var(--divider-color) 50%, transparent)
                 show: true
               chart:
                 height: 200px
@@ -506,122 +463,9 @@ views:
                 size: 0
                 hover:
                   size: 0
-
-      - type: grid
-        column_span: 1
-        cards:
-          - type: heading
-            heading: Instellingen
-            heading_style: title
-
-          - type: entities
-            entities:
-              - entity: input_number.dynamisch_advies_analyse_dagen
-                name: Advies analyse dagen
-              - entity: input_number.dynamisch_warmte_penalty_laden_factor
-                name: C-waarde penalty laden factor
-              - entity: input_number.dynamisch_warmte_penalty_ontladen_factor
-                name: C-waarde penalty ontladen factor
-              - entity: input_number.dynamisch_warmte_afkoeling_halveringstijd_uren
-                name: Packtemp afkoel halveringstijd
-              - entity: input_number.dynamisch_warmte_stijging_laden_c_per_c2h
-                name: Packtemp warmte stijging laden per C²h
-              - entity: input_number.dynamisch_warmte_stijging_ontladen_c_per_c2h
-                name: Packtemp warmte stijging ontladen per C²h
-              - entity: input_number.dynamisch_max_temp_boven_80_soc
-                name: Packtemp limiet boven 80% SoC
-              - entity: input_number.dynamisch_max_temp_onder_80_soc
-                name: Packtemp limiet onder 80% SoC
-              - entity: input_number.dynamisch_temp_penalty_factor
-                name: Packtemp overschrijding penalty factor
-              - entity: input_number.dynamisch_temp_penalty_100_soc_factor
-                name: Packtemp 100% SoC penalty factor
-              - entity: input_number.dynamisch_hoge_soc_verblijf_penalty_factor
-                name: Hoge SoC verblijf penalty factor
-              - entity: input_number.dynamisch_lage_soc_verblijf_penalty_factor
-                name: Lage SoC verblijf penalty factor
-              - entity: input_text.dynamisch_buitentemperatuur_sensor
-                name: Actuele buitentemperatuur sensor
-              - entity: input_text.dynamisch_weather_entity
-                name: Forecast weather entity
-            show_header_toggle: false
-            state_color: false
-
-          - type: markdown
-            title: Parameter uitleg
-            content: |-
-              **Advies analyse dagen**: aantal dagen recorder-history voor het automatische strategieadvies. Korter reageert sneller, langer is stabieler.
-
-              **C-waarde penalty laden factor**: weegt warmteverlies door hoge C-waarde tijdens laden. Hoger betekent vaker lager laadvermogen.
-
-              **C-waarde penalty ontladen factor**: weegt warmteverlies door hoge C-waarde tijdens ontladen. Hoger betekent vaker lager ontlaadvermogen.
-
-              **Packtemp afkoel halveringstijd**: aantal rust-uren waarin het temperatuurverschil tussen batterij en buitenlucht halveert.
-
-              **Packtemp warmte stijging laden per C²h**: temperatuurstijging in graden per C² × uur tijdens laden. Hoger betekent sneller voorspelde opwarming tijdens laden.
-
-              **Packtemp warmte stijging ontladen per C²h**: temperatuurstijging in graden per C² × uur tijdens ontladen. Hoger betekent sneller voorspelde opwarming tijdens ontladen.
-
-              **Packtemp limiet boven 80% SoC**: gewenste maximale batterijtemperatuur wanneer de planning boven 80% SoC uitkomt.
-
-              **Packtemp limiet onder 80% SoC**: gewenste maximale batterijtemperatuur wanneer de planning onder 80% SoC blijft.
-
-              **Packtemp overschrijding penalty factor**: weegt overschrijding van de gekozen temperatuurgrens. `0` schakelt deze extra penalty uit.
-
-              **Packtemp 100% SoC penalty factor**: extra weging voor temperatuur-overschrijding tussen 90% en 100% SoC. `1` betekent geen extra weging; `2` verdubbelt de penalty bij 100% SoC.
-
-              **Hoge SoC verblijf penalty factor**: zachte euro-penalty voor tijd boven 90% SoC. Hogere temperatuur maakt deze penalty zwaarder.
-
-              **Lage SoC verblijf penalty factor**: zachte euro-penalty voor tijd onder 10% SoC. Dit is vooral een reserve- en comfortweging.
-
-              **Actuele buitentemperatuur sensor**: optionele `sensor.*` voor actuele buitentemperatuur. Laat leeg als je alleen `weather.openweathermap` hebt.
-
-              **Forecast weather entity**: `weather.*` entity voor `weather.get_forecasts`, bijvoorbeeld `weather.openweathermap`.
-
-          - type: conditional
-            conditions:
-              - entity: input_boolean.dynamisch_handelsstrategie_berekening_bezig
-                state_not: 'on'
-            card:
-              type: button
-              entity: input_button.dynamisch_handelsstrategie_herberekenen
-              name: Strategie herberekenen
-              icon: mdi:calculator-variant
-              show_state: false
-              tap_action:
-                action: call-service
-                service: input_button.press
-                target:
-                  entity_id: input_button.dynamisch_handelsstrategie_herberekenen
-
-          - type: conditional
-            conditions:
-              - entity: input_boolean.dynamisch_handelsstrategie_berekening_bezig
-                state: 'on'
-            card:
-              type: button
-              entity: input_boolean.dynamisch_handelsstrategie_berekening_bezig
-              name: Strategie wordt berekend
-              icon: mdi:loading
-              show_state: true
-              tap_action:
-                action: none
-
-          - type: button
-            entity: input_button.dynamisch_strategie_advies_herberekenen
-            name: Advies herberekenen
-            icon: mdi:lightbulb-on-outline
-            show_state: false
-            tap_action:
-              action: call-service
-              service: input_button.press
-              target:
-                entity_id: input_button.dynamisch_strategie_advies_herberekenen
-
           - type: heading
             heading: Thermisch model
             heading_style: title
-
           - type: custom:apexcharts-card
             cache: false
             update_delay: 2s
@@ -629,10 +473,9 @@ views:
               show: true
               show_states: false
               title: Temperatuur over planning
-            graph_span: 54h
+            graph_span: 48h
             span:
               start: hour
-              offset: -6h
             now:
               show: true
               label: Nu
@@ -641,14 +484,13 @@ views:
               - entity: sensor.dynamisch_handelsstrategie
                 name: Batterij
                 type: line
-                extend_to: false
                 curve: straight
                 color: '#009688'
                 stroke_width: 2
-                unit: '°C'
+                unit: °C
                 yaxis_id: temp
                 data_generator: |
-                  const slots = entity.attributes.slots_grafiek || entity.attributes.slots || [];
+                  const slots = entity.attributes.slots || [];
                   const pts = slots.map(s => [
                     new Date(s.start).getTime(),
                     s.batterij_temp_voor_c ?? null
@@ -664,28 +506,26 @@ views:
               - entity: sensor.dynamisch_handelsstrategie
                 name: Buiten
                 type: line
-                extend_to: false
                 curve: stepline
                 color: '#42a5f5'
                 stroke_width: 1
-                unit: '°C'
+                unit: °C
                 yaxis_id: temp
                 data_generator: |
-                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     s.buiten_temp_c ?? null
                   ]);
               - entity: sensor.dynamisch_handelsstrategie
                 name: Limiet
                 type: line
-                extend_to: false
                 curve: stepline
                 color: '#ef5350'
                 stroke_width: 1
-                unit: '°C'
+                unit: °C
                 yaxis_id: temp
                 data_generator: |
-                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     s.temp_limiet_c ?? entity.attributes.temp_limiet_c ?? null
                   ]);
@@ -694,10 +534,10 @@ views:
                 type: column
                 color: '#ef5350'
                 opacity: 0.35
-                unit: '°C'
+                unit: °C
                 yaxis_id: temp
                 data_generator: |
-                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     s.temp_limiet_actief && (s.overtemp_penalty_eur ?? s.temp_penalty_eur ?? 0) > 0
                       ? s.batterij_temp_na_c
@@ -708,10 +548,10 @@ views:
                 type: column
                 color: '#5c6bc0'
                 opacity: 0.55
-                unit: '°C'
+                unit: °C
                 yaxis_id: delta
                 data_generator: |
-                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => {
+                  return (entity.attributes.slots || []).map(s => {
                     const voor = Number(s.batterij_temp_voor_c);
                     const na = Number(s.batterij_temp_na_c);
                     return [
@@ -724,7 +564,6 @@ views:
               - entity: input_boolean.dynamisch_handelsstrategie_berekening_bezig
                 name: Refresh trigger
                 type: line
-                extend_to: false
                 yaxis_id: helper
                 show:
                   in_chart: false
@@ -751,7 +590,7 @@ views:
             apex_config:
               tooltip:
                 x:
-                  format: 'dd-MM HH:mm'
+                  format: dd-MM HH:mm
               chart:
                 height: 220px
                 toolbar:
@@ -764,7 +603,6 @@ views:
                 size: 0
                 hover:
                   size: 3
-
           - type: custom:apexcharts-card
             cache: false
             update_delay: 2s
@@ -772,10 +610,9 @@ views:
               show: true
               show_states: false
               title: Penalty per slot
-            graph_span: 54h
+            graph_span: 48h
             span:
               start: hour
-              offset: -6h
             now:
               show: true
               label: Nu
@@ -785,10 +622,10 @@ views:
                 name: Warmte laden
                 type: column
                 color: '#66bb6a'
-                unit: 'ct'
+                unit: ct
                 yaxis_id: penalty
                 data_generator: |
-                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     s.actie === 'laden' ? ((s.warmte_penalty_eur ?? 0) * 100) : null
                   ]);
@@ -796,10 +633,10 @@ views:
                 name: Warmte ontladen
                 type: column
                 color: '#ff9800'
-                unit: 'ct'
+                unit: ct
                 yaxis_id: penalty
                 data_generator: |
-                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     s.actie === 'ontladen' ? ((s.warmte_penalty_eur ?? 0) * 100) : null
                   ]);
@@ -807,10 +644,10 @@ views:
                 name: Overtemp
                 type: column
                 color: '#ef5350'
-                unit: 'ct'
+                unit: ct
                 yaxis_id: penalty
                 data_generator: |
-                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     (s.overtemp_penalty_eur ?? s.temp_penalty_eur ?? 0) > 0
                       ? ((s.overtemp_penalty_eur ?? s.temp_penalty_eur ?? 0) * 100)
@@ -820,10 +657,10 @@ views:
                 name: SoC verblijf
                 type: column
                 color: '#7e57c2'
-                unit: 'ct'
+                unit: ct
                 yaxis_id: penalty
                 data_generator: |
-                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     (s.soc_verblijf_penalty_eur ?? 0) > 0
                       ? ((s.soc_verblijf_penalty_eur ?? 0) * 100)
@@ -832,7 +669,6 @@ views:
               - entity: sensor.dynamisch_handelsstrategie
                 name: Actie
                 type: line
-                extend_to: false
                 yaxis_id: helper
                 stroke_width: 0
                 opacity: 0
@@ -841,14 +677,13 @@ views:
                   in_header: false
                   in_legend: false
                 data_generator: |
-                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     s.actie === 'laden' ? 1 : s.actie === 'ontladen' ? 2 : 0
                   ]);
               - entity: sensor.dynamisch_handelsstrategie
                 name: Vermogen
                 type: line
-                extend_to: false
                 yaxis_id: helper
                 stroke_width: 0
                 opacity: 0
@@ -857,14 +692,13 @@ views:
                   in_header: false
                   in_legend: false
                 data_generator: |
-                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     s.vermogen_w ?? 0
                   ]);
               - entity: sensor.dynamisch_handelsstrategie
                 name: C
                 type: line
-                extend_to: false
                 yaxis_id: helper
                 stroke_width: 0
                 opacity: 0
@@ -873,14 +707,13 @@ views:
                   in_header: false
                   in_legend: false
                 data_generator: |
-                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     s.c_waarde ?? 0
                   ]);
               - entity: sensor.dynamisch_handelsstrategie
                 name: Temp voor
                 type: line
-                extend_to: false
                 yaxis_id: helper
                 stroke_width: 0
                 opacity: 0
@@ -889,14 +722,13 @@ views:
                   in_header: false
                   in_legend: false
                 data_generator: |
-                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     s.batterij_temp_voor_c ?? null
                   ]);
               - entity: sensor.dynamisch_handelsstrategie
                 name: Temp na
                 type: line
-                extend_to: false
                 yaxis_id: helper
                 stroke_width: 0
                 opacity: 0
@@ -905,14 +737,13 @@ views:
                   in_header: false
                   in_legend: false
                 data_generator: |
-                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     s.batterij_temp_na_c ?? null
                   ]);
               - entity: sensor.dynamisch_handelsstrategie
                 name: Warmte ct
                 type: line
-                extend_to: false
                 yaxis_id: helper
                 stroke_width: 0
                 opacity: 0
@@ -921,14 +752,13 @@ views:
                   in_header: false
                   in_legend: false
                 data_generator: |
-                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     (s.warmte_penalty_eur ?? 0) * 100
                   ]);
               - entity: sensor.dynamisch_handelsstrategie
                 name: Overtemp ct
                 type: line
-                extend_to: false
                 yaxis_id: helper
                 stroke_width: 0
                 opacity: 0
@@ -937,14 +767,13 @@ views:
                   in_header: false
                   in_legend: false
                 data_generator: |
-                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     (s.overtemp_penalty_eur ?? s.temp_penalty_eur ?? 0) * 100
                   ]);
               - entity: sensor.dynamisch_handelsstrategie
                 name: SoC verblijf ct
                 type: line
-                extend_to: false
                 yaxis_id: helper
                 stroke_width: 0
                 opacity: 0
@@ -953,14 +782,13 @@ views:
                   in_header: false
                   in_legend: false
                 data_generator: |
-                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     (s.soc_verblijf_penalty_eur ?? 0) * 100
                   ]);
               - entity: sensor.dynamisch_handelsstrategie
                 name: Hoge SoC verblijf ct
                 type: line
-                extend_to: false
                 yaxis_id: helper
                 stroke_width: 0
                 opacity: 0
@@ -969,14 +797,13 @@ views:
                   in_header: false
                   in_legend: false
                 data_generator: |
-                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     (s.hoge_soc_verblijf_penalty_eur ?? 0) * 100
                   ]);
               - entity: sensor.dynamisch_handelsstrategie
                 name: Lage SoC verblijf ct
                 type: line
-                extend_to: false
                 yaxis_id: helper
                 stroke_width: 0
                 opacity: 0
@@ -985,14 +812,13 @@ views:
                   in_header: false
                   in_legend: false
                 data_generator: |
-                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     (s.lage_soc_verblijf_penalty_eur ?? 0) * 100
                   ]);
               - entity: sensor.dynamisch_handelsstrategie
                 name: Temp limiet voor
                 type: line
-                extend_to: false
                 yaxis_id: helper
                 stroke_width: 0
                 opacity: 0
@@ -1001,14 +827,13 @@ views:
                   in_header: false
                   in_legend: false
                 data_generator: |
-                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     s.temp_limiet_voor_c ?? s.temp_limiet_c ?? null
                   ]);
               - entity: sensor.dynamisch_handelsstrategie
                 name: Temp limiet na
                 type: line
-                extend_to: false
                 yaxis_id: helper
                 stroke_width: 0
                 opacity: 0
@@ -1017,14 +842,13 @@ views:
                   in_header: false
                   in_legend: false
                 data_generator: |
-                  return (entity.attributes.slots_grafiek || entity.attributes.slots || []).map(s => [
+                  return (entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
                     s.temp_limiet_na_c ?? s.temp_limiet_c ?? null
                   ]);
               - entity: input_boolean.dynamisch_handelsstrategie_berekening_bezig
                 name: Refresh trigger
                 type: line
-                extend_to: false
                 yaxis_id: helper
                 show:
                   in_chart: false
@@ -1098,73 +922,8 @@ views:
                 show: true
               markers:
                 size: 0
-
           - type: entities
-            title: Strategie advies
-            entities:
-              - entity: sensor.dynamisch_strategie_advies
-                name: Advies status
-                icon: mdi:lightbulb-on-outline
-              - type: attribute
-                entity: sensor.dynamisch_strategie_advies
-                attribute: advies_tekst
-                name: Advies
-                icon: mdi:text-box-check-outline
-              - type: attribute
-                entity: sensor.dynamisch_strategie_advies
-                attribute: confidence
-                name: Betrouwbaarheid
-                icon: mdi:gauge
-              - type: attribute
-                entity: sensor.dynamisch_strategie_advies
-                attribute: analyse_dagen
-                name: Analyse dagen
-                icon: mdi:calendar-search
-              - type: attribute
-                entity: sensor.dynamisch_strategie_advies
-                attribute: geanalyseerde_slots
-                name: Geanalyseerde slots
-                icon: mdi:timeline-clock-outline
-              - type: attribute
-                entity: sensor.dynamisch_strategie_advies
-                attribute: temperatuur_vergelijkingen
-                name: Temperatuur vergelijkingen
-                icon: mdi:thermometer-check
-              - type: attribute
-                entity: sensor.dynamisch_strategie_advies
-                attribute: aanbevolen_warmte_stijging_laden_c_per_c2h
-                name: Advies warmte stijging laden
-                icon: mdi:heat-wave
-              - type: attribute
-                entity: sensor.dynamisch_strategie_advies
-                attribute: aanbevolen_warmte_stijging_ontladen_c_per_c2h
-                name: Advies warmte stijging ontladen
-                icon: mdi:heat-wave
-              - type: attribute
-                entity: sensor.dynamisch_strategie_advies
-                attribute: aanbevolen_afkoeling_halveringstijd_h
-                name: Advies afkoel halveringstijd
-                icon: mdi:coolant-temperature
-              - type: attribute
-                entity: sensor.dynamisch_strategie_advies
-                attribute: aanbevolen_temp_penalty_factor
-                name: Advies overtemp penalty factor
-                icon: mdi:thermometer-chevron-up
-              - type: attribute
-                entity: sensor.dynamisch_strategie_advies
-                attribute: aanbevolen_warmte_penalty_laden_factor
-                name: Advies C-waarde penalty laden
-                icon: mdi:thermometer-lines
-              - type: attribute
-                entity: sensor.dynamisch_strategie_advies
-                attribute: aanbevolen_warmte_penalty_ontladen_factor
-                name: Advies C-waarde penalty ontladen
-                icon: mdi:thermometer-chevron-down
-            show_header_toggle: false
-            state_color: true
-
-          - type: entities
-            title: Thermische uitleg
+            title: Waardes gebruikt in huidige berekening
             entities:
               - entity: sensor.zendure_2400_ac_warmste_batterij_temperatuur
                 name: Warmste batterij
@@ -1237,11 +996,218 @@ views:
                 icon: mdi:battery-low
             show_header_toggle: false
             state_color: true
+      - type: grid
+        column_span: 1
+        cards:
+          - type: heading
+            heading: Instellingen
+            heading_style: title
+          - type: entities
+            entities:
+              - entity: input_number.dynamisch_advies_analyse_dagen
+                name: Advies analyse dagen
+              - entity: input_number.dynamisch_warmte_penalty_laden_factor
+                name: C-waarde penalty laden factor
+              - entity: input_number.dynamisch_warmte_penalty_ontladen_factor
+                name: C-waarde penalty ontladen factor
+              - entity: input_number.dynamisch_warmte_afkoeling_halveringstijd_uren
+                name: Packtemp afkoel halveringstijd
+              - entity: input_number.dynamisch_warmte_stijging_laden_c_per_c2h
+                name: Packtemp warmte stijging laden per C²h
+              - entity: input_number.dynamisch_warmte_stijging_ontladen_c_per_c2h
+                name: Packtemp warmte stijging ontladen per C²h
+              - entity: input_number.dynamisch_max_temp_boven_80_soc
+                name: Packtemp limiet boven 80% SoC
+              - entity: input_number.dynamisch_max_temp_onder_80_soc
+                name: Packtemp limiet onder 80% SoC
+              - entity: input_number.dynamisch_temp_penalty_factor
+                name: Packtemp overschrijding penalty factor
+              - entity: input_number.dynamisch_temp_penalty_100_soc_factor
+                name: Packtemp 100% SoC penalty factor
+              - entity: input_number.dynamisch_hoge_soc_verblijf_penalty_factor
+                name: Hoge SoC verblijf penalty factor
+              - entity: input_number.dynamisch_lage_soc_verblijf_penalty_factor
+                name: Lage SoC verblijf penalty factor
+              - entity: input_text.dynamisch_buitentemperatuur_sensor
+                name: Actuele buitentemperatuur sensor
+              - entity: input_text.dynamisch_weather_entity
+                name: Forecast weather entity
+            show_header_toggle: false
+            state_color: false
+          - type: markdown
+            title: Parameter uitleg
+            content: >-
+              **Advies analyse dagen**: aantal dagen recorder-history voor het
+              automatische strategieadvies. Korter reageert sneller, langer is
+              stabieler.
 
+
+              **C-waarde penalty laden factor**: weegt warmteverlies door hoge
+              C-waarde tijdens laden. Hoger betekent vaker lager laadvermogen.
+
+
+              **C-waarde penalty ontladen factor**: weegt warmteverlies door
+              hoge C-waarde tijdens ontladen. Hoger betekent vaker lager
+              ontlaadvermogen.
+
+
+              **Packtemp afkoel halveringstijd**: aantal rust-uren waarin het
+              temperatuurverschil tussen batterij en buitenlucht halveert.
+
+
+              **Packtemp warmte stijging laden per C²h**: temperatuurstijging in
+              graden per C² × uur tijdens laden. Hoger betekent sneller
+              voorspelde opwarming tijdens laden.
+
+
+              **Packtemp warmte stijging ontladen per C²h**: temperatuurstijging
+              in graden per C² × uur tijdens ontladen. Hoger betekent sneller
+              voorspelde opwarming tijdens ontladen.
+
+
+              **Packtemp limiet boven 80% SoC**: gewenste maximale
+              batterijtemperatuur wanneer de planning boven 80% SoC uitkomt.
+
+
+              **Packtemp limiet onder 80% SoC**: gewenste maximale
+              batterijtemperatuur wanneer de planning onder 80% SoC blijft.
+
+
+              **Packtemp overschrijding penalty factor**: weegt overschrijding
+              van de gekozen temperatuurgrens. `0` schakelt deze extra penalty
+              uit.
+
+
+              **Packtemp 100% SoC penalty factor**: extra weging voor
+              temperatuur-overschrijding tussen 90% en 100% SoC. `1` betekent
+              geen extra weging; `2` verdubbelt de penalty bij 100% SoC.
+
+
+              **Hoge SoC verblijf penalty factor**: zachte euro-penalty voor
+              tijd boven 90% SoC. Hogere temperatuur maakt deze penalty
+              zwaarder.
+
+
+              **Lage SoC verblijf penalty factor**: zachte euro-penalty voor
+              tijd onder 10% SoC. Dit is vooral een reserve- en comfortweging.
+
+
+              **Actuele buitentemperatuur sensor**: optionele `sensor.*` voor
+              actuele buitentemperatuur. Laat leeg als je alleen
+              `weather.openweathermap` hebt.
+
+
+              **Forecast weather entity**: `weather.*` entity voor
+              `weather.get_forecasts`, bijvoorbeeld `weather.openweathermap`.
+          - type: conditional
+            conditions:
+              - entity: input_boolean.dynamisch_handelsstrategie_berekening_bezig
+                state_not: 'on'
+            card:
+              type: button
+              entity: input_button.dynamisch_handelsstrategie_herberekenen
+              name: Strategie herberekenen
+              icon: mdi:calculator-variant
+              show_state: false
+              tap_action:
+                action: call-service
+                service: input_button.press
+                target:
+                  entity_id: input_button.dynamisch_handelsstrategie_herberekenen
+            grid_options:
+              rows: 2
+              columns: 3
+          - type: conditional
+            conditions:
+              - entity: input_boolean.dynamisch_handelsstrategie_berekening_bezig
+                state: 'on'
+            card:
+              type: button
+              entity: input_boolean.dynamisch_handelsstrategie_berekening_bezig
+              name: Strategie wordt berekend
+              icon: mdi:loading
+              show_state: true
+              tap_action:
+                action: none
+            grid_options:
+              columns: 3
+              rows: auto
+          - type: button
+            entity: input_button.dynamisch_strategie_advies_herberekenen
+            name: Advies herberekenen
+            icon: mdi:lightbulb-on-outline
+            show_state: false
+            tap_action:
+              action: call-service
+              service: input_button.press
+              target:
+                entity_id: input_button.dynamisch_strategie_advies_herberekenen
+          - type: entities
+            title: Strategie advies
+            entities:
+              - entity: sensor.dynamisch_strategie_advies
+                name: Advies status
+                icon: mdi:lightbulb-on-outline
+              - type: attribute
+                entity: sensor.dynamisch_strategie_advies
+                attribute: advies_tekst
+                name: Advies
+                icon: mdi:text-box-check-outline
+              - type: attribute
+                entity: sensor.dynamisch_strategie_advies
+                attribute: confidence
+                name: Betrouwbaarheid
+                icon: mdi:gauge
+              - type: attribute
+                entity: sensor.dynamisch_strategie_advies
+                attribute: analyse_dagen
+                name: Analyse dagen
+                icon: mdi:calendar-search
+              - type: attribute
+                entity: sensor.dynamisch_strategie_advies
+                attribute: geanalyseerde_slots
+                name: Geanalyseerde slots
+                icon: mdi:timeline-clock-outline
+              - type: attribute
+                entity: sensor.dynamisch_strategie_advies
+                attribute: temperatuur_vergelijkingen
+                name: Temperatuur vergelijkingen
+                icon: mdi:thermometer-check
+              - type: attribute
+                entity: sensor.dynamisch_strategie_advies
+                attribute: aanbevolen_warmte_stijging_laden_c_per_c2h
+                name: Advies warmte stijging laden
+                icon: mdi:heat-wave
+              - type: attribute
+                entity: sensor.dynamisch_strategie_advies
+                attribute: aanbevolen_warmte_stijging_ontladen_c_per_c2h
+                name: Advies warmte stijging ontladen
+                icon: mdi:heat-wave
+              - type: attribute
+                entity: sensor.dynamisch_strategie_advies
+                attribute: aanbevolen_afkoeling_halveringstijd_h
+                name: Advies afkoel halveringstijd
+                icon: mdi:coolant-temperature
+              - type: attribute
+                entity: sensor.dynamisch_strategie_advies
+                attribute: aanbevolen_temp_penalty_factor
+                name: Advies overtemp penalty factor
+                icon: mdi:thermometer-chevron-up
+              - type: attribute
+                entity: sensor.dynamisch_strategie_advies
+                attribute: aanbevolen_warmte_penalty_laden_factor
+                name: Advies C-waarde penalty laden
+                icon: mdi:thermometer-lines
+              - type: attribute
+                entity: sensor.dynamisch_strategie_advies
+                attribute: aanbevolen_warmte_penalty_ontladen_factor
+                name: Advies C-waarde penalty ontladen
+                icon: mdi:thermometer-chevron-down
+            show_header_toggle: false
+            state_color: true
           - type: heading
             heading: Status
             heading_style: title
-
           - type: entities
             entities:
               - entity: sensor.dynamisch_handelsstrategie
@@ -1297,26 +1263,14 @@ views:
                 icon: mdi:arrow-expand-vertical
               - type: attribute
                 entity: sensor.dynamisch_handelsstrategie
-                attribute: planning_resolutie
-                name: Planningresolutie
-                icon: mdi:timeline-clock-outline
-              - type: attribute
-                entity: sensor.dynamisch_handelsstrategie
-                attribute: fijnmazige_slots
-                name: Kwartierslots
-                icon: mdi:view-grid-plus-outline
-              - type: attribute
-                entity: sensor.dynamisch_handelsstrategie
                 attribute: bijgewerkt
                 name: Bijgewerkt
                 icon: mdi:clock-check
             show_header_toggle: false
             state_color: false
-
           - type: heading
             heading: Vergelijking huidige aansturing
             heading_style: subtitle
-
           - type: entities
             entities:
               - entity: sensor.dynamisch_goedkoopste_periode
