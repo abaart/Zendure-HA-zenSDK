@@ -233,6 +233,46 @@ class TestDPBasis:
                 annuleer_check=lambda: True,
             )
 
+    def test_stop_soc_alleen_bij_laadslot_overgang(self):
+        """
+        Een laadslot krijgt alleen stop_soc_pct als het volgende slot niet laadt.
+        """
+        schema = los_dp_op(
+            maak_slots([0.01, 0.02, 1.00]),
+            maak_accu(huidig_kwh=0.0, max_laad_w=600),
+            plateau_spreiding=False,
+            warmte_penalty_laden_factor=0.0,
+            warmte_penalty_ontladen_factor=0.0,
+            hoge_soc_verblijf_penalty_factor=0.0,
+            lage_soc_verblijf_penalty_factor=0.0,
+        )
+
+        assert [slot["actie"] for slot in schema] == ["laden", "laden", "ontladen"]
+        assert schema[0]["stop_soc_pct"] is None
+        assert schema[0]["stop_soc_richting"] == "geen"
+        assert schema[1]["stop_soc_pct"] == pytest.approx(schema[1]["soc_na_pct"])
+        assert schema[1]["stop_soc_richting"] == "boven_of_gelijk"
+
+    def test_stop_soc_alleen_bij_ontlaadslot_overgang(self):
+        """
+        Een ontlaadslot krijgt alleen stop_soc_pct als het volgende slot niet ontlaadt.
+        """
+        schema = los_dp_op(
+            maak_slots([1.00, 0.95]),
+            maak_accu(huidig_kwh=2.4, max_laad_w=0.0, max_ontlaad_w=600),
+            plateau_spreiding=False,
+            warmte_penalty_laden_factor=0.0,
+            warmte_penalty_ontladen_factor=0.0,
+            hoge_soc_verblijf_penalty_factor=0.0,
+            lage_soc_verblijf_penalty_factor=0.0,
+        )
+
+        assert [slot["actie"] for slot in schema] == ["ontladen", "ontladen"]
+        assert schema[0]["stop_soc_pct"] is None
+        assert schema[0]["stop_soc_richting"] == "geen"
+        assert schema[1]["stop_soc_pct"] == pytest.approx(schema[1]["soc_na_pct"])
+        assert schema[1]["stop_soc_richting"] == "onder_of_gelijk"
+
 
 # ── ARBITRAGE LOGICA ──────────────────────────────────────────────────────────
 
@@ -940,6 +980,8 @@ class TestActiefSlotVermogen:
         assert schema[0]["doel_soc_kwh"] == 4.7
         assert schema[0]["actuele_soc_kwh"] == 2.916
         assert schema[0]["geplande_actie"] == "laden"
+        assert schema[0]["stop_soc_kwh"] == 4.7
+        assert schema[0]["stop_soc_richting"] == "boven_of_gelijk"
 
     def test_lopend_laadslot_beperkt_vermogen_als_doel_lager_is(self):
         """
@@ -1000,6 +1042,46 @@ class TestActiefSlotVermogen:
         assert schema[0]["actie"] == "laden"
         assert schema[0]["vermogen_w"] == 1518
         assert schema[0]["doel_soc_kwh"] == 4.7
+        assert schema[0]["stop_soc_kwh"] is None
+        assert schema[0]["stop_soc_richting"] == "geen"
+
+    def test_lopend_laadslot_blijft_actief_bij_zelfde_volgende_actie(self):
+        """
+        Als het laadslotdoel al is bereikt en het volgende slot ook laadt,
+        blijft laden actief zodat de Zendure niet stopt en opnieuw start.
+        """
+        nu = datetime.fromisoformat("2026-05-21T14:30:00+02:00")
+        schema = [
+            {
+                "start": "2026-05-21T14:00:00+02:00",
+                "end": "2026-05-21T15:00:00+02:00",
+                "prijs_ct": 14.467,
+                "actie": "laden",
+                "vermogen_w": 1550,
+                "soc_voor_kwh": 2.9,
+                "soc_na_kwh": 4.7,
+                "winst_eur": -0.2825,
+            },
+            {
+                "start": "2026-05-21T15:00:00+02:00",
+                "end": "2026-05-21T16:00:00+02:00",
+                "prijs_ct": 17.289,
+                "actie": "laden",
+                "vermogen_w": 488,
+                "soc_voor_kwh": 4.7,
+                "soc_na_kwh": 5.15,
+                "winst_eur": -0.0844,
+            },
+        ]
+        accu = maak_accu(huidig_kwh=4.7, max_kwh=5.146, eta=0.922)
+
+        corrigeer_actief_slot_vermogen(schema, accu, nu)
+
+        assert schema[0]["actie"] == "laden"
+        assert schema[0]["vermogen_w"] == 1550
+        assert schema[0]["stop_soc_kwh"] is None
+        assert schema[0]["stop_soc_richting"] == "geen"
+        assert schema[0]["actief_slot_doorlopen_zelfde_actie"] is True
 
     def test_lopend_laadslot_verhoogt_doel_niet_als_vervolg_goedkoper_is(self):
         """
@@ -1072,6 +1154,46 @@ class TestActiefSlotVermogen:
         assert schema[0]["actie"] == "ontladen"
         assert schema[0]["vermogen_w"] == 1993
         assert schema[0]["doel_soc_kwh"] == 2.0
+        assert schema[0]["stop_soc_kwh"] is None
+        assert schema[0]["stop_soc_richting"] == "geen"
+
+    def test_lopend_ontlaadslot_blijft_actief_bij_zelfde_volgende_actie(self):
+        """
+        Als het ontlaadslotdoel al is bereikt en het volgende slot ook ontlaadt,
+        blijft ontladen actief zodat de Zendure niet stopt en opnieuw start.
+        """
+        nu = datetime.fromisoformat("2026-05-21T20:30:00+02:00")
+        schema = [
+            {
+                "start": "2026-05-21T20:00:00+02:00",
+                "end": "2026-05-21T21:00:00+02:00",
+                "prijs_ct": 37.08,
+                "actie": "ontladen",
+                "vermogen_w": 1994,
+                "soc_voor_kwh": 3.95,
+                "soc_na_kwh": 2.0,
+                "winst_eur": 0.6655,
+            },
+            {
+                "start": "2026-05-21T21:00:00+02:00",
+                "end": "2026-05-21T22:00:00+02:00",
+                "prijs_ct": 35.607,
+                "actie": "ontladen",
+                "vermogen_w": 1841,
+                "soc_voor_kwh": 2.0,
+                "soc_na_kwh": 0.35,
+                "winst_eur": 0.6554,
+            },
+        ]
+        accu = maak_accu(huidig_kwh=2.0, max_kwh=5.13, eta=0.92)
+
+        corrigeer_actief_slot_vermogen(schema, accu, nu)
+
+        assert schema[0]["actie"] == "ontladen"
+        assert schema[0]["vermogen_w"] == 1994
+        assert schema[0]["stop_soc_kwh"] is None
+        assert schema[0]["stop_soc_richting"] == "geen"
+        assert schema[0]["actief_slot_doorlopen_zelfde_actie"] is True
 
     def test_lopend_ontlaadslot_verlaagt_doel_niet_als_vervolg_duurder_is(self):
         """

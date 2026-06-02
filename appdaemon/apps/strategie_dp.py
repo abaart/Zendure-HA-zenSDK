@@ -278,7 +278,30 @@ def corrigeer_actief_slot_vermogen(
             return waarde
         return datetime.fromisoformat(str(waarde))
 
-    for slot in schema:
+    def volgende_actie_na(slot_index: int) -> str:
+        if slot_index + 1 >= len(schema):
+            return "rust"
+        return str(schema[slot_index + 1].get("actie") or "rust")
+
+    def houd_actie_actief_bij_zelfde_volgende_slot(slot: dict[str, Any]) -> bool:
+        try:
+            bestaand_vermogen_w = round(max(0.0, float(slot.get("vermogen_w") or 0.0)))
+        except (TypeError, ValueError):
+            bestaand_vermogen_w = 0
+
+        if bestaand_vermogen_w <= 0:
+            return False
+
+        slot["vermogen_w"] = bestaand_vermogen_w
+        slot["verwacht_vermogen_w"] = slot.get("verwacht_vermogen_w", bestaand_vermogen_w)
+        slot["stop_soc_kwh"] = None
+        slot["stop_soc_pct"] = None
+        slot["stop_soc_richting"] = "geen"
+        slot["doel_bereikt"] = False
+        slot["actief_slot_doorlopen_zelfde_actie"] = True
+        return True
+
+    for slot_index, slot in enumerate(schema):
         try:
             start = naar_datetime(slot["start"])
             end = naar_datetime(slot["end"])
@@ -296,6 +319,7 @@ def corrigeer_actief_slot_vermogen(
         if actie not in ("laden", "ontladen"):
             return schema
 
+        volgende_actie = volgende_actie_na(slot_index)
         try:
             doel_soc_kwh = float(slot["soc_na_kwh"])
         except (KeyError, TypeError, ValueError):
@@ -310,30 +334,77 @@ def corrigeer_actief_slot_vermogen(
         if resterende_uren <= 0:
             slot["actie"] = "rust"
             slot["vermogen_w"] = 0
+            slot["stop_soc_kwh"] = None
+            slot["stop_soc_pct"] = None
+            slot["stop_soc_richting"] = "geen"
             return schema
 
         if actie == "laden":
             delta_kwh = doel_soc_kwh - accu.huidig_kwh
-            if delta_kwh <= 0 or accu.eta_laad <= 0:
+            if accu.eta_laad <= 0:
                 slot["actie"] = "rust"
                 slot["vermogen_w"] = 0
+                slot["stop_soc_kwh"] = None
+                slot["stop_soc_pct"] = None
+                slot["stop_soc_richting"] = "geen"
+                return schema
+            if delta_kwh <= 0:
+                if volgende_actie == actie and houd_actie_actief_bij_zelfde_volgende_slot(slot):
+                    return schema
+                slot["actie"] = "rust"
+                slot["vermogen_w"] = 0
+                slot["stop_soc_kwh"] = None
+                slot["stop_soc_pct"] = None
+                slot["stop_soc_richting"] = "geen"
                 return schema
             gevraagd_w = delta_kwh / accu.eta_laad / resterende_uren * 1000.0
             slot["vermogen_w"] = round(min(accu.max_laad_w, max(0.0, gevraagd_w)))
+            if volgende_actie == actie:
+                slot["stop_soc_kwh"] = None
+                slot["stop_soc_pct"] = None
+                slot["stop_soc_richting"] = "geen"
+            else:
+                slot["stop_soc_kwh"] = round(doel_soc_kwh, 3)
+                slot["stop_soc_pct"] = (
+                    round(doel_soc_kwh / accu.max_kwh * 100, 1)
+                    if accu.max_kwh > 0
+                    else 0.0
+                )
+                slot["stop_soc_richting"] = "boven_of_gelijk"
             return schema
 
         if accu.eta_ontlaad <= 0:
             slot["actie"] = "rust"
             slot["vermogen_w"] = 0
+            slot["stop_soc_kwh"] = None
+            slot["stop_soc_pct"] = None
+            slot["stop_soc_richting"] = "geen"
             return schema
 
         delta_kwh = accu.huidig_kwh - doel_soc_kwh
         if delta_kwh <= 0:
+            if volgende_actie == actie and houd_actie_actief_bij_zelfde_volgende_slot(slot):
+                return schema
             slot["actie"] = "rust"
             slot["vermogen_w"] = 0
+            slot["stop_soc_kwh"] = None
+            slot["stop_soc_pct"] = None
+            slot["stop_soc_richting"] = "geen"
             return schema
         gevraagd_w = delta_kwh * accu.eta_ontlaad / resterende_uren * 1000.0
         slot["vermogen_w"] = round(min(accu.max_ontlaad_w, max(0.0, gevraagd_w)))
+        if volgende_actie == actie:
+            slot["stop_soc_kwh"] = None
+            slot["stop_soc_pct"] = None
+            slot["stop_soc_richting"] = "geen"
+        else:
+            slot["stop_soc_kwh"] = round(doel_soc_kwh, 3)
+            slot["stop_soc_pct"] = (
+                round(doel_soc_kwh / accu.max_kwh * 100, 1)
+                if accu.max_kwh > 0
+                else 0.0
+            )
+            slot["stop_soc_richting"] = "onder_of_gelijk"
         return schema
 
     return schema
@@ -473,8 +544,9 @@ def los_dp_op(
 
     Returns:
         Lijst van slot-dicts met toegevoegde velden:
-        actie, vermogen_w, verwacht_vermogen_w, soc_voor_kwh, soc_na_kwh,
-        soc_voor_pct, soc_na_pct, winst_eur, c_waarde, warmte_penalty_eur.
+        actie, vermogen_w, verwacht_vermogen_w, stop_soc_kwh, stop_soc_pct,
+        stop_soc_richting, soc_voor_kwh, soc_na_kwh, soc_voor_pct,
+        soc_na_pct, winst_eur, c_waarde, warmte_penalty_eur.
         Als het thermisch model actief is, bevat elk slot ook batterij_temp_voor_c,
         batterij_temp_na_c, buiten_temp_c, overtemp_penalty_eur, temp_limiet_c,
         temp_limiet_hoge_soc_c, temp_limiet_lage_soc_c, temp_penalty_soc_factor
@@ -1168,9 +1240,47 @@ def los_dp_op(
         huidig_q = nieuwe_q
 
     def herbereken_modelvelden(schema: list[dict[str, Any]]) -> None:
+        def werk_stop_soc_velden_bij(k: int, s_r: dict[str, Any]) -> None:
+            actie = s_r.get("actie")
+            if actie not in ("laden", "ontladen"):
+                s_r["stop_soc_kwh"] = None
+                s_r["stop_soc_pct"] = None
+                s_r["stop_soc_richting"] = "geen"
+                return
+
+            volgende_actie = (
+                schema[k + 1].get("actie")
+                if k + 1 < len(schema)
+                else "rust"
+            )
+            if volgende_actie == actie:
+                s_r["stop_soc_kwh"] = None
+                s_r["stop_soc_pct"] = None
+                s_r["stop_soc_richting"] = "geen"
+                return
+
+            try:
+                stop_soc_kwh = float(s_r["soc_na_kwh"])
+            except (KeyError, TypeError, ValueError):
+                s_r["stop_soc_kwh"] = None
+                s_r["stop_soc_pct"] = None
+                s_r["stop_soc_richting"] = "geen"
+                return
+
+            s_r["stop_soc_kwh"] = round(stop_soc_kwh, 3)
+            s_r["stop_soc_pct"] = (
+                round(stop_soc_kwh / max_kwh * 100, 1)
+                if max_kwh > 0
+                else 0.0
+            )
+            s_r["stop_soc_richting"] = (
+                "boven_of_gelijk" if actie == "laden" else "onder_of_gelijk"
+            )
+
         temp_c = batterij_temp_start
         for k, s_r in enumerate(schema):
             controleer_annulering()
+            werk_stop_soc_velden_bij(k, s_r)
             duur_h = slots[k]["duration_h"]
             actie = s_r.get("actie")
             try:

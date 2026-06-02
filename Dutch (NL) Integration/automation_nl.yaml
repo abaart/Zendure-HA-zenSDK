@@ -2296,6 +2296,108 @@ actions:
             entity_id: input_boolean.dynamisch_laden_loopt
             state:
               - "on"
+          - alias: Huidig laadslot heeft stop-SoC bereikt
+            condition: template
+            value_template: >
+              {% set slots = state_attr('sensor.dynamisch_handelsstrategie',
+              'slots') | default([]) %}
+              {% set slot = namespace(actie='rust', stop=-1) %}
+              {% for s in slots %}
+                {% if as_timestamp(s.start) <= as_timestamp(now()) < as_timestamp(s.end) %}
+                  {% set slot.actie = s.actie %}
+                  {% set slot.stop = s.stop_soc_pct | default(-1) | float(-1) %}
+                {% endif %}
+              {% endfor %}
+              {% set soc = states('sensor.zendure_2400_ac_laadpercentage') | float(0) %}
+              {{ slot.actie == 'laden' and slot.stop >= 0 and soc >= slot.stop }}
+        sequence:
+          - action: rest_command.zendure_stop_met_alles
+            data:
+              sn: "{{ states('sensor.zendure_2400_ac_serienummer') }}"
+          - action: input_boolean.turn_off
+            target:
+              entity_id:
+                - input_boolean.dynamisch_laden_loopt
+            data: {}
+          - action: logbook.log
+            data:
+              message: >-
+                💲DP laden gestopt — stop-SoC
+                {% set slots = state_attr('sensor.dynamisch_handelsstrategie',
+                'slots') | default([]) %}
+                {% set stop = namespace(val='?') %}
+                {% for s in slots %}
+                  {% if as_timestamp(s.start) <= as_timestamp(now()) < as_timestamp(s.end) %}
+                    {% set stop.val = s.stop_soc_pct | default('?') %}
+                  {% endif %}
+                {% endfor %}
+                {{ stop.val }}% bereikt —
+              entity_id: input_select.zendure_2400_ac_modus_selecteren
+              name: " "
+        alias: Dynamisch Handelen (DP) laden stop-SoC bereikt
+      - conditions:
+          - condition: trigger
+            id:
+              - aansturing_trigger
+          - condition: state
+            entity_id: input_select.zendure_2400_ac_modus_selecteren
+            state:
+              - Dynamisch Handelen (DP)
+          - condition: state
+            entity_id: input_boolean.dynamisch_ontladen_loopt
+            state:
+              - "on"
+          - alias: Huidig ontlaadslot heeft stop-SoC bereikt
+            condition: template
+            value_template: >
+              {% set slots = state_attr('sensor.dynamisch_handelsstrategie',
+              'slots') | default([]) %}
+              {% set slot = namespace(actie='rust', stop=-1) %}
+              {% for s in slots %}
+                {% if as_timestamp(s.start) <= as_timestamp(now()) < as_timestamp(s.end) %}
+                  {% set slot.actie = s.actie %}
+                  {% set slot.stop = s.stop_soc_pct | default(-1) | float(-1) %}
+                {% endif %}
+              {% endfor %}
+              {% set soc = states('sensor.zendure_2400_ac_laadpercentage') | float(100) %}
+              {{ slot.actie == 'ontladen' and slot.stop >= 0 and soc <= slot.stop }}
+        sequence:
+          - action: rest_command.zendure_stop_met_alles
+            data:
+              sn: "{{ states('sensor.zendure_2400_ac_serienummer') }}"
+          - action: input_boolean.turn_off
+            target:
+              entity_id:
+                - input_boolean.dynamisch_ontladen_loopt
+            data: {}
+          - action: logbook.log
+            data:
+              message: >-
+                💲DP ontladen gestopt — stop-SoC
+                {% set slots = state_attr('sensor.dynamisch_handelsstrategie',
+                'slots') | default([]) %}
+                {% set stop = namespace(val='?') %}
+                {% for s in slots %}
+                  {% if as_timestamp(s.start) <= as_timestamp(now()) < as_timestamp(s.end) %}
+                    {% set stop.val = s.stop_soc_pct | default('?') %}
+                  {% endif %}
+                {% endfor %}
+                {{ stop.val }}% bereikt —
+              entity_id: input_select.zendure_2400_ac_modus_selecteren
+              name: " "
+        alias: Dynamisch Handelen (DP) ontladen stop-SoC bereikt
+      - conditions:
+          - condition: trigger
+            id:
+              - aansturing_trigger
+          - condition: state
+            entity_id: input_select.zendure_2400_ac_modus_selecteren
+            state:
+              - Dynamisch Handelen (DP)
+          - condition: state
+            entity_id: input_boolean.dynamisch_laden_loopt
+            state:
+              - "on"
           - alias: >-
               Het huidige slot is nog steeds laden, maar het geplande vermogen
               wijkt af van wat de Zendure nu ingesteld heeft. Dit treedt op bij
@@ -2437,6 +2539,20 @@ actions:
                 {% endif %}
               {% endfor %}
               {{ actie.val == 'laden' }}
+          - alias: Stop-SoC van huidig laadslot is nog niet bereikt
+            condition: template
+            value_template: >
+              {% set slots = state_attr('sensor.dynamisch_handelsstrategie',
+              'slots') | default([]) %}
+              {% set slot = namespace(actie='rust', stop=-1) %}
+              {% for s in slots %}
+                {% if as_timestamp(s.start) <= as_timestamp(now()) < as_timestamp(s.end) %}
+                  {% set slot.actie = s.actie %}
+                  {% set slot.stop = s.stop_soc_pct | default(-1) | float(-1) %}
+                {% endif %}
+              {% endfor %}
+              {% set soc = states('sensor.zendure_2400_ac_laadpercentage') | float(0) %}
+              {{ slot.actie == 'laden' and (slot.stop < 0 or soc < slot.stop) }}
           - condition: state
             entity_id: input_boolean.dynamisch_laden_loopt
             state:
@@ -2510,6 +2626,20 @@ actions:
                 {% endif %}
               {% endfor %}
               {{ actie.val == 'ontladen' }}
+          - alias: Stop-SoC van huidig ontlaadslot is nog niet bereikt
+            condition: template
+            value_template: >
+              {% set slots = state_attr('sensor.dynamisch_handelsstrategie',
+              'slots') | default([]) %}
+              {% set slot = namespace(actie='rust', stop=-1) %}
+              {% for s in slots %}
+                {% if as_timestamp(s.start) <= as_timestamp(now()) < as_timestamp(s.end) %}
+                  {% set slot.actie = s.actie %}
+                  {% set slot.stop = s.stop_soc_pct | default(-1) | float(-1) %}
+                {% endif %}
+              {% endfor %}
+              {% set soc = states('sensor.zendure_2400_ac_laadpercentage') | float(100) %}
+              {{ slot.actie == 'ontladen' and (slot.stop < 0 or soc > slot.stop) }}
           - condition: state
             entity_id: input_boolean.dynamisch_ontladen_loopt
             state:

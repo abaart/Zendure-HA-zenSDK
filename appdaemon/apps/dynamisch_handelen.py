@@ -1023,6 +1023,13 @@ class DynamischHandelen(hass.Hass):
         for s in schema:
             s["soc_voor_pct"] = round(hw_min_pct + s["soc_voor_pct"] / 100.0 * hw_range, 1)
             s["soc_na_pct"]   = round(hw_min_pct + s["soc_na_pct"]   / 100.0 * hw_range, 1)
+            if s.get("stop_soc_pct") is not None:
+                try:
+                    stop_soc_pct = float(s["stop_soc_pct"])
+                except (TypeError, ValueError):
+                    s["stop_soc_pct"] = None
+                else:
+                    s["stop_soc_pct"] = round(hw_min_pct + stop_soc_pct / 100.0 * hw_range, 1)
         stop_als_geannuleerd()
 
         verwachte_winst = sum(s["winst_eur"] for s in schema)
@@ -1030,6 +1037,15 @@ class DynamischHandelen(hass.Hass):
         ontlaad_slots   = [s for s in schema if s["actie"] == "ontladen"]
         volgende        = next((s for s in schema if s["actie"] != "rust"), None)
         nu_publicatie   = datetime.now().astimezone()
+        huidig = None
+        for slot in schema:
+            datetimes = _lees_slot_datetimes(slot)
+            if datetimes is None:
+                continue
+            start, end = datetimes
+            if start <= nu_publicatie < end:
+                huidig = slot
+                break
         history_grafiek_slots: list[dict] = []
         try:
             strategie_history_items = self._haal_history_items(
@@ -1092,6 +1108,9 @@ class DynamischHandelen(hass.Hass):
                 "ontlaad_slots":       len(ontlaad_slots),
                 "spread_blokkades":    spread_blokkades,
                 "spread_blokkades_aantal": len(spread_blokkades),
+                "huidige_actie":       huidig["actie"] if huidig else "rust",
+                "huidige_stop_soc_pct": huidig.get("stop_soc_pct") if huidig else None,
+                "huidige_stop_soc_richting": huidig.get("stop_soc_richting") if huidig else "geen",
                 "volgende_actie":      volgende["actie"] if volgende else "rust",
                 "volgende_start":      volgende["start"] if volgende else None,
                 "accu_huidig_kwh":     round(accu.huidig_kwh, 3),
@@ -1323,7 +1342,8 @@ class DynamischHandelen(hass.Hass):
         """
         nu = datetime.now().astimezone()
         actief = None
-        for slot in schema:
+        actief_index = None
+        for index, slot in enumerate(schema):
             try:
                 start = datetime.fromisoformat(str(slot["start"])).astimezone()
                 end = datetime.fromisoformat(str(slot["end"])).astimezone()
@@ -1331,6 +1351,7 @@ class DynamischHandelen(hass.Hass):
                 continue
             if start <= nu < end:
                 actief = slot
+                actief_index = index
                 break
 
         if actief is None or actief.get("actie") not in ("laden", "ontladen"):
@@ -1345,6 +1366,15 @@ class DynamischHandelen(hass.Hass):
             return
 
         actie = actief["actie"]
+        geplande_vermogen_w = self._begrens_gepland_vermogen(
+            actief.get("vermogen_w"),
+            accu.max_laad_w if actie == "laden" else accu.max_ontlaad_w,
+        )
+        volgende_actie = (
+            schema[actief_index + 1].get("actie")
+            if actief_index is not None and actief_index + 1 < len(schema)
+            else "rust"
+        )
         try:
             target_kwh = self._begrens_kwh_naar_accu(float(actief["soc_na_kwh"]), accu.max_kwh)
             begin_kwh = float(actief.get("soc_voor_kwh", raw_actuele_soc_kwh))
@@ -1392,6 +1422,13 @@ class DynamischHandelen(hass.Hass):
             vermogen_w = rond_vermogen_omhoog(verwacht_vermogen_w, accu.max_ontlaad_w)
 
         doel_bereikt = vermogen_w <= 0
+        doorlopen_zelfde_actie = False
+        if doel_bereikt and volgende_actie == actie and geplande_vermogen_w > 0:
+            vermogen_w = geplande_vermogen_w
+            verwacht_vermogen_w = geplande_vermogen_w
+            doel_bereikt = False
+            doorlopen_zelfde_actie = True
+
         actief["actie"] = "rust" if doel_bereikt else actie
         actief["geplande_actie"] = actie
         actief["vermogen_w"] = vermogen_w
@@ -1413,6 +1450,22 @@ class DynamischHandelen(hass.Hass):
         )
         actief["actief_slot_resterend_h"] = round(resterend_h, 3)
         actief["doel_bereikt"] = doel_bereikt
+        actief["actief_slot_doorlopen_zelfde_actie"] = doorlopen_zelfde_actie
+        if doel_bereikt:
+            actief["stop_soc_kwh"] = None
+            actief["stop_soc_pct"] = None
+            actief["stop_soc_richting"] = "geen"
+        else:
+            if volgende_actie == actie:
+                actief["stop_soc_kwh"] = None
+                actief["stop_soc_pct"] = None
+                actief["stop_soc_richting"] = "geen"
+            else:
+                actief["stop_soc_kwh"] = round(target_kwh, 3)
+                actief["stop_soc_pct"] = round(target_kwh / accu.max_kwh * 100, 1) if accu.max_kwh > 0 else 0.0
+                actief["stop_soc_richting"] = (
+                    "boven_of_gelijk" if actie == "laden" else "onder_of_gelijk"
+                )
         if doel_bereikt:
             actief["actief_slot_stopreden"] = "doel_bereikt"
 
@@ -1426,6 +1479,15 @@ class DynamischHandelen(hass.Hass):
     def _begrens_kwh_naar_accu(self, waarde_kwh: float, max_kwh: float) -> float:
         """Begrenst een DP-interne kWh-waarde op de huidige accugrootte."""
         return min(max(0.0, waarde_kwh), max(0.0, max_kwh))
+
+    def _begrens_gepland_vermogen(self, waarde_w, maximum_w: float) -> int:
+        """Leest een gepland vermogen en begrenst het op de huidige hardwarelimiet."""
+        try:
+            vermogen_w = float(waarde_w)
+        except (TypeError, ValueError):
+            return 0
+
+        return round(min(max(0.0, vermogen_w), max(0.0, maximum_w)))
 
     def _schat_actuele_soc_kwh(
         self,

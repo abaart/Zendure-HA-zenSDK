@@ -115,6 +115,21 @@ views:
                     s.actie === 'laden' ? 1 : s.actie === 'ontladen' ? 2 : 0
                   ]);
               - entity: sensor.dynamisch_handelsstrategie
+                name: Stop-SoC
+                type: line
+                stroke_width: 0
+                opacity: 0
+                yaxis_id: extra
+                show:
+                  in_chart: true
+                  in_header: false
+                  in_legend: false
+                data_generator: |
+                  return (entity.attributes.slots || []).map(s => [
+                    new Date(s.start).getTime(),
+                    s.stop_soc_pct ?? null
+                  ]);
+              - entity: sensor.dynamisch_handelsstrategie
                 name: Spread te klein
                 type: column
                 color: '#ef5350'
@@ -213,11 +228,12 @@ views:
                     var prijs = series[1][dataPointIndex];
                     var vermogen = series[2][dataPointIndex];
                     var actieCode = series[3][dataPointIndex];
-                    var spreadBlokkade = series[4][dataPointIndex];
-                    var besteVerkoop = series[5][dataPointIndex];
-                    var nodigeVerkoop = series[6][dataPointIndex];
-                    var minSpread = series[7][dataPointIndex];
-                    var spreadTekort = series[8][dataPointIndex];
+                    var stopSoc = series[4][dataPointIndex];
+                    var spreadBlokkade = series[5][dataPointIndex];
+                    var besteVerkoop = series[6][dataPointIndex];
+                    var nodigeVerkoop = series[7][dataPointIndex];
+                    var minSpread = series[8][dataPointIndex];
+                    var spreadTekort = series[9][dataPointIndex];
                     var actieLabel = actieCode === 1 ? 'Laden' : actieCode === 2 ? 'Ontladen' : 'Rust';
                     var ts = w.globals.seriesX[0] && w.globals.seriesX[0][dataPointIndex];
                     if (!ts) return '';
@@ -230,6 +246,7 @@ views:
                     html += '<div style="color:var(--secondary-text-color)">Prijs&nbsp;&nbsp;&nbsp;&nbsp;: <span style="color:var(--primary-text-color);font-weight:bold">' + (prijs != null ? prijs.toFixed(1) + ' ct/kWh' : '\u2014') + '</span></div>';
                     html += '<div style="color:var(--secondary-text-color)">Actie&nbsp;&nbsp;&nbsp;&nbsp;: <span style="color:var(--primary-text-color);font-weight:bold">' + actieLabel + '</span></div>';
                     if (actieCode) { html += '<div style="color:var(--secondary-text-color)">Vermogen : <span style="color:var(--primary-text-color);font-weight:bold">' + (vermogen != null ? Math.round(vermogen) + ' W' : '\u2014') + '</span></div>'; }
+                    if (actieCode && stopSoc != null) { html += '<div style="color:var(--secondary-text-color)">Stop-SoC: <span style="color:var(--primary-text-color);font-weight:bold">' + stopSoc.toFixed(1) + ' %</span></div>'; }
                     if (spreadBlokkade != null && besteVerkoop != null && nodigeVerkoop != null && minSpread != null && spreadTekort != null) {
                       html += '<div style="margin-top:4px;color:#ef5350;font-weight:bold">Niet laden: spread te klein</div>';
                       html += '<div style="color:var(--secondary-text-color)">Beste verkoop&nbsp;: <span style="color:var(--primary-text-color);font-weight:bold">' + besteVerkoop.toFixed(1) + ' ct</span></div>';
@@ -1231,6 +1248,21 @@ views:
                 attribute: volgende_start
                 name: Volgende actie om
                 icon: mdi:clock-outline
+              - type: attribute
+                entity: sensor.dynamisch_handelsstrategie
+                attribute: huidige_actie
+                name: Huidige actie
+                icon: mdi:calendar-clock
+              - type: attribute
+                entity: sensor.dynamisch_handelsstrategie
+                attribute: huidige_stop_soc_pct
+                name: Huidige stop-SoC
+                icon: mdi:battery-clock
+              - type: attribute
+                entity: sensor.dynamisch_handelsstrategie
+                attribute: huidige_stop_soc_richting
+                name: Huidige stoprichting
+                icon: mdi:call-split
               - type: attribute
                 entity: sensor.dynamisch_handelsstrategie
                 attribute: laad_slots
