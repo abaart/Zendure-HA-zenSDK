@@ -202,6 +202,45 @@ class TestDPBasis:
         for s in schema:
             assert s["soc_na_kwh"] >= -0.01  # kleine afrondingsmarge
 
+    def test_standby_verbruik_trekt_elk_rustslot_vijf_wh_per_uur_af(self):
+        """
+        Met 5 W standbyverbruik verliest een rustslot van 1 uur 5 Wh.
+        """
+        schema = los_dp_op(
+            maak_slots([0.10, 0.10]),
+            maak_accu(huidig_kwh=1.2, max_laad_w=0.0, max_ontlaad_w=0.0),
+            plateau_spreiding=False,
+            standby_verbruik_w=5.0,
+            hoge_soc_verblijf_penalty_factor=0.0,
+            lage_soc_verblijf_penalty_factor=0.0,
+        )
+
+        assert [slot["actie"] for slot in schema] == ["rust", "rust"]
+        assert schema[0]["soc_na_kwh"] == pytest.approx(1.195)
+        assert schema[1]["soc_voor_kwh"] == pytest.approx(1.195)
+        assert schema[1]["soc_na_kwh"] == pytest.approx(1.190)
+        assert schema[0]["standby_verlies_wh"] == 5.0
+
+    def test_laadslot_krijgt_geen_standby_verlies(self):
+        """
+        Standbyverbruik geldt alleen voor slots die niet laden.
+        """
+        schema = los_dp_op(
+            maak_slots([0.01, 1.00]),
+            maak_accu(huidig_kwh=0.0),
+            plateau_spreiding=False,
+            standby_verbruik_w=5.0,
+            warmte_penalty_laden_factor=0.0,
+            warmte_penalty_ontladen_factor=0.0,
+            hoge_soc_verblijf_penalty_factor=0.0,
+            lage_soc_verblijf_penalty_factor=0.0,
+        )
+
+        assert schema[0]["actie"] == "laden"
+        assert schema[0]["standby_verlies_wh"] == 0.0
+        assert schema[1]["actie"] == "ontladen"
+        assert schema[1]["standby_verlies_wh"] == 5.0
+
     def test_ontlaadvermogen_is_ac_outputlimiet(self):
         """
         max_ontlaad_w is het Zendure outputLimit in W en wordt niet met eta verlaagd.
@@ -870,6 +909,7 @@ class TestMinimaleSpread:
             temp_penalty_100_soc_factor=2.0,
             soc_min_pct=0.0,
             soc_max_pct=90.0,
+            standby_verbruik_w=0.0,
         )
 
         assert schema[0]["soc_na_pct"] == 100.0

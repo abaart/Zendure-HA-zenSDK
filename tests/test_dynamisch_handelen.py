@@ -211,6 +211,29 @@ class TestHistorischeStates:
         assert bronnen["benodigde_energie"] == "history"
 
 
+class TestStrategieConfig:
+    def test_haal_standby_verbruik_gebruikt_helperwaarde(self):
+        app = _maak_app(
+            states={"input_number.dynamisch_standby_verbruik_w": "7.5"}
+        )
+
+        assert app._haal_standby_verbruik_w() == 7.5
+
+    def test_haal_standby_verbruik_gebruikt_default_bij_onbekende_helper(self):
+        app = _maak_app(
+            states={"input_number.dynamisch_standby_verbruik_w": "unknown"}
+        )
+
+        assert app._haal_standby_verbruik_w() == 5.0
+
+    def test_haal_standby_verbruik_blijft_niet_negatief(self):
+        app = _maak_app(
+            states={"input_number.dynamisch_standby_verbruik_w": "-2"}
+        )
+
+        assert app._haal_standby_verbruik_w() == 0.0
+
+
 def test_bouw_grafiek_slots_bewaart_laatste_zes_uur():
     nu = datetime(2026, 5, 24, 14, 0, tzinfo=timezone.utc)
     oud = _slot(nu - timedelta(hours=8), 1, "te-oud")

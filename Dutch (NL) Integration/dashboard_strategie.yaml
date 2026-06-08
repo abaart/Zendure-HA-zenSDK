@@ -1011,6 +1011,11 @@ views:
                 attribute: lage_soc_verblijf_penalty_factor
                 name: Lage SoC verblijf penalty
                 icon: mdi:battery-low
+              - type: attribute
+                entity: sensor.dynamisch_handelsstrategie
+                attribute: standby_verbruik_w
+                name: Standby verbruik
+                icon: mdi:power-sleep
             show_header_toggle: false
             state_color: true
       - type: grid
@@ -1045,6 +1050,8 @@ views:
                 name: Hoge SoC verblijf penalty factor
               - entity: input_number.dynamisch_lage_soc_verblijf_penalty_factor
                 name: Lage SoC verblijf penalty factor
+              - entity: input_number.dynamisch_standby_verbruik_w
+                name: Standby verbruik
               - entity: input_text.dynamisch_buitentemperatuur_sensor
                 name: Actuele buitentemperatuur sensor
               - entity: input_text.dynamisch_weather_entity
@@ -1107,6 +1114,11 @@ views:
 
               **Lage SoC verblijf penalty factor**: zachte euro-penalty voor
               tijd onder 10% SoC. Dit is vooral een reserve- en comfortweging.
+
+
+              **Standby verbruik**: batterijverbruik in watt tijdens rust en
+              ontladen. Bij `5 W` trekt de strategie 5 Wh per uur af van de
+              batterij-SoC zolang het slot niet laadt.
 
 
               **Actuele buitentemperatuur sensor**: optionele `sensor.*` voor

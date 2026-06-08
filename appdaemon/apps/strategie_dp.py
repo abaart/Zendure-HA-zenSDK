@@ -162,6 +162,7 @@ TEMP_PENALTY_EUR_PER_C2H: float = 0.25
 SOC_VERBLIJF_PENALTY_EUR_PER_KWH_H: float = 0.001
 HOGE_SOC_VERBLIJF_PENALTY_FACTOR: float = 1.0
 LAGE_SOC_VERBLIJF_PENALTY_FACTOR: float = 0.8
+STANDBY_VERBRUIK_W: float = 5.0
 
 # ── DATATYPE ──────────────────────────────────────────────────────────────────
 
@@ -433,6 +434,7 @@ def los_dp_op(
     temp_penalty_100_soc_factor: float = TEMP_PENALTY_100_SOC_FACTOR,
     hoge_soc_verblijf_penalty_factor: float = HOGE_SOC_VERBLIJF_PENALTY_FACTOR,
     lage_soc_verblijf_penalty_factor: float = LAGE_SOC_VERBLIJF_PENALTY_FACTOR,
+    standby_verbruik_w: float = STANDBY_VERBRUIK_W,
     temp_soc_drempel_pct: float = 80.0,
     soc_min_pct: float = 0.0,
     soc_max_pct: float = 100.0,
@@ -536,6 +538,7 @@ def los_dp_op(
         temp_penalty_100_soc_factor: Multiplier op overtemp-penalty bij 100% SoC.
         hoge_soc_verblijf_penalty_factor: Gewicht voor verblijf boven 90% SoC.
         lage_soc_verblijf_penalty_factor: Gewicht voor verblijf onder 10% SoC.
+        standby_verbruik_w:     Batterijverbruik in W tijdens niet-laden.
         temp_soc_drempel_pct:    SoC-percentage waarboven temp_limiet_c actief is.
         soc_min_pct:             Echte Zendure-SoC bij DP-interne 0 kWh.
         soc_max_pct:             Echte Zendure-SoC bij DP-interne max_kwh.
@@ -596,6 +599,7 @@ def los_dp_op(
     temp_penalty_100_soc_factor = max(1.0, float(temp_penalty_100_soc_factor))
     hoge_soc_verblijf_penalty_factor = max(0.0, float(hoge_soc_verblijf_penalty_factor))
     lage_soc_verblijf_penalty_factor = max(0.0, float(lage_soc_verblijf_penalty_factor))
+    standby_verbruik_w = max(0.0, float(standby_verbruik_w))
     temp_soc_drempel_pct = min(100.0, max(0.0, float(temp_soc_drempel_pct)))
     soc_min_pct = min(100.0, max(0.0, float(soc_min_pct)))
     soc_max_pct = min(100.0, max(soc_min_pct, float(soc_max_pct)))
@@ -624,6 +628,14 @@ def los_dp_op(
 
     def kwh_naar_idx_omhoog(kwh: float) -> int:
         return min(n_soc, max(0, math.ceil(kwh / SOC_STAP_KWH - 1e-9)))
+
+    def standby_verlies_kwh(duur_h: float) -> float:
+        if standby_verbruik_w <= 0 or duur_h <= 0:
+            return 0.0
+        return standby_verbruik_w / 1000.0 * duur_h
+
+    def soc_met_standby_verlies(soc_kwh: float, duur_h: float) -> float:
+        return max(0.0, soc_kwh - standby_verlies_kwh(duur_h))
 
     def vermogensstappen(maximum_w: float) -> list[int]:
         if maximum_w < minimum_vermogen_w or DP_VERMOGEN_STAP_W <= 0:
@@ -913,28 +925,6 @@ def los_dp_op(
             * duur_h
         )
 
-    def soc_verblijf_penalty_eur_idx(soc_idx: int, temp_idx: int, duur_h: float) -> float:
-        if max_kwh <= 0 or duur_h <= 0:
-            return 0.0
-
-        basis = SOC_VERBLIJF_PENALTY_EUR_PER_KWH_H * max_kwh * duur_h
-        hoge_fractie = hoge_soc_fractie_per_idx[soc_idx]
-        lage_fractie = lage_soc_fractie_per_idx[soc_idx]
-        hoge_penalty = (
-            hoge_soc_verblijf_penalty_factor
-            * basis
-            * hoge_fractie
-            * hoge_fractie
-            * temp_factor_per_idx[temp_idx]
-        )
-        lage_penalty = (
-            lage_soc_verblijf_penalty_factor
-            * basis
-            * lage_fractie
-            * lage_fractie
-        )
-        return hoge_penalty + lage_penalty
-
     NEG_INF = float("-inf")
 
     # V[t][s][q]: maximale toekomstige winst (€) vanuit slot t, SoC-index s
@@ -943,8 +933,28 @@ def los_dp_op(
     # Resterende energie heeft een onbekende toekomstige waarde. Door 0 te gebruiken
     # zijn we conservatief: we plannen alleen op wat we zeker kunnen verdienen.
     V = [[[0.0] * n_temp for _ in range(n_soc + 1)] for _ in range(n + 1)]
-    # P[t][s][q]: optimale actie, vermogensopdracht, volgende SoC-index en volgende temp-index.
-    P = [[[(0, 0, s, q) for q in range(n_temp)] for s in range(n_soc + 1)] for _ in range(n + 1)]
+    def interpoleer_waarde(t_idx: int, soc_kwh: float, temp_idx: int) -> float:
+        if soc_kwh <= 0:
+            return V[t_idx][0][temp_idx]
+        if soc_kwh >= max_kwh:
+            return V[t_idx][n_soc][temp_idx]
+
+        positie = soc_kwh / SOC_STAP_KWH
+        laag = min(n_soc, max(0, math.floor(positie)))
+        hoog = min(n_soc, max(0, math.ceil(positie)))
+        if laag == hoog:
+            return V[t_idx][laag][temp_idx]
+
+        fractie = positie - laag
+        return (
+            V[t_idx][laag][temp_idx] * (1.0 - fractie)
+            + V[t_idx][hoog][temp_idx] * fractie
+        )
+
+    # P[t][s][q]: optimale actie, vermogensopdracht, volgende SoC-index,
+    # volgende temp-index en actie-energie in de accu. Standbyverlies wordt in
+    # de voorwaartse extractie opnieuw op de exacte slotduur toegepast.
+    P = [[[(0, 0, s, q, 0.0) for q in range(n_temp)] for s in range(n_soc + 1)] for _ in range(n + 1)]
 
     # ── BACKWARDS PASS ────────────────────────────────────────────────────────
     for t in range(n - 1, -1, -1):
@@ -1010,14 +1020,19 @@ def los_dp_op(
                     duur_h,
                     warmte_penalty_ontladen_factor,
                 )
+                soc_na_ontladen_met_standby = soc_met_standby_verlies(
+                    soc_kwh_per_idx[s_ontladen],
+                    duur_h,
+                )
                 ontlaad_kandidaten.append((
                     stap_index,
                     vermogen_w,
                     s_ontladen,
                     energie_uit_accu_q,
+                    soc_na_ontladen_met_standby,
                     opbrengst_ontladen - kosten_warmte,
                     *soc_verblijf_penalty_basis(
-                        (soc_kwh + soc_kwh_per_idx[s_ontladen]) / 2.0,
+                        (soc_kwh + soc_na_ontladen_met_standby) / 2.0,
                         duur_h,
                     ),
                 ))
@@ -1025,12 +1040,22 @@ def los_dp_op(
             for q in range(n_temp):
                 controleer_annulering()
                 # ── Optie: RUST ───────────────────────────────────────────────
-                # Geen actie, SoC ongewijzigd, temperatuur koelt wel richting buiten.
+                # Geen actie, standby verlaagt SoC en temperatuur koelt richting buiten.
+                soc_rust_kwh = soc_met_standby_verlies(soc_kwh, duur_h)
+                s_rust = kwh_naar_idx(soc_rust_kwh)
                 q_rust = volgende_temp_idx(q, t, 0.0, "rust")
-                kosten_overtemp_rust = overtemp_penalty_eur_idx(q, s, q_rust, s, duur_h)
-                kosten_soc_verblijf = soc_verblijf_penalty_eur_idx(s, q_rust, duur_h)
-                beste = V[t + 1][s][q_rust] - kosten_overtemp_rust - kosten_soc_verblijf
-                beste_keuze = (0, 0, s, q_rust)
+                kosten_overtemp_rust = overtemp_penalty_eur_idx(q, s, q_rust, s_rust, duur_h)
+                kosten_soc_verblijf = soc_verblijf_penalty_componenten(
+                    (soc_kwh + soc_rust_kwh) / 2.0,
+                    idx_naar_temp(q_rust),
+                    duur_h,
+                )[0]
+                beste = (
+                    interpoleer_waarde(t + 1, soc_rust_kwh, q_rust)
+                    - kosten_overtemp_rust
+                    - kosten_soc_verblijf
+                )
+                beste_keuze = (0, 0, s_rust, q_rust, 0.0)
 
                 # ── Optie: LADEN ──────────────────────────────────────────────
                 # Evalueer alle vermogensopdrachten vanaf minimum_vermogen_w.
@@ -1060,7 +1085,7 @@ def los_dp_op(
 
                     if waarde > beste + 1e-12:
                         beste = waarde
-                        beste_keuze = (1, int(vermogen_w), s_laden, q_laden)
+                        beste_keuze = (1, int(vermogen_w), s_laden, q_laden, energie_naar_accu_q)
 
                 # ── Optie: ONTLADEN ───────────────────────────────────────────
                 # Evalueer alle outputLimit-opdrachten vanaf minimum_vermogen_w.
@@ -1069,6 +1094,7 @@ def los_dp_op(
                     vermogen_w,
                     s_ontladen,
                     energie_uit_accu_q,
+                    soc_na_ontladen_met_standby,
                     waarde_basis,
                     hoge_soc_verblijf_basis,
                     lage_soc_verblijf_penalty,
@@ -1076,7 +1102,14 @@ def los_dp_op(
                     if stap_index % 16 == 0:
                         controleer_annulering()
                     q_ontladen = volgende_temp_idx(q, t, energie_uit_accu_q, "ontladen")
-                    kosten_temp = overtemp_penalty_eur_idx(q, s, q_ontladen, s_ontladen, duur_h)
+                    s_ontladen_met_standby = kwh_naar_idx(soc_na_ontladen_met_standby)
+                    kosten_temp = overtemp_penalty_eur_idx(
+                        q,
+                        s,
+                        q_ontladen,
+                        s_ontladen_met_standby,
+                        duur_h,
+                    )
                     kosten_soc_verblijf = (
                         hoge_soc_verblijf_basis * temp_factor_per_idx[q_ontladen]
                         + lage_soc_verblijf_penalty
@@ -1085,12 +1118,18 @@ def los_dp_op(
                         waarde_basis
                         - kosten_temp
                         - kosten_soc_verblijf
-                        + V[t + 1][s_ontladen][q_ontladen]
+                        + interpoleer_waarde(t + 1, soc_na_ontladen_met_standby, q_ontladen)
                     )
 
                     if waarde > beste + 1e-12:
                         beste = waarde
-                        beste_keuze = (-1, int(vermogen_w), s_ontladen, q_ontladen)
+                        beste_keuze = (
+                            -1,
+                            int(vermogen_w),
+                            s_ontladen_met_standby,
+                            q_ontladen,
+                            energie_uit_accu_q,
+                        )
 
                 V[t][s][q] = beste
                 P[t][s][q] = beste_keuze
@@ -1105,21 +1144,22 @@ def los_dp_op(
     resultaat: list[dict[str, Any]] = []
     huidig_s = kwh_naar_idx(accu.huidig_kwh)
     huidig_q = temp_naar_idx(batterij_temp_start)
+    huidig_soc_kwh = idx_naar_kwh(huidig_s)
     huidig_temp_c = batterij_temp_start
 
     for t in range(n):
         controleer_annulering()
         slot       = slots[t]
-        soc_kwh    = idx_naar_kwh(huidig_s)   # gekwantiseerde SoC aan begin van slot
-        actie_code, gekozen_vermogen_w, nieuwe_s, nieuwe_q = P[t][huidig_s][huidig_q]
+        soc_kwh    = huidig_soc_kwh
+        actie_code, gekozen_vermogen_w, _, _, actie_energie_accu_kwh = P[t][huidig_s][huidig_q]
         prijs      = slot["price"]
         duur_h     = slot["duration_h"]
+        standby_kwh = standby_verlies_kwh(duur_h) if actie_code != 1 else 0.0
 
         if actie_code == 1:  # Laden
             derating          = bereken_derating(soc_kwh, max_kwh)
             eff_laad_w        = max_laad_w * derating
-            # Gekwantiseerde SoC-sprong → consistente kosten (zie backwards pass)
-            energie_naar_accu = idx_naar_kwh(nieuwe_s) - soc_kwh
+            energie_naar_accu = max(0.0, min(actie_energie_accu_kwh, max_kwh - soc_kwh))
             energie_van_net   = energie_naar_accu / eta_laad if eta_laad > 0 else 0.0
             winst             = -energie_van_net * prijs
             verwacht_vermogen_w = energie_van_net / duur_h * 1000.0 if duur_h > 0 else 0.0
@@ -1133,8 +1173,7 @@ def los_dp_op(
             actie             = "laden"
 
         elif actie_code == -1:  # Ontladen
-            # Gekwantiseerde SoC-daling → consistente opbrengst
-            energie_uit_accu  = soc_kwh - idx_naar_kwh(nieuwe_s)
+            energie_uit_accu  = max(0.0, min(actie_energie_accu_kwh, soc_kwh))
             energie_naar_net  = energie_uit_accu * eta_ontlaad
             winst             = energie_naar_net * prijs
             verwacht_vermogen_w = energie_naar_net / duur_h * 1000.0 if duur_h > 0 else 0.0
@@ -1155,7 +1194,10 @@ def los_dp_op(
             energie_accu_voor_model = 0.0
             actie      = "rust"
 
-        soc_na_kwh = idx_naar_kwh(nieuwe_s)   # altijd een gridpunt → consistent met soc_voor[t+1]
+        if actie == "laden":
+            soc_na_kwh = min(max_kwh, soc_kwh + energie_accu_voor_model)
+        else:
+            soc_na_kwh = max(0.0, soc_kwh - energie_accu_voor_model - standby_kwh)
         buiten_temp_c = slot_buiten_temp_c(t)
         temp_voor_c = huidig_temp_c
         temp_na_c = voorspel_temp_na_c(
@@ -1192,6 +1234,9 @@ def los_dp_op(
             "soc_na_pct":   round(soc_na_kwh / max_kwh * 100, 1) if max_kwh > 0 else 0.0,
             "winst_eur":    round(winst, 4),
             "warmte_penalty_eur": round(warmte_penalty, 4),
+            "standby_verbruik_w": round(standby_verbruik_w, 3),
+            "standby_verlies_kwh": round(standby_kwh, 4),
+            "standby_verlies_wh": round(standby_kwh * 1000.0, 1),
             "soc_verblijf_penalty_eur": round(soc_verblijf[0], 6),
             "hoge_soc_verblijf_penalty_eur": round(soc_verblijf[1], 6),
             "lage_soc_verblijf_penalty_eur": round(soc_verblijf[2], 6),
@@ -1236,8 +1281,9 @@ def los_dp_op(
 
         resultaat.append(slot_resultaat)
 
-        huidig_s = nieuwe_s
-        huidig_q = nieuwe_q
+        huidig_soc_kwh = soc_na_kwh
+        huidig_s = kwh_naar_idx(huidig_soc_kwh)
+        huidig_q = temp_naar_idx(huidig_temp_c)
 
     def herbereken_modelvelden(schema: list[dict[str, Any]]) -> None:
         def werk_stop_soc_velden_bij(k: int, s_r: dict[str, Any]) -> None:
@@ -1289,17 +1335,21 @@ def los_dp_op(
             except (KeyError, TypeError, ValueError):
                 soc_voor = soc_na = 0.0
 
+            standby_kwh = standby_verlies_kwh(duur_h)
             if actie == "laden":
                 energie_accu = max(0.0, soc_na - soc_voor)
                 factor = warmte_penalty_laden_factor
             elif actie == "ontladen":
-                energie_accu = max(0.0, soc_voor - soc_na)
+                energie_accu = max(0.0, soc_voor - soc_na - standby_kwh)
                 factor = warmte_penalty_ontladen_factor
             else:
                 energie_accu = 0.0
                 factor = 0.0
 
             s_r["warmte_penalty_eur"] = round(warmte_penalty_eur(energie_accu, duur_h, factor), 4)
+            s_r["standby_verbruik_w"] = round(standby_verbruik_w, 3)
+            s_r["standby_verlies_kwh"] = round(standby_kwh if actie != "laden" else 0.0, 4)
+            s_r["standby_verlies_wh"] = round((standby_kwh if actie != "laden" else 0.0) * 1000.0, 1)
             s_r["c_waarde"] = round(c_waarde(energie_accu, duur_h), 3)
             avg_soc = (soc_voor + soc_na) / 2.0
 
@@ -1392,14 +1442,15 @@ def los_dp_op(
         return verdeling
 
     def reset_rust(k: int, soc: float) -> None:
-        """Zet slot k terug naar rust met ongewijzigde SoC."""
+        """Zet slot k terug naar rust met standbyverlies."""
         q = idx_naar_kwh(kwh_naar_idx(soc))
+        q_na = soc_met_standby_verlies(q, slots[k]["duration_h"])
         s = resultaat[k]
         s["actie"] = "rust"; s["vermogen_w"] = 0; s["winst_eur"] = 0.0
         s["verwacht_vermogen_w"] = 0
-        s["soc_voor_kwh"] = round(q, 3); s["soc_na_kwh"] = round(q, 3)
+        s["soc_voor_kwh"] = round(q, 3); s["soc_na_kwh"] = round(q_na, 3)
         s["soc_voor_pct"] = round(q / max_kwh * 100, 1) if max_kwh > 0 else 0.0
-        s["soc_na_pct"]   = s["soc_voor_pct"]
+        s["soc_na_pct"]   = round(q_na / max_kwh * 100, 1) if max_kwh > 0 else 0.0
 
     def naar_datetime(waarde: Any) -> datetime:
         if isinstance(waarde, datetime):
@@ -1524,12 +1575,13 @@ def los_dp_op(
         soc_start = resultaat[cand_start]["soc_voor_kwh"]
         soc_eind  = resultaat[cand_end - 1]["soc_na_kwh"]
 
-        # Reset slots vóór het geselecteerde venster naar rust (ongewijzigde SoC).
+        # Reset slots vóór het geselecteerde venster naar rust met standbyverlies.
         for k in range(cand_start, gs):
             reset_rust(k, soc_start)
 
         if actie_i == "ontladen":
-            totaal_delta = soc_start - soc_eind
+            totaal_standby = sum(standby_verlies_kwh(slots[k]["duration_h"]) for k in range(gs, ge))
+            totaal_delta = max(0.0, soc_start - soc_eind - totaal_standby)
             maxima_groep = [
                 (max_ontlaad_w / 1000.0 * slots[k]["duration_h"]) / eta_ontlaad
                 if eta_ontlaad > 0 else 0.0
@@ -1543,11 +1595,12 @@ def los_dp_op(
                 prijs  = s_r["prijs_ct"] / 100.0
                 duur_h = slots[k]["duration_h"]
                 s_voor = kwh_naar_idx(huidig_soc)
-                s_na   = kwh_naar_idx(huidig_soc - delta)
                 q_voor = idx_naar_kwh(s_voor)
-                q_na   = idx_naar_kwh(s_na)
-                e_uit  = q_voor - q_na
+                standby_kwh = standby_verlies_kwh(duur_h)
+                q_na   = max(0.0, q_voor - delta - standby_kwh)
+                e_uit  = max(0.0, q_voor - q_na - standby_kwh)
                 e_net  = e_uit * eta_ontlaad
+                s_r["actie"] = "ontladen" if e_uit > 0 else "rust"
                 s_r["soc_voor_kwh"] = round(q_voor, 3)
                 s_r["soc_na_kwh"]   = round(q_na, 3)
                 s_r["soc_voor_pct"] = round(q_voor / max_kwh * 100, 1) if max_kwh > 0 else 0.0

@@ -35,6 +35,7 @@ Ingangen:
   input_number.dynamisch_temp_penalty_100_soc_factor      extra overtemp-gewicht bij 100% SoC
   input_number.dynamisch_hoge_soc_verblijf_penalty_factor verblijfskosten boven 90% SoC
   input_number.dynamisch_lage_soc_verblijf_penalty_factor verblijfskosten onder 10% SoC
+  input_number.dynamisch_standby_verbruik_w               standbyverbruik bij niet-laden (W)
   input_text.dynamisch_buitentemperatuur_sensor           optionele sensor met actuele buitentemperatuur
   input_text.dynamisch_weather_entity                     optionele weather entity voor forecast
   input_button.dynamisch_handelsstrategie_herberekenen   knop voor handmatige herberekening
@@ -59,6 +60,7 @@ from strategie_dp import (
     Accustatus,
     HOGE_SOC_VERBLIJF_PENALTY_FACTOR,
     LAGE_SOC_VERBLIJF_PENALTY_FACTOR,
+    STANDBY_VERBRUIK_W,
     StrategieBerekeningGeannuleerd,
     WARMTE_STIJGING_LADEN_C_PER_C2H,
     WARMTE_STIJGING_ONTLADEN_C_PER_C2H,
@@ -271,6 +273,7 @@ class DynamischHandelen(hass.Hass):
             "input_number.dynamisch_temp_penalty_100_soc_factor",
             "input_number.dynamisch_hoge_soc_verblijf_penalty_factor",
             "input_number.dynamisch_lage_soc_verblijf_penalty_factor",
+            "input_number.dynamisch_standby_verbruik_w",
             "input_text.dynamisch_buitentemperatuur_sensor",
             "input_text.dynamisch_weather_entity",
         ):
@@ -962,6 +965,7 @@ class DynamischHandelen(hass.Hass):
         min_spread = self._haal_minimale_spread()
         warmte_penalty_laden_factor = self._haal_warmte_penalty_laden_factor()
         warmte_penalty_ontladen_factor = self._haal_warmte_penalty_ontladen_factor()
+        standby_verbruik_w = self._haal_standby_verbruik_w()
         plateau_spreiding = self._haal_plateau_spreiding()
         thermisch = self._haal_thermische_config(slots, dp_start_tijd)
         stop_als_geannuleerd()
@@ -979,6 +983,7 @@ class DynamischHandelen(hass.Hass):
             f"min spread {min_spread:.1f} ct/kWh | "
             f"warmte laden {warmte_penalty_laden_factor:.2f} | "
             f"warmte ontladen {warmte_penalty_ontladen_factor:.2f} | "
+            f"standby {standby_verbruik_w:.1f} W | "
             f"plateau {'aan' if plateau_spreiding else 'uit'} | "
             f"packtemp {thermisch['batterij_temp_start_c'] if thermisch['batterij_temp_start_c'] is not None else '-'} °C | "
             f"warmte stijging laden {thermisch['warmte_stijging_laden_c_per_c2h']:.2f} °C/C²h | "
@@ -997,6 +1002,7 @@ class DynamischHandelen(hass.Hass):
             plateau_spreiding=plateau_spreiding,
             warmte_penalty_laden_factor=warmte_penalty_laden_factor,
             warmte_penalty_ontladen_factor=warmte_penalty_ontladen_factor,
+            standby_verbruik_w=standby_verbruik_w,
             batterij_temp_start_c=thermisch["batterij_temp_start_c"],
             warmte_afkoeling_halveringstijd_h=thermisch["warmte_afkoeling_halveringstijd_h"],
             warmte_stijging_laden_c_per_c2h=thermisch["warmte_stijging_laden_c_per_c2h"],
@@ -1121,6 +1127,7 @@ class DynamischHandelen(hass.Hass):
                 "min_spread_ct":       min_spread,
                 "warmte_penalty_laden_factor": warmte_penalty_laden_factor,
                 "warmte_penalty_ontladen_factor": warmte_penalty_ontladen_factor,
+                "standby_verbruik_w": standby_verbruik_w,
                 "batterij_temp_start_c": thermisch["batterij_temp_start_c"],
                 "batterij_temp_bron": thermisch["batterij_temp_bron"],
                 "buiten_temp_huidig_c": thermisch["buiten_temp_huidig_c"],
@@ -1711,6 +1718,14 @@ class DynamischHandelen(hass.Hass):
             return max(0.0, float(waarde))
         except (TypeError, ValueError):
             return WARMTE_PENALTY_ONTLADEN_FACTOR
+
+    def _haal_standby_verbruik_w(self) -> float:
+        """Leest het standbyverbruik voor rust- en ontlaadslots in W."""
+        return self._haal_float_met_default(
+            "input_number.dynamisch_standby_verbruik_w",
+            STANDBY_VERBRUIK_W,
+            minimum=0.0,
+        )
 
     def _haal_float_met_default(self, entity_id: str, default: float, minimum: float | None = None) -> float:
         """Leest een numerieke HA-helper en gebruikt default bij unknown/unavailable."""
