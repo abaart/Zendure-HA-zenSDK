@@ -613,21 +613,34 @@ def los_dp_op(
     spread_eur_per_kwh = min_spread_ct_per_kwh / 100.0
     spread_helft = spread_eur_per_kwh / 2.0
 
-    # SoC-grid: index 0 = leeg (= min-SoC), index n_soc = vol (= max-SoC)
-    n_soc = max(1, round(max_kwh / SOC_STAP_KWH))
-    soc_kwh_per_idx = [idx * SOC_STAP_KWH for idx in range(n_soc + 1)]
+    soc_min_pct = min(100.0, max(0.0, float(soc_min_pct)))
+    soc_max_pct = min(100.0, max(soc_min_pct, float(soc_max_pct)))
+    hw_range_pct = soc_max_pct - soc_min_pct
+    kwh_per_pct = max_kwh / hw_range_pct if hw_range_pct > 0 and max_kwh > 0 else 0.0
+    soc_floor_kwh = -soc_min_pct * kwh_per_pct if kwh_per_pct > 0 else 0.0
+
+    # SoC-grid: index n_soc_min = ingestelde minimum-SoC. Lagere indexen zijn
+    # echte batterij-SoC onder de ingestelde minimum-SoC door standbyverbruik.
+    n_soc_min = max(0, math.ceil(abs(soc_floor_kwh) / SOC_STAP_KWH - 1e-9))
+    n_soc_max = max(1, round(max_kwh / SOC_STAP_KWH))
+    n_soc = n_soc_min + n_soc_max
+    grid_floor_kwh = -n_soc_min * SOC_STAP_KWH
+    soc_kwh_per_idx = [
+        min(max_kwh, (idx - n_soc_min) * SOC_STAP_KWH)
+        for idx in range(n_soc + 1)
+    ]
 
     def kwh_naar_idx(kwh: float) -> int:
-        return min(n_soc, max(0, round(kwh / SOC_STAP_KWH)))
+        return min(n_soc, max(0, round((kwh - grid_floor_kwh) / SOC_STAP_KWH)))
 
     def idx_naar_kwh(idx: int) -> float:
         return soc_kwh_per_idx[idx]
 
     def kwh_naar_idx_omlaag(kwh: float) -> int:
-        return min(n_soc, max(0, math.floor(kwh / SOC_STAP_KWH + 1e-9)))
+        return min(n_soc, max(0, math.floor((kwh - grid_floor_kwh) / SOC_STAP_KWH + 1e-9)))
 
     def kwh_naar_idx_omhoog(kwh: float) -> int:
-        return min(n_soc, max(0, math.ceil(kwh / SOC_STAP_KWH - 1e-9)))
+        return min(n_soc, max(0, math.ceil((kwh - grid_floor_kwh) / SOC_STAP_KWH - 1e-9)))
 
     def standby_verlies_kwh(duur_h: float) -> float:
         if standby_verbruik_w <= 0 or duur_h <= 0:
@@ -635,7 +648,7 @@ def los_dp_op(
         return standby_verbruik_w / 1000.0 * duur_h
 
     def soc_met_standby_verlies(soc_kwh: float, duur_h: float) -> float:
-        return max(0.0, soc_kwh - standby_verlies_kwh(duur_h))
+        return max(soc_floor_kwh, soc_kwh - standby_verlies_kwh(duur_h))
 
     def vermogensstappen(maximum_w: float) -> list[int]:
         if maximum_w < minimum_vermogen_w or DP_VERMOGEN_STAP_W <= 0:
@@ -710,8 +723,8 @@ def los_dp_op(
         if max_kwh <= 0:
             return soc_min_pct
 
-        venster_pct = min(1.0, max(0.0, soc_kwh / max_kwh))
-        return soc_min_pct + venster_pct * (soc_max_pct - soc_min_pct)
+        venster_pct = soc_kwh / max_kwh
+        return min(100.0, max(0.0, soc_min_pct + venster_pct * hw_range_pct))
 
     echte_soc_pct_per_idx = [echte_soc_pct(soc_kwh) for soc_kwh in soc_kwh_per_idx]
     temp_limiet_per_idx = [
@@ -934,12 +947,12 @@ def los_dp_op(
     # zijn we conservatief: we plannen alleen op wat we zeker kunnen verdienen.
     V = [[[0.0] * n_temp for _ in range(n_soc + 1)] for _ in range(n + 1)]
     def interpoleer_waarde(t_idx: int, soc_kwh: float, temp_idx: int) -> float:
-        if soc_kwh <= 0:
+        if soc_kwh <= grid_floor_kwh:
             return V[t_idx][0][temp_idx]
         if soc_kwh >= max_kwh:
             return V[t_idx][n_soc][temp_idx]
 
-        positie = soc_kwh / SOC_STAP_KWH
+        positie = (soc_kwh - grid_floor_kwh) / SOC_STAP_KWH
         laag = min(n_soc, max(0, math.floor(positie)))
         hoog = min(n_soc, max(0, math.ceil(positie)))
         if laag == hoog:
@@ -969,7 +982,7 @@ def los_dp_op(
             # temperatuur-index q. De q-afhankelijke temperatuurovergang blijft
             # hieronder in dezelfde volgorde berekend als voorheen.
             laad_kandidaten = []
-            derating = bereken_derating(soc_kwh, max_kwh)
+            derating = bereken_derating(max(0.0, soc_kwh), max_kwh)
             eff_laad_w = max_laad_w * derating
             ruimte_kwh = max_kwh - soc_kwh
             for stap_index, vermogen_w in enumerate(laad_vermogensstappen):
@@ -1007,7 +1020,8 @@ def los_dp_op(
                     controleer_annulering()
                 max_naar_net_kwh = float(vermogen_w) / 1000.0 * duur_h
                 max_uit_accu_kwh = max_naar_net_kwh / eta_ontlaad if eta_ontlaad > 0 else 0.0
-                energie_ideaal_uit = min(max_uit_accu_kwh, soc_kwh)
+                beschikbare_ontlaad_kwh = max(0.0, soc_kwh)
+                energie_ideaal_uit = min(max_uit_accu_kwh, beschikbare_ontlaad_kwh)
                 s_ontladen = kwh_naar_idx_omhoog(soc_kwh - energie_ideaal_uit)
                 if s_ontladen >= s:
                     continue
@@ -1157,7 +1171,7 @@ def los_dp_op(
         standby_kwh = standby_verlies_kwh(duur_h) if actie_code != 1 else 0.0
 
         if actie_code == 1:  # Laden
-            derating          = bereken_derating(soc_kwh, max_kwh)
+            derating          = bereken_derating(max(0.0, soc_kwh), max_kwh)
             eff_laad_w        = max_laad_w * derating
             energie_naar_accu = max(0.0, min(actie_energie_accu_kwh, max_kwh - soc_kwh))
             energie_van_net   = energie_naar_accu / eta_laad if eta_laad > 0 else 0.0
@@ -1197,7 +1211,7 @@ def los_dp_op(
         if actie == "laden":
             soc_na_kwh = min(max_kwh, soc_kwh + energie_accu_voor_model)
         else:
-            soc_na_kwh = max(0.0, soc_kwh - energie_accu_voor_model - standby_kwh)
+            soc_na_kwh = max(soc_floor_kwh, soc_kwh - energie_accu_voor_model - standby_kwh)
         buiten_temp_c = slot_buiten_temp_c(t)
         temp_voor_c = huidig_temp_c
         temp_na_c = voorspel_temp_na_c(
@@ -1621,7 +1635,7 @@ def los_dp_op(
             for k_rel, k in enumerate(range(gs, ge)):
                 duur_h = slots[k]["duration_h"]
                 soc_bi = soc_start + k_rel * soc_ideaal_ps
-                derat  = bereken_derating(soc_bi, max_kwh)
+                derat  = bereken_derating(max(0.0, soc_bi), max_kwh)
                 cap    = min(max_laad_w * derat / 1000.0 * duur_h * eta_laad, max_kwh - soc_bi)
                 maxima_groep.append(max(0.0, cap))
             verdeling = water_filling(totaal_delta, maxima_groep)
@@ -1643,7 +1657,7 @@ def los_dp_op(
                 s_r["soc_voor_pct"] = round(q_voor / max_kwh * 100, 1) if max_kwh > 0 else 0.0
                 s_r["soc_na_pct"]   = round(q_na   / max_kwh * 100, 1) if max_kwh > 0 else 0.0
                 verwacht_vermogen = e_net / duur_h * 1000.0 if duur_h > 0 else 0.0
-                derat = bereken_derating(q_voor, max_kwh)
+                derat = bereken_derating(max(0.0, q_voor), max_kwh)
                 s_r["vermogen_w"] = bereken_laadvermogen_voor_aansturing(
                     verwacht_vermogen,
                     max_laad_w,

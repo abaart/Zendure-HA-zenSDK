@@ -241,6 +241,48 @@ class TestDPBasis:
         assert schema[1]["actie"] == "ontladen"
         assert schema[1]["standby_verlies_wh"] == 5.0
 
+    def test_standby_verbruik_mag_onder_ingestelde_minimum_soc_zakken(self):
+        """
+        Standbyverbruik loopt door onder de ingestelde minimum-SoC.
+
+        Bij soc_min_pct=7 betekent DP-interne 0 kWh een zichtbare batterij-SoC
+        van 7%. Drie rusturen met 15 W standby zetten de DP-interne SoC op
+        -45 Wh, zodat AppDaemon de grafiek onder 7% kan tonen.
+        """
+        schema = los_dp_op(
+            maak_slots([0.10, 0.10, 0.10]),
+            maak_accu(huidig_kwh=0.0, max_kwh=5.0, max_laad_w=0.0, max_ontlaad_w=0.0),
+            plateau_spreiding=False,
+            standby_verbruik_w=15.0,
+            soc_min_pct=7.0,
+            soc_max_pct=97.0,
+            hoge_soc_verblijf_penalty_factor=0.0,
+            lage_soc_verblijf_penalty_factor=0.0,
+        )
+
+        assert [slot["actie"] for slot in schema] == ["rust", "rust", "rust"]
+        assert schema[0]["soc_voor_kwh"] == pytest.approx(0.0)
+        assert schema[-1]["soc_na_kwh"] == pytest.approx(-0.045)
+        assert schema[-1]["soc_na_pct"] < 0.0
+
+    def test_ontladen_gebruikt_geen_reserve_onder_minimum_soc(self):
+        """
+        Energie onder de ingestelde minimum-SoC mag niet naar het net worden verkocht.
+        """
+        schema = los_dp_op(
+            maak_slots([1.00]),
+            maak_accu(huidig_kwh=-0.10, max_kwh=5.0, max_laad_w=0.0, max_ontlaad_w=2400.0),
+            plateau_spreiding=False,
+            standby_verbruik_w=0.0,
+            soc_min_pct=7.0,
+            soc_max_pct=97.0,
+            hoge_soc_verblijf_penalty_factor=0.0,
+            lage_soc_verblijf_penalty_factor=0.0,
+        )
+
+        assert schema[0]["actie"] == "rust"
+        assert schema[0]["winst_eur"] == 0.0
+
     def test_ontlaadvermogen_is_ac_outputlimiet(self):
         """
         max_ontlaad_w is het Zendure outputLimit in W en wordt niet met eta verlaagd.
