@@ -50,24 +50,41 @@ def _history_item(state: str, tijd: str) -> dict:
 
 
 def _maak_app(
-    states: dict[str, str] | None = None,
+    states: dict[str, object] | None = None,
     history: dict[str, list[dict]] | None = None,
+    history_calls: list[dict] | None = None,
 ) -> DynamischHandelen:
     app = object.__new__(DynamischHandelen)
     states = states or {}
     history = history or {}
 
     def get_state(entity: str, attribute: str | None = None):
-        if attribute is not None:
-            return None
-        return states.get(entity)
+        waarde = states.get(entity)
+        if attribute is None:
+            if isinstance(waarde, dict) and "state" in waarde:
+                return waarde["state"]
+            return waarde
+
+        if attribute == "all":
+            if isinstance(waarde, dict) and "attributes" in waarde:
+                return waarde
+            return {"state": waarde, "attributes": {}}
+
+        if isinstance(waarde, dict):
+            attributes = waarde.get("attributes", waarde)
+            if isinstance(attributes, dict):
+                return attributes.get(attribute)
+        return None
 
     def get_history(*args, **kwargs):
+        if history_calls is not None:
+            history_calls.append({"args": args, "kwargs": kwargs})
         entity = kwargs.get("entity_id") or (args[0] if args else None)
         return history.get(entity, [])
 
     app.get_state = get_state
     app.get_history = get_history
+    app.log = lambda *args, **kwargs: None
     return app
 
 
@@ -85,6 +102,23 @@ def _prijs_slot(start: datetime, duur_uren: float, prijs: float = 0.10) -> dict:
         "end": start + timedelta(hours=duur_uren),
         "price": prijs,
         "duration_h": duur_uren,
+    }
+
+
+def _advies_slot(
+    start: datetime,
+    duur_uren: float,
+    actie: str = "rust",
+    voorspelde_temp: float = 25.0,
+) -> dict:
+    return {
+        "start": start.isoformat(),
+        "end": (start + timedelta(hours=duur_uren)).isoformat(),
+        "actie": actie,
+        "c_waarde": 0.1 if actie != "rust" else 0.0,
+        "batterij_temp_na_c": voorspelde_temp,
+        "warmte_penalty_eur": 0.0,
+        "overtemp_penalty_eur": 0.0,
     }
 
 
@@ -148,6 +182,39 @@ class TestFijnmazigePrijsslots:
 
 
 class TestHistorischeStates:
+    def test_haal_history_items_vraagt_volledige_attributen(self):
+        history_calls = []
+        app = _maak_app(
+            history={"sensor.test": [_history_item("1.0", "2026-05-24T14:00:00+02:00")]},
+            history_calls=history_calls,
+        )
+
+        items = app._haal_history_items(
+            "sensor.test",
+            dagen=2,
+            volledige_attributen=True,
+        )
+
+        assert len(items) == 1
+        assert history_calls[0]["kwargs"]["entity_id"] == "sensor.test"
+        assert history_calls[0]["kwargs"]["days"] == 2
+        assert history_calls[0]["kwargs"]["minimal_response"] is False
+        assert history_calls[0]["kwargs"]["no_attributes"] is False
+        assert history_calls[0]["kwargs"]["significant_changes_only"] is False
+
+    def test_haal_history_items_laat_attributen_weg_voor_numerieke_history(self):
+        history_calls = []
+        app = _maak_app(
+            history={"sensor.test": [_history_item("1.0", "2026-05-24T14:00:00+02:00")]},
+            history_calls=history_calls,
+        )
+
+        app._haal_history_items("sensor.test", dagen=2)
+
+        assert "minimal_response" not in history_calls[0]["kwargs"]
+        assert "no_attributes" not in history_calls[0]["kwargs"]
+        assert history_calls[0]["kwargs"]["significant_changes_only"] is False
+
     def test_historische_float_state_gebruikt_laatst_bekende_waarde_op_starttijd(self):
         app = _maak_app(
             states={"sensor.test": "9.0"},
@@ -209,6 +276,54 @@ class TestHistorischeStates:
         assert hw_max_pct == 95
         assert bronnen["beschikbare_energie"] == "history"
         assert bronnen["benodigde_energie"] == "history"
+
+
+class TestStrategieAdvies:
+    def test_advies_gebruikt_actuele_slots_grafiek_als_history_geen_slots_heeft(self):
+        nu = datetime.now().astimezone()
+        slots = [
+            _advies_slot(nu - timedelta(hours=10 - index), 1.0, "laden", 25.0)
+            for index in range(8)
+        ]
+        temp_history = [
+            _history_item("25.0", slot["end"])
+            for slot in slots
+        ]
+        gepubliceerde_states = []
+        app = _maak_app(
+            states={
+                "input_number.dynamisch_advies_analyse_dagen": "14",
+                "sensor.dynamisch_handelsstrategie": {
+                    "state": "1.0",
+                    "attributes": {"slots_grafiek": slots},
+                },
+            },
+            history={
+                "sensor.dynamisch_handelsstrategie": [
+                    {
+                        "state": "1.0",
+                        "attributes": {},
+                        "last_changed": (nu - timedelta(hours=1)).isoformat(),
+                    }
+                ],
+                "sensor.zendure_2400_ac_warmste_batterij_temperatuur": temp_history,
+            },
+        )
+        app.set_state = lambda entity, state, attributes: gepubliceerde_states.append(
+            {"entity": entity, "state": state, "attributes": attributes}
+        )
+
+        app.bereken_strategie_advies({"trigger": "test"})
+
+        advies = gepubliceerde_states[-1]
+        attributes = advies["attributes"]
+        assert advies["entity"] == "sensor.dynamisch_strategie_advies"
+        assert advies["state"] == "stabiel"
+        assert attributes["geanalyseerde_slots"] == 8
+        assert attributes["temperatuur_vergelijkingen"] == 8
+        assert attributes["strategie_slots_uit_history"] == 0
+        assert attributes["strategie_slots_uit_huidige_sensor"] == 8
+        assert attributes["strategie_history_items_met_slots"] == 0
 
 
 class TestStrategieConfig:

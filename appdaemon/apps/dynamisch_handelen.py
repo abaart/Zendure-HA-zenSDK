@@ -458,6 +458,7 @@ class DynamischHandelen(hass.Hass):
             strategie_items = self._haal_history_items(
                 "sensor.dynamisch_handelsstrategie",
                 dagen,
+                volledige_attributen=True,
             )
             temp_items = self._haal_history_items(
                 "sensor.zendure_2400_ac_warmste_batterij_temperatuur",
@@ -482,9 +483,21 @@ class DynamischHandelen(hass.Hass):
             )
             return
 
-        slots = self._haal_geanalyseerde_strategie_slots(strategie_items, dagen)
+        slots_uit_history = self._haal_geanalyseerde_strategie_slots(strategie_items, dagen)
+        slots_uit_huidige_sensor = self._haal_huidige_geanalyseerde_strategie_slots(dagen)
+        slots = self._combineer_geanalyseerde_slots(
+            slots_uit_history,
+            slots_uit_huidige_sensor,
+        )
         temp_samples = self._haal_temp_samples(temp_items)
         advies = self._bouw_strategie_advies(slots, temp_samples, dagen)
+        advies["strategie_history_items"] = len(strategie_items)
+        advies["strategie_history_items_met_slots"] = self._tel_history_items_met_slots(
+            strategie_items
+        )
+        advies["strategie_slots_uit_history"] = len(slots_uit_history)
+        advies["strategie_slots_uit_huidige_sensor"] = len(slots_uit_huidige_sensor)
+        advies["temperatuur_samples"] = len(temp_samples)
         advies["trigger"] = trigger
         self._publiceer_advies_sensor(advies.pop("state"), advies)
 
@@ -513,9 +526,16 @@ class DynamischHandelen(hass.Hass):
         dagen: int | None = None,
         start_time: datetime | None = None,
         end_time: datetime | None = None,
+        volledige_attributen: bool = False,
     ) -> list[dict]:
         """Leest HA history en normaliseert AppDaemon's verschillende return-vormen."""
-        kwargs = {"entity_id": entity_id}
+        kwargs = {
+            "entity_id": entity_id,
+            "significant_changes_only": False,
+        }
+        if volledige_attributen:
+            kwargs["minimal_response"] = False
+            kwargs["no_attributes"] = False
         if dagen is not None:
             kwargs["days"] = dagen
         if start_time is not None:
@@ -526,14 +546,94 @@ class DynamischHandelen(hass.Hass):
         try:
             history = self.get_history(**kwargs) or []
         except TypeError:
-            if start_time is not None or end_time is not None:
-                try:
-                    history = self.get_history(entity_id, start_time=start_time, end_time=end_time) or []
-                except TypeError:
+            compat_kwargs = {
+                key: value
+                for key, value in kwargs.items()
+                if key not in (
+                    "minimal_response",
+                    "no_attributes",
+                    "significant_changes_only",
+                )
+            }
+            try:
+                history = self.get_history(**compat_kwargs) or []
+            except TypeError:
+                if start_time is not None or end_time is not None:
+                    try:
+                        history = self.get_history(
+                            entity_id,
+                            start_time=start_time,
+                            end_time=end_time,
+                        ) or []
+                    except TypeError:
+                        history = self.get_history(entity_id, days=dagen or 1) or []
+                else:
                     history = self.get_history(entity_id, days=dagen or 1) or []
-            else:
-                history = self.get_history(entity_id, days=dagen or 1) or []
         return self._flatten_history_items(history)
+
+    def _haal_huidige_strategie_attributen(self) -> dict:
+        """Leest de actuele strategie-attributen uit HA, met losse attribuut-fallbacks."""
+        alle_state = (
+            self.get_state("sensor.dynamisch_handelsstrategie", attribute="all") or {}
+        )
+        if isinstance(alle_state, dict):
+            attributes = alle_state.get("attributes")
+            if isinstance(attributes, dict):
+                return attributes
+
+        attributes = {}
+        for attribuut in ("slots_grafiek", "slots"):
+            waarde = self.get_state(
+                "sensor.dynamisch_handelsstrategie",
+                attribute=attribuut,
+            )
+            if waarde is not None:
+                attributes[attribuut] = waarde
+        return attributes
+
+    def _haal_huidige_geanalyseerde_strategie_slots(self, dagen: int) -> list[dict]:
+        """
+        Leest verlopen slots uit de actuele strategie-sensor.
+
+        HA recorder-history kan compacte states zonder `attributes.slots` teruggeven.
+        De actuele sensor bewaart `slots_grafiek`, waarin recente verlopen slots staan.
+        """
+        attributes = self._haal_huidige_strategie_attributen()
+        history_items = []
+        for attribuut in ("slots_grafiek", "slots"):
+            slots = attributes.get(attribuut)
+            if isinstance(slots, list) and slots:
+                history_items.append({"attributes": {"slots": slots}})
+
+        if not history_items:
+            return []
+
+        return self._haal_geanalyseerde_strategie_slots(history_items, dagen)
+
+    def _combineer_geanalyseerde_slots(self, *sloten_lijsten: list[dict]) -> list[dict]:
+        """Combineert slotlijsten op start- en eindtijd zonder dubbele slots."""
+        gekozen: dict[tuple[str, str], dict] = {}
+        for slots in sloten_lijsten:
+            for slot in slots:
+                start = slot.get("_start_dt") or self._parse_datetime(slot.get("start"))
+                end = slot.get("_end_dt") or self._parse_datetime(slot.get("end"))
+                if start is None or end is None:
+                    continue
+                kopie = dict(slot)
+                kopie["_start_dt"] = start
+                kopie["_end_dt"] = end
+                gekozen[(start.isoformat(), end.isoformat())] = kopie
+
+        return sorted(gekozen.values(), key=lambda s: s["_start_dt"])
+
+    def _tel_history_items_met_slots(self, items: list[dict]) -> int:
+        """Telt history-items met een bruikbaar `attributes.slots` attribuut."""
+        aantal = 0
+        for item in items:
+            attrs = item.get("attributes") or {}
+            if isinstance(attrs.get("slots"), list):
+                aantal += 1
+        return aantal
 
     def _historische_float_state(
         self,

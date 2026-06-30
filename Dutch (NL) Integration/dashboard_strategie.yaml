@@ -1199,9 +1199,24 @@ views:
                 icon: mdi:timeline-clock-outline
               - type: attribute
                 entity: sensor.dynamisch_strategie_advies
+                attribute: strategie_slots_uit_history
+                name: Slots uit recorder-history
+                icon: mdi:history
+              - type: attribute
+                entity: sensor.dynamisch_strategie_advies
+                attribute: strategie_slots_uit_huidige_sensor
+                name: Slots uit actuele sensor
+                icon: mdi:timeline-clock
+              - type: attribute
+                entity: sensor.dynamisch_strategie_advies
                 attribute: temperatuur_vergelijkingen
                 name: Temperatuur vergelijkingen
                 icon: mdi:thermometer-check
+              - type: attribute
+                entity: sensor.dynamisch_strategie_advies
+                attribute: temperatuur_samples
+                name: Temperatuur samples
+                icon: mdi:thermometer-lines
               - type: attribute
                 entity: sensor.dynamisch_strategie_advies
                 attribute: aanbevolen_warmte_stijging_laden_c_per_c2h
