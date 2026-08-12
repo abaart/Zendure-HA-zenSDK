@@ -136,54 +136,39 @@ def test_initialize_plans_strategy_once_per_hour_at_minute_55():
 
 
 class TestKwartierPrijsslots:
-    def test_middelt_kwartierprijzen_na_zes_uur_tot_uurslots(self):
-        start = datetime(2026, 8, 12, 15, 15, tzinfo=timezone.utc)
-        prijzen = [0.05 + index / 100 for index in range(32)]
-        slots = [
-            {
-                "start": start + timedelta(minutes=15 * index),
-                "end": start + timedelta(minutes=15 * (index + 1)),
-                "price": prijs,
-                "duration_h": 0.25,
-                "resolutie": "kwartierprijs",
-                "prijs_bron": "sensor.nordpool_kwartier",
-            }
-            for index, prijs in enumerate(prijzen)
-        ]
-
-        resultaat = DynamischHandelen._bouw_hybride_prijsslots(
-            slots,
-            start + timedelta(minutes=1),
+    def test_bewaart_kwartierprijzen_over_volledige_bronhorizon(self):
+        start = (
+            datetime.now().astimezone().replace(second=0, microsecond=0)
+            + timedelta(minutes=15)
         )
-
-        assert len(resultaat) == 26
-        assert [slot["duration_h"] for slot in resultaat[:24]] == [0.25] * 24
-        assert [slot["duration_h"] for slot in resultaat[24:]] == [1.0, 1.0]
-        assert resultaat[24]["start"] == start + timedelta(hours=6)
-        assert resultaat[24]["price"] == pytest.approx(sum(prijzen[24:28]) / 4)
-        assert resultaat[25]["price"] == pytest.approx(sum(prijzen[28:32]) / 4)
-        assert {slot["resolutie"] for slot in resultaat[:24]} == {"kwartierprijs"}
-        assert {slot["resolutie"] for slot in resultaat[24:]} == {"uurprijs_gemiddeld"}
-
-    def test_bewaart_onvolledige_laatste_uurgroep_als_kwartierprijzen(self):
-        start = datetime(2026, 8, 12, 15, 0, tzinfo=timezone.utc)
-        slots = [
-            {
-                "start": start + timedelta(minutes=15 * index),
-                "end": start + timedelta(minutes=15 * (index + 1)),
-                "price": 0.10,
-                "duration_h": 0.25,
-                "resolutie": "kwartierprijs",
-                "prijs_bron": "sensor.nordpool_kwartier",
-            }
-            for index in range(27)
+        bron_entity = "sensor.nordpool_kwartier"
+        prijzen = [0.05 + index / 1000 for index in range(40)]
+        raw_today = [
+            _bron_prijs_slot(start + timedelta(minutes=15 * index), 15, prijs)
+            for index, prijs in enumerate(prijzen[:24])
         ]
+        raw_tomorrow = [
+            _bron_prijs_slot(start + timedelta(minutes=15 * index), 15, prijs)
+            for index, prijs in enumerate(prijzen[24:], start=24)
+        ]
+        app = _maak_app({
+            "input_text.dynamisch_nordpool_sensor": bron_entity,
+            bron_entity: {
+                "state": str(prijzen[0]),
+                "attributes": {
+                    "raw_today": raw_today,
+                    "raw_tomorrow": raw_tomorrow,
+                },
+            },
+        })
 
-        resultaat = DynamischHandelen._bouw_hybride_prijsslots(slots, start)
+        resultaat = app._haal_prijsslots()
 
-        assert len(resultaat) == 27
-        assert [slot["duration_h"] for slot in resultaat[-3:]] == [0.25] * 3
-        assert {slot["resolutie"] for slot in resultaat[-3:]} == {"kwartierprijs"}
+        assert len(resultaat) == 40
+        assert [slot["price"] for slot in resultaat] == prijzen
+        assert [slot["duration_h"] for slot in resultaat] == [0.25] * 40
+        assert {slot["resolutie"] for slot in resultaat} == {"kwartierprijs"}
+        assert resultaat[-1]["end"] == start + timedelta(hours=10)
 
     def test_leest_verschillende_kwartierprijzen_rechtstreeks_uit_bron(self):
         start = (

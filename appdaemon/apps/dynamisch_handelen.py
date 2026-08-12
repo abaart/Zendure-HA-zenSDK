@@ -79,7 +79,6 @@ from strategie_dp import (
 
 GRAFIEK_HISTORIE_UREN = 6.0
 KWARTIER_SLOT_MINUTEN = 15
-KWARTIER_HORIZON_UREN = 6.0
 
 
 def _lees_slot_datetimes(slot: dict) -> tuple[datetime, datetime] | None:
@@ -1075,12 +1074,15 @@ class DynamischHandelen(hass.Hass):
             s for s in slots
             if s.get("resolutie") == "uurprijs_gemiddeld"
         ]
+        kwartier_horizon_h = sum(
+            float(s.get("duration_h", 0.0))
+            for s in kwartierprijs_slots
+        )
         prijs_bron = slots[0].get("prijs_bron")
 
         self.log(
-            f"Dynamisch Handelen: {len(slots)} slots "
-            f"({len(kwartierprijs_slots)} kwartierprijzen / "
-            f"{len(uurprijs_slots)} gemiddelde uurprijzen uit {prijs_bron}) | "
+            f"Dynamisch Handelen: {len(kwartierprijs_slots)} kwartierprijzen "
+            f"over {kwartier_horizon_h:.2f} uur uit {prijs_bron} | "
             f"accu {accu.huidig_kwh:.2f}/{accu.max_kwh:.2f} kWh | "
             f"eta={accu.eta_laad:.3f} | "
             f"laad {accu.max_laad_w:.0f} W / ontlaad {accu.max_ontlaad_w:.0f} W | "
@@ -1210,11 +1212,11 @@ class DynamischHandelen(hass.Hass):
                 "grafiek_start":       grafiek_start,
                 "strategie_einde":     strategie_einde,
                 "prijs_bron":           prijs_bron,
-                "planning_resolutie":   "eerste 6 uur kwartierprijzen, daarna gemiddelden per uur",
+                "planning_resolutie":   "volledige horizon kwartierprijzen",
                 "kwartierprijs_slots":  len(kwartierprijs_slots),
                 "uurprijs_slots":       len(uurprijs_slots),
                 # Bestaande attribuutnamen blijven beschikbaar voor dashboards en automations.
-                "fijnmazige_horizon_h": KWARTIER_HORIZON_UREN,
+                "fijnmazige_horizon_h": round(kwartier_horizon_h, 2),
                 "fijnmazige_slot_minuten": KWARTIER_SLOT_MINUTEN,
                 "fijnmazige_slots":     len(kwartierprijs_slots),
                 "bron_slots":           len(uurprijs_slots),
@@ -1271,11 +1273,10 @@ class DynamischHandelen(hass.Hass):
         zodat `input_boolean.dynamisch_15_minuten` geen kwartierprijzen meer tot
         uurprijzen kan middelen voordat de DP ze ontvangt.
 
-        Alleen bron-slots van exact 15 minuten worden geaccepteerd. De eerste
-        zes uur blijven afzonderlijke marktprijzen. Daarna worden telkens vier
-        opeenvolgende kwartierprijzen gemiddeld tot één DP-slot van een uur.
-        Een onvolledige laatste groep blijft op kwartierresolutie staan. Slots
-        die al volledig zijn verstreken worden overgeslagen.
+        Alleen bron-slots van exact 15 minuten worden geaccepteerd. Ieder
+        beschikbaar kwartier uit `raw_today` en `raw_tomorrow` blijft een
+        afzonderlijk DP-slot. Slots die al volledig zijn verstreken worden
+        overgeslagen.
         """
         bron_entity = str(
             self.get_state("input_text.dynamisch_nordpool_sensor") or ""
@@ -1330,67 +1331,7 @@ class DynamischHandelen(hass.Hass):
             })
 
         slots.sort(key=lambda s: s["start"])
-        return self._bouw_hybride_prijsslots(slots, nu)
-
-    @staticmethod
-    def _bouw_hybride_prijsslots(
-        kwartier_slots: list[dict],
-        nu: datetime,
-        horizon_h: float = KWARTIER_HORIZON_UREN,
-    ) -> list[dict]:
-        """Behoudt zes uur kwartierprijzen en middelt latere groepen per uur."""
-        if not kwartier_slots or horizon_h <= 0:
-            return kwartier_slots
-
-        horizon_start = nu.replace(
-            minute=(nu.minute // KWARTIER_SLOT_MINUTEN) * KWARTIER_SLOT_MINUTEN,
-            second=0,
-            microsecond=0,
-        )
-        horizon_einde = horizon_start + timedelta(hours=horizon_h)
-        resultaat = [
-            dict(slot)
-            for slot in kwartier_slots
-            if slot["start"] < horizon_einde
-        ]
-        latere_slots = [
-            slot
-            for slot in kwartier_slots
-            if slot["start"] >= horizon_einde
-        ]
-
-        index = 0
-        while index < len(latere_slots):
-            groep = latere_slots[index:index + 4]
-            is_volledig_uur = (
-                len(groep) == 4
-                and all(
-                    groep[positie]["end"] == groep[positie + 1]["start"]
-                    for positie in range(3)
-                )
-            )
-            if not is_volledig_uur:
-                resultaat.append(dict(latere_slots[index]))
-                index += 1
-                continue
-
-            totale_duur_h = sum(slot["duration_h"] for slot in groep)
-            gemiddelde_prijs = sum(
-                slot["price"] * slot["duration_h"]
-                for slot in groep
-            ) / totale_duur_h
-            resultaat.append({
-                "start":      groep[0]["start"],
-                "end":        groep[-1]["end"],
-                "price":      gemiddelde_prijs,
-                "duration_h": totale_duur_h,
-                "resolutie":  "uurprijs_gemiddeld",
-                "prijs_bron": groep[0].get("prijs_bron"),
-            })
-            index += 4
-
-        resultaat.sort(key=lambda s: s["start"])
-        return resultaat
+        return slots
 
     def _bepaal_dp_start_tijd(self, slots: list[dict]) -> datetime | None:
         """Gebruikt het begin van het lopende prijsslot als starttijd voor de DP."""
