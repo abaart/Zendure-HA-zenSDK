@@ -27,10 +27,10 @@ Ingangen:
   input_number.dynamisch_warmte_penalty_laden_factor     gewicht voor warmteverlies bij laden
   input_number.dynamisch_warmte_penalty_ontladen_factor  gewicht voor warmteverlies bij ontladen
   input_number.dynamisch_warmte_afkoeling_halveringstijd_uren  afkoeling richting buitentemperatuur
-  input_number.dynamisch_warmte_stijging_laden_c_per_c2h  packtemperatuurstijging door C² × uur laden
-  input_number.dynamisch_warmte_stijging_ontladen_c_per_c2h  packtemperatuurstijging door C² × uur ontladen
-  input_number.dynamisch_max_temp_boven_80_soc            packtemperatuurlimiet boven 80% SoC
-  input_number.dynamisch_max_temp_onder_80_soc            packtemperatuurlimiet onder 80% SoC
+  input_number.dynamisch_warmte_stijging_laden_c_per_c2h  accutemperatuurstijging door C² × uur laden
+  input_number.dynamisch_warmte_stijging_ontladen_c_per_c2h  accutemperatuurstijging door C² × uur ontladen
+  input_number.dynamisch_max_temp_boven_80_soc            accutemperatuurlimiet boven 80% SoC
+  input_number.dynamisch_max_temp_onder_80_soc            accutemperatuurlimiet onder 80% SoC
   input_number.dynamisch_temp_penalty_factor              gewicht voor temperatuur-overschrijding
   input_number.dynamisch_temp_penalty_100_soc_factor      extra overtemp-gewicht bij 100% SoC
   input_number.dynamisch_hoge_soc_verblijf_penalty_factor verblijfskosten boven 90% SoC
@@ -809,7 +809,7 @@ class DynamischHandelen(hass.Hass):
         temp_samples: list[tuple[datetime, float]],
         dagen: int,
     ) -> dict:
-        """Maakt advies uit historische strategie-slots en gemeten packtemperaturen."""
+        """Maakt advies uit historische strategie-slots en gemeten accutemperaturen."""
         huidig_laden = self._haal_warmte_penalty_laden_factor()
         huidig_ontladen = self._haal_warmte_penalty_ontladen_factor()
         huidig_temp_penalty = self._haal_float_met_default(
@@ -942,11 +942,11 @@ class DynamischHandelen(hass.Hass):
         if overtemp_ratio >= 0.08:
             state = "check_temperatuurlimieten"
             regels.append(
-                f"Overtemp-penalty kwam voor in {len(overtemp_slots)} van {len(slots)} slots; verhoog de penalty of verlaag vermogen/temperatuurlimiet."
+                f"Temp-straf kwam voor in {len(overtemp_slots)} van {len(slots)} slots; verhoog de straf of verlaag vermogen/temperatuurlimiet."
             )
 
         if actie_slots and self._gemiddelde([float(s.get("c_waarde") or 0.0) for s in actie_slots]) >= 0.45:
-            regels.append("Gemiddelde C-waarde is hoog; C-waarde penalty's zijn de moeite om actief te houden.")
+            regels.append("Gemiddelde C-waarde is hoog; warmtestraf voor laden en ontladen is zinvol.")
 
         if not regels:
             regels.append("Geen duidelijke afwijking gevonden. Huidige factoren lijken voorlopig passend.")
@@ -1085,7 +1085,7 @@ class DynamischHandelen(hass.Hass):
             f"warmte ontladen {warmte_penalty_ontladen_factor:.2f} | "
             f"standby {standby_verbruik_w:.1f} W | "
             f"plateau {'aan' if plateau_spreiding else 'uit'} | "
-            f"packtemp {thermisch['batterij_temp_start_c'] if thermisch['batterij_temp_start_c'] is not None else '-'} °C | "
+            f"accutemp {thermisch['batterij_temp_start_c'] if thermisch['batterij_temp_start_c'] is not None else '-'} °C | "
             f"warmte stijging laden {thermisch['warmte_stijging_laden_c_per_c2h']:.2f} °C/C²h | "
             f"warmte stijging ontladen {thermisch['warmte_stijging_ontladen_c_per_c2h']:.2f} °C/C²h | "
             f"temp limiet hoog/laag {thermisch['temp_limiet_c']:.1f}/{thermisch['temp_limiet_lage_soc_c']:.1f} °C | "
@@ -1840,7 +1840,7 @@ class DynamischHandelen(hass.Hass):
 
     def _haal_warmte_stijging_factor(self, entity_id: str, default: float) -> float:
         """
-        Leest een richting-specifieke packtemperatuurfactor.
+        Leest een richting-specifieke accutemperatuurfactor.
 
         input_number.dynamisch_warmte_stijging_c_per_c2h blijft de fallback voor
         installaties waar de twee nieuwe input_number helpers nog ontbreken.
@@ -1869,7 +1869,7 @@ class DynamischHandelen(hass.Hass):
             return None
 
     def _haal_warmste_batterij_temp_c(self) -> float | None:
-        """Neemt de hoogste batterij-packtemperatuur, niet de invertertemperatuur."""
+        """Neemt de hoogste accutemperatuur, niet de invertertemperatuur."""
         warmste = self._float_state("sensor.zendure_2400_ac_warmste_batterij_temperatuur")
         if warmste is not None:
             return warmste
@@ -1888,7 +1888,7 @@ class DynamischHandelen(hass.Hass):
         return max(waarden) if waarden else None
 
     def _haal_warmste_batterij_temp_c_op_tijd(self, tijd: datetime | None) -> tuple[float | None, str]:
-        """Leest de warmste batterij-packtemperatuur op de DP-starttijd."""
+        """Leest de warmste accutemperatuur op de DP-starttijd."""
         warmste, warmste_bron = self._historische_float_state(
             "sensor.zendure_2400_ac_warmste_batterij_temperatuur",
             tijd,

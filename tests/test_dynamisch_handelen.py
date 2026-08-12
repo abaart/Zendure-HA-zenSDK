@@ -349,6 +349,76 @@ class TestStrategieConfig:
         assert app._haal_standby_verbruik_w() == 0.0
 
 
+def test_strategie_input_numbers_hebben_geen_initial_waarde():
+    package = (
+        Path(__file__).parent.parent
+        / "Dutch (NL) Integration"
+        / "packages"
+        / "zendure_local_nl.yaml"
+    )
+    tekst = package.read_text(encoding="utf-8")
+    input_number_blok = tekst.split("input_number:", 1)[1].split("template:", 1)[0]
+
+    assert "initial:" not in input_number_blok
+
+
+def test_strategie_helpernamen_zijn_kort():
+    package = (
+        Path(__file__).parent.parent
+        / "Dutch (NL) Integration"
+        / "packages"
+        / "zendure_local_nl.yaml"
+    )
+    tekst = package.read_text(encoding="utf-8")
+
+    oude_labels = (
+        "Dynamisch Packtemp",
+        "Dynamisch C-waarde Penalty",
+        "Dynamisch Actuele Buitentemperatuur Sensor",
+        "Dynamisch Forecast Weather Entity",
+        "Dynamisch Handelsstrategie Herberekenen",
+        "Dynamisch Strategie Advies Herberekenen",
+    )
+    for label in oude_labels:
+        assert label not in tekst
+
+    nieuwe_labels = (
+        "name: Strategie verversen",
+        "name: Advies verversen",
+        "name: Warmtestraf laden",
+        "name: Afkoeling halveertijd",
+        "name: Opwarming laden",
+        "name: Max temp bij SoC >80%",
+        "name: Straf boven temp-limiet",
+        "name: Buitentemp sensor",
+        "name: Weer forecast",
+    )
+    for label in nieuwe_labels:
+        assert label in tekst
+
+
+def test_strategie_dashboard_groepeert_korte_instellingen():
+    dashboard = (
+        Path(__file__).parent.parent
+        / "Dutch (NL) Integration"
+        / "dashboard_strategie.yaml"
+    )
+    tekst = dashboard.read_text(encoding="utf-8")
+
+    for label in ("Packtemp", "packtemp", "Pack temp"):
+        assert label not in tekst
+
+    for titel in (
+        "title: Advies",
+        "title: Warmtemodel",
+        "title: Temperatuurgrenzen",
+        "title: SoC-sturing",
+        "title: Weerdata",
+        "title: Straf per slot",
+    ):
+        assert titel in tekst
+
+
 def test_bouw_grafiek_slots_bewaart_laatste_zes_uur():
     nu = datetime(2026, 5, 24, 14, 0, tzinfo=timezone.utc)
     oud = _slot(nu - timedelta(hours=8), 1, "te-oud")

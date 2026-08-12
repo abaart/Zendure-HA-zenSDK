@@ -146,7 +146,7 @@ WARMTE_PENALTY_EUR_PER_KWH_C2: float = 0.05
 # Eenvoudig thermisch model:
 # - temperatuur beweegt in elk slot richting de voorspelde omgevingstemperatuur;
 # - laden/ontladen voegt daar warmte aan toe op basis van C² × duur;
-# - de DP krijgt een extra euro-penalty boven de ingestelde packtemperatuurgrens.
+# - de DP krijgt een extra euro-penalty boven de ingestelde accutemperatuurgrens.
 TEMP_STAP_C: float = 1.0
 WARMTE_STIJGING_LADEN_C_PER_C2H: float = 42.0
 WARMTE_STIJGING_ONTLADEN_C_PER_C2H: float = 23.0
@@ -491,14 +491,14 @@ def los_dp_op(
     THERMISCH MODEL
     ---------------
     Als batterij_temp_start_c bekend is, breidt los_dp_op() de DP-state uit van
-    (tijd, SoC) naar (tijd, SoC, packtemperatuur). De buitentemperatuur per slot
+    (tijd, SoC) naar (tijd, SoC, accutemperatuur). De buitentemperatuur per slot
     komt uit slot["buiten_temp_c"]. Die forecasttemperatuur is de vloer/omgeving
-    waar de packtemperatuur elk slot naartoe beweegt. Laden en ontladen voegen
+    waar de accutemperatuur elk slot naartoe beweegt. Laden en ontladen voegen
     daarna warmte toe via C² × duur.
 
     Vanaf temp_soc_drempel_pct op de echte Zendure-SoC-schaal gebruikt
     los_dp_op() temp_limiet_c als
-    packtemperatuurgrens. Onder temp_soc_drempel_pct gebruikt los_dp_op()
+    accutemperatuurgrens. Onder temp_soc_drempel_pct gebruikt los_dp_op()
     temp_limiet_lage_soc_c als hogere grens. Boven de gekozen grens telt
     temp_penalty_factor mee als extra euro-penalty. Vanaf 90% SoC loopt die
     penalty lineair op tot temp_penalty_100_soc_factor bij 100% SoC.
@@ -524,16 +524,16 @@ def los_dp_op(
         max_plateau_uren:        Max duur van één plateau in uren. Bij kwartierprijzen
                                  telt elk kwartierslot als 0,25 uur.
         plateau_spreiding:       Schakelt de plateau-nabewerking aan of uit.
-        warmte_penalty_laden_factor: Gewicht van de C-waarde penalty bij laden.
-        warmte_penalty_ontladen_factor: Gewicht van de C-waarde penalty bij ontladen.
+        warmte_penalty_laden_factor: Gewicht van de warmtestraf bij laden.
+        warmte_penalty_ontladen_factor: Gewicht van de warmtestraf bij ontladen.
         minimum_vermogen_w:      Laagste vermogensopdracht die DP evalueert; rust blijft apart.
-        batterij_temp_start_c:   Warmste batterij-packtemperatuur bij start van de planning.
+        batterij_temp_start_c:   Warmste accutemperatuur bij start van de planning.
         warmte_afkoeling_halveringstijd_h: Uren waarin het temperatuurverschil met buiten halveert.
         warmte_stijging_c_per_c2h: Backwards-compatible waarde voor laden en ontladen.
-        warmte_stijging_laden_c_per_c2h: Graden packtemperatuurstijging per C² × uur laden.
-        warmte_stijging_ontladen_c_per_c2h: Graden packtemperatuurstijging per C² × uur ontladen.
-        temp_limiet_c:           Packtemperatuurgrens vanaf temp_soc_drempel_pct.
-        temp_limiet_lage_soc_c:  Packtemperatuurgrens onder temp_soc_drempel_pct.
+        warmte_stijging_laden_c_per_c2h: Graden accutemperatuurstijging per C² × uur laden.
+        warmte_stijging_ontladen_c_per_c2h: Graden accutemperatuurstijging per C² × uur ontladen.
+        temp_limiet_c:           Accutemperatuurgrens vanaf temp_soc_drempel_pct.
+        temp_limiet_lage_soc_c:  Accutemperatuurgrens onder temp_soc_drempel_pct.
         temp_penalty_factor:     Gewicht voor overschrijding van de gekozen grens.
         temp_penalty_100_soc_factor: Multiplier op overtemp-penalty bij 100% SoC.
         hoge_soc_verblijf_penalty_factor: Gewicht voor verblijf boven 90% SoC.

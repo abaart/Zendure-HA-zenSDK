@@ -1,149 +1,137 @@
 input_button:
   dynamisch_handelsstrategie_herberekenen:
-    name: Dynamisch Handelsstrategie Herberekenen
+    name: Strategie verversen
     icon: mdi:calculator-variant
 
   dynamisch_strategie_advies_herberekenen:
-    name: Dynamisch Strategie Advies Herberekenen
+    name: Advies verversen
     icon: mdi:lightbulb-on-outline
 
 input_boolean:
   dynamisch_handelsstrategie_berekening_bezig:
-    name: Dynamisch Strategie Berekening Bezig
+    name: Berekening bezig
     icon: mdi:loading
     initial: false
 
 input_text:
   dynamisch_buitentemperatuur_sensor:
-    name: Dynamisch Actuele Buitentemperatuur Sensor
+    name: Buitentemp sensor
     icon: mdi:thermometer
     max: 120
 
   dynamisch_weather_entity:
-    name: Dynamisch Forecast Weather Entity
+    name: Weer forecast
     icon: mdi:weather-partly-cloudy
     max: 120
 
 input_number:
   dynamisch_advies_analyse_dagen:
-    name: Dynamisch Advies Analyse Dagen
+    name: Analyseperiode
     icon: mdi:calendar-search
-    initial: 14
     min: 1
     max: 30
     step: 1
     mode: box
 
   dynamisch_warmte_penalty_laden_factor:
-    name: Dynamisch C-waarde Penalty Laden Factor
+    name: Warmtestraf laden
     icon: mdi:thermometer-lines
-    initial: 2.0
     min: 0
     max: 10
     step: 0.1
     mode: slider
 
   dynamisch_warmte_penalty_ontladen_factor:
-    name: Dynamisch C-waarde Penalty Ontladen Factor
+    name: Warmtestraf ontladen
     icon: mdi:thermometer-chevron-down
-    initial: 0.8
     min: 0
     max: 10
     step: 0.1
     mode: slider
 
   dynamisch_warmte_afkoeling_halveringstijd_uren:
-    name: Dynamisch Packtemp Afkoel Halveringstijd
+    name: Afkoeling halveertijd
     icon: mdi:coolant-temperature
     min: 0.25
     max: 24
-    step: 0.25
+    step: 0.5
     mode: slider
 
   dynamisch_warmte_stijging_laden_c_per_c2h:
-    name: Dynamisch Packtemp Warmte Stijging Laden Per C2h
+    name: Opwarming laden
     icon: mdi:heat-wave
-    initial: 42.0
     min: 0
-    max: 85
-    step: 0.5
+    max: 150
+    step: 1
     mode: slider
 
   dynamisch_warmte_stijging_ontladen_c_per_c2h:
-    name: Dynamisch Packtemp Warmte Stijging Ontladen Per C2h
+    name: Opwarming ontladen
     icon: mdi:heat-wave
-    initial: 23.0
     min: 0
-    max: 50
-    step: 0.5
+    max: 100
+    step: 1
     mode: slider
 
   dynamisch_max_temp_boven_80_soc:
-    name: Dynamisch Packtemp Limiet Boven 80% SoC
+    name: Max temp bij SoC >80%
     icon: mdi:thermometer-alert
-    initial: 40.0
     min: 25
     max: 50
     step: 0.5
     mode: slider
 
   dynamisch_max_temp_onder_80_soc:
-    name: Dynamisch Packtemp Limiet Onder 80% SoC
+    name: Max temp bij SoC <80%
     icon: mdi:thermometer-alert
-    initial: 45.0
     min: 25
     max: 55
     step: 0.5
     mode: slider
 
   dynamisch_temp_penalty_factor:
-    name: Dynamisch Packtemp Overschrijding Penalty Factor
+    name: Straf boven temp-limiet
     icon: mdi:thermometer-chevron-up
-    initial: 0.06
     min: 0
     max: 1
     step: 0.005
     mode: box
 
   dynamisch_temp_penalty_100_soc_factor:
-    name: Dynamisch Packtemp 100% SoC Penalty Factor
+    name: Extra straf 100% SoC
     icon: mdi:battery-alert-variant-outline
-    initial: 2.0
     min: 1.0
     max: 3.0
     step: 0.1
     mode: slider
 
   dynamisch_hoge_soc_verblijf_penalty_factor:
-    name: Dynamisch Hoge SoC Verblijf Penalty Factor
+    name: Straf SoC >90%
     icon: mdi:battery-high
-    initial: 1.0
     min: 0
     max: 10
     step: 0.1
     mode: slider
 
   dynamisch_lage_soc_verblijf_penalty_factor:
-    name: Dynamisch Lage SoC Verblijf Penalty Factor
+    name: Straf SoC <10%
     icon: mdi:battery-low
-    initial: 0.8
     min: 0
     max: 10
     step: 0.1
     mode: slider
 
   dynamisch_standby_verbruik_w:
-    name: Dynamisch Standby Verbruik
+    name: Standbyverbruik
     icon: mdi:power-sleep
-    initial: 5
     min: 0
     max: 100
-    step: 0.5
+    step: 1
     mode: slider
 
 template:
   - sensor:
-      - name: "Zendure 2400 AC Warmste Batterij Temperatuur"
+      - name: "Zendure 2400 AC Warmste Accutemperatuur"
         unique_id: zendure_2400_ac_warmste_batterij_temperatuur
         icon: mdi:thermometer-alert
         unit_of_measurement: "°C"
@@ -162,7 +150,7 @@ template:
           {% endfor %}
           {{ ns.values | max if ns.values else 'unknown' }}
 
-      - name: "Zendure 2400 AC Warmste Batterij Index"
+      - name: "Zendure 2400 AC Warmste Accu Index"
         unique_id: zendure_2400_ac_warmste_batterij_index
         icon: mdi:battery-search
         state: >-
