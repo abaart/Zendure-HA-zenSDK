@@ -44,6 +44,7 @@ views:
                 name: SoC
                 type: area
                 curve: stepline
+                extend_to: false
                 color: '#01a180'
                 opacity: 0.2
                 stroke_width: 2
@@ -70,6 +71,7 @@ views:
                 name: Prijs
                 type: line
                 curve: stepline
+                extend_to: false
                 color: '#ff9800'
                 stroke_width: 2
                 float_precision: 1
@@ -87,6 +89,7 @@ views:
               - entity: sensor.dynamisch_handelsstrategie
                 name: Vermogen
                 type: line
+                extend_to: false
                 stroke_width: 0
                 opacity: 0
                 yaxis_id: extra
@@ -102,6 +105,7 @@ views:
               - entity: sensor.dynamisch_handelsstrategie
                 name: Actie
                 type: line
+                extend_to: false
                 stroke_width: 0
                 opacity: 0
                 yaxis_id: extra
@@ -117,6 +121,7 @@ views:
               - entity: sensor.dynamisch_handelsstrategie
                 name: Stop-SoC
                 type: line
+                extend_to: false
                 stroke_width: 0
                 opacity: 0
                 yaxis_id: extra
@@ -132,6 +137,7 @@ views:
               - entity: sensor.dynamisch_handelsstrategie
                 name: Spread te klein
                 type: column
+                extend_to: false
                 color: '#ef5350'
                 opacity: 0.45
                 yaxis_id: prijs
@@ -154,6 +160,7 @@ views:
               - entity: sensor.dynamisch_handelsstrategie
                 name: Beste verkoop
                 type: line
+                extend_to: false
                 stroke_width: 0
                 opacity: 0
                 yaxis_id: extra
@@ -169,6 +176,7 @@ views:
               - entity: sensor.dynamisch_handelsstrategie
                 name: Nodig bij drempel
                 type: line
+                extend_to: false
                 stroke_width: 0
                 opacity: 0
                 yaxis_id: extra
@@ -184,6 +192,7 @@ views:
               - entity: sensor.dynamisch_handelsstrategie
                 name: Min spread
                 type: line
+                extend_to: false
                 stroke_width: 0
                 opacity: 0
                 yaxis_id: extra
@@ -199,6 +208,7 @@ views:
               - entity: sensor.dynamisch_handelsstrategie
                 name: Spread tekort
                 type: line
+                extend_to: false
                 stroke_width: 0
                 opacity: 0
                 yaxis_id: extra
@@ -300,6 +310,29 @@ views:
                 show: true
               chart:
                 height: 300px
+                events:
+                  updated: |
+                    EVAL:function(chartContext, config) {
+                      var root = document.querySelector('home-assistant');
+                      var hass = root && root.hass;
+                      var strategy = hass && hass.states['sensor.dynamisch_handelsstrategie'];
+                      var desiredMax = strategy && Date.parse(strategy.attributes.strategie_einde);
+                      var xaxis = config && config.config && config.config.xaxis;
+                      var currentMin = Number(xaxis && xaxis.min);
+                      var currentMax = Number(xaxis && xaxis.max);
+                      if (!Number.isFinite(desiredMax) || !Number.isFinite(currentMin) || desiredMax <= currentMin) return;
+                      if (Number.isFinite(currentMax) && Math.abs(currentMax - desiredMax) <= 1000) return;
+                      if (chartContext.__strategieAxisUpdatePending) return;
+                      chartContext.__strategieAxisUpdatePending = true;
+                      window.requestAnimationFrame(function() {
+                        var update = chartContext.updateOptions({ xaxis: { min: currentMin, max: desiredMax } }, false, false, false);
+                        if (update && typeof update.finally === 'function') {
+                          update.finally(function() { chartContext.__strategieAxisUpdatePending = false; });
+                        } else {
+                          chartContext.__strategieAxisUpdatePending = false;
+                        }
+                      });
+                    }
                 toolbar:
                   show: false
                 zoom:
