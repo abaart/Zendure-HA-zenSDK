@@ -353,6 +353,59 @@ class TestHistorischeStates:
         assert bronnen["beschikbare_energie"] == "history"
         assert bronnen["benodigde_energie"] == "history"
 
+    def test_haal_accustatus_gebruikt_actueel_als_historische_som_nul_is(self):
+        tijd = "2026-08-12T21:45:00+02:00"
+        logregels = []
+        app = _maak_app(
+            states={
+                "sensor.zendure_2400_ac_indicatie_beschikbare_energie": "0",
+                "sensor.zendure_2400_ac_indicatie_benodigde_energie": "5.55",
+            },
+            history={
+                "sensor.zendure_2400_ac_indicatie_beschikbare_energie": [
+                    _history_item("0", tijd),
+                ],
+                "sensor.zendure_2400_ac_indicatie_benodigde_energie": [
+                    _history_item("0.0", tijd),
+                ],
+            },
+        )
+        app.log = lambda bericht, **kwargs: logregels.append((bericht, kwargs))
+
+        accu, _, _, bronnen = app._haal_accustatus(datetime.fromisoformat(tijd))
+        eta = math.sqrt(0.90)
+
+        assert accu.huidig_kwh == 0.0
+        assert accu.max_kwh == pytest.approx(5.55 * eta)
+        assert bronnen["beschikbare_energie"] == "huidig_wegens_ongeldige_history"
+        assert bronnen["benodigde_energie"] == "huidig_wegens_ongeldige_history"
+        assert len(logregels) == 1
+        assert "actuele energie-indicaties gebruikt" in logregels[0][0]
+        assert logregels[0][1]["level"] == "WARNING"
+
+    def test_haal_accustatus_houdt_nul_als_actuele_combinatie_onvolledig_is(self):
+        tijd = "2026-08-12T21:45:00+02:00"
+        app = _maak_app(
+            states={
+                "sensor.zendure_2400_ac_indicatie_beschikbare_energie": "0",
+                "sensor.zendure_2400_ac_indicatie_benodigde_energie": "unavailable",
+            },
+            history={
+                "sensor.zendure_2400_ac_indicatie_beschikbare_energie": [
+                    _history_item("0", tijd),
+                ],
+                "sensor.zendure_2400_ac_indicatie_benodigde_energie": [
+                    _history_item("0.0", tijd),
+                ],
+            },
+        )
+
+        accu, _, _, bronnen = app._haal_accustatus(datetime.fromisoformat(tijd))
+
+        assert accu.max_kwh == 0.0
+        assert bronnen["beschikbare_energie"] == "history"
+        assert bronnen["benodigde_energie"] == "history"
+
 
 class TestStrategieAdvies:
     def test_advies_gebruikt_actuele_slots_grafiek_als_history_geen_slots_heeft(self):

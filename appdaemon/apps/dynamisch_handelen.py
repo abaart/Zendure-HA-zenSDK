@@ -1790,6 +1790,35 @@ class DynamischHandelen(hass.Hass):
         hw_min_pct = float(hw_min_pct or 0.0)
         hw_max_pct = float(hw_max_pct or 100.0)
 
+        if dp_start_tijd is not None and beschikbaar_kwh + benodigde_kwh <= 0.0:
+            actuele_beschikbaar_kwh = self._float_state(
+                "sensor.zendure_2400_ac_indicatie_beschikbare_energie"
+            )
+            actuele_benodigde_kwh = self._float_state(
+                "sensor.zendure_2400_ac_indicatie_benodigde_energie"
+            )
+            actuele_waarden_geldig = (
+                actuele_beschikbaar_kwh is not None
+                and actuele_benodigde_kwh is not None
+                and actuele_beschikbaar_kwh >= 0.0
+                and actuele_benodigde_kwh >= 0.0
+                and actuele_beschikbaar_kwh + actuele_benodigde_kwh > 0.0
+            )
+            if actuele_waarden_geldig:
+                self.log(
+                    "Dynamisch Handelen: historische energie-indicaties op "
+                    f"{dp_start_tijd.isoformat()} zijn samen 0 kWh "
+                    f"(beschikbaar={beschikbaar_kwh}, benodigd={benodigde_kwh}); "
+                    "actuele energie-indicaties gebruikt "
+                    f"(beschikbaar={actuele_beschikbaar_kwh}, "
+                    f"benodigd={actuele_benodigde_kwh})",
+                    level="WARNING",
+                )
+                beschikbaar_kwh = actuele_beschikbaar_kwh
+                benodigde_kwh = actuele_benodigde_kwh
+                beschikbaar_bron = "huidig_wegens_ongeldige_history"
+                benodigde_bron = "huidig_wegens_ongeldige_history"
+
         rte_pct = max(50.0, min(100.0, rte_pct))
         eta     = math.sqrt(rte_pct / 100.0)
 
