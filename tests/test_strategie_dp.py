@@ -594,6 +594,41 @@ class TestMinimaleSpread:
         for slot in schema:
             assert slot["vermogen_w"] == 0 or slot["vermogen_w"] >= 100
 
+    @pytest.mark.parametrize(
+        ("huidig_kwh", "prijs", "verwachte_actie", "verwachte_soc_kwh"),
+        [
+            (2.35, -1.00, "laden", 2.40),
+            (0.05, 1.00, "ontladen", 0.00),
+        ],
+    )
+    def test_gelijke_soc_bestemming_behoudt_laagste_vermogensopdracht(
+        self,
+        huidig_kwh,
+        prijs,
+        verwachte_actie,
+        verwachte_soc_kwh,
+    ):
+        """
+        Alle vermogensopdrachten bereiken hier hetzelfde laatste SoC-gridpunt.
+
+        De DP-tie-breaker kiest de eerste kandidaat in oplopende volgorde. Het
+        verwijderen van dubbele SoC-bestemmingen moet daarom 100 W behouden.
+        """
+        schema = los_dp_op(
+            maak_slots([prijs]),
+            maak_accu(huidig_kwh=huidig_kwh),
+            plateau_spreiding=False,
+            warmte_penalty_laden_factor=0.0,
+            warmte_penalty_ontladen_factor=0.0,
+            hoge_soc_verblijf_penalty_factor=0.0,
+            lage_soc_verblijf_penalty_factor=0.0,
+            standby_verbruik_w=0.0,
+        )
+
+        assert schema[0]["actie"] == verwachte_actie
+        assert schema[0]["vermogen_w"] == 100
+        assert schema[0]["soc_na_kwh"] == pytest.approx(verwachte_soc_kwh)
+
     def test_dp_gebruikt_minimum_grove_stappen_en_exact_maximum(self):
         """
         De DP-kandidaten bevatten 100W, grove stappen en de exacte max-limiet.

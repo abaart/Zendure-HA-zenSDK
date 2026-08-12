@@ -8,7 +8,7 @@ we DynamischHandelen kunnen importeren zonder Home Assistant of AppDaemon.
 import math
 import sys
 import types
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -96,12 +96,11 @@ def _slot(start: datetime, duur_uren: float, label: str) -> dict:
     }
 
 
-def _prijs_slot(start: datetime, duur_uren: float, prijs: float = 0.10) -> dict:
+def _bron_prijs_slot(start: datetime, duur_minuten: int, prijs: float) -> dict:
     return {
-        "start": start,
-        "end": start + timedelta(hours=duur_uren),
-        "price": prijs,
-        "duration_h": duur_uren,
+        "start": start.isoformat(),
+        "end": (start + timedelta(minutes=duur_minuten)).isoformat(),
+        "value": prijs,
     }
 
 
@@ -122,63 +121,140 @@ def _advies_slot(
     }
 
 
-class TestFijnmazigePrijsslots:
-    def test_verdeelt_eerste_drie_uur_in_kwartierslots(self):
-        nu = datetime(2026, 5, 24, 15, 0, tzinfo=timezone.utc)
+def test_initialize_plans_strategy_once_per_hour_at_minute_55():
+    app = _maak_app()
+    geplande_taken = []
+    app.run_hourly = lambda callback, start: geplande_taken.append((callback, start))
+    app.listen_state = lambda *args, **kwargs: None
+    app._zet_berekening_bezig = lambda bezig: None
+    app._initialiseer_berekening_duur_sensor = lambda: None
+    app._initialiseer_advies_sensor = lambda: None
+
+    app.initialize()
+
+    assert geplande_taken == [(app.bereken_strategie, time(0, 55, 0))]
+
+
+class TestKwartierPrijsslots:
+    def test_middelt_kwartierprijzen_na_zes_uur_tot_uurslots(self):
+        start = datetime(2026, 8, 12, 15, 15, tzinfo=timezone.utc)
+        prijzen = [0.05 + index / 100 for index in range(32)]
         slots = [
-            _prijs_slot(nu, 1, 0.10),
-            _prijs_slot(nu + timedelta(hours=1), 1, 0.20),
-            _prijs_slot(nu + timedelta(hours=2), 1, 0.30),
-            _prijs_slot(nu + timedelta(hours=3), 1, 0.40),
+            {
+                "start": start + timedelta(minutes=15 * index),
+                "end": start + timedelta(minutes=15 * (index + 1)),
+                "price": prijs,
+                "duration_h": 0.25,
+                "resolutie": "kwartierprijs",
+                "prijs_bron": "sensor.nordpool_kwartier",
+            }
+            for index, prijs in enumerate(prijzen)
         ]
 
-        resultaat = DynamischHandelen._verdeel_eerste_uren_in_kwartierslots(slots, nu)
+        resultaat = DynamischHandelen._bouw_hybride_prijsslots(
+            slots,
+            start + timedelta(minutes=1),
+        )
 
-        assert len(resultaat) == 13
-        assert [slot["duration_h"] for slot in resultaat[:12]] == [0.25] * 12
-        assert resultaat[0]["start"] == nu
-        assert resultaat[11]["end"] == nu + timedelta(hours=3)
-        assert resultaat[12]["start"] == nu + timedelta(hours=3)
-        assert resultaat[12]["duration_h"] == 1.0
-        assert resultaat[12]["resolutie"] == "bron"
+        assert len(resultaat) == 26
+        assert [slot["duration_h"] for slot in resultaat[:24]] == [0.25] * 24
+        assert [slot["duration_h"] for slot in resultaat[24:]] == [1.0, 1.0]
+        assert resultaat[24]["start"] == start + timedelta(hours=6)
+        assert resultaat[24]["price"] == pytest.approx(sum(prijzen[24:28]) / 4)
+        assert resultaat[25]["price"] == pytest.approx(sum(prijzen[28:32]) / 4)
+        assert {slot["resolutie"] for slot in resultaat[:24]} == {"kwartierprijs"}
+        assert {slot["resolutie"] for slot in resultaat[24:]} == {"uurprijs_gemiddeld"}
 
-    def test_verdeelt_lopend_uur_vanaf_actief_kwartier(self):
-        uur_start = datetime(2026, 5, 24, 15, 0, tzinfo=timezone.utc)
-        nu = uur_start + timedelta(minutes=16)
+    def test_bewaart_onvolledige_laatste_uurgroep_als_kwartierprijzen(self):
+        start = datetime(2026, 8, 12, 15, 0, tzinfo=timezone.utc)
         slots = [
-            _prijs_slot(uur_start, 1, 0.10),
-            _prijs_slot(uur_start + timedelta(hours=1), 1, 0.20),
+            {
+                "start": start + timedelta(minutes=15 * index),
+                "end": start + timedelta(minutes=15 * (index + 1)),
+                "price": 0.10,
+                "duration_h": 0.25,
+                "resolutie": "kwartierprijs",
+                "prijs_bron": "sensor.nordpool_kwartier",
+            }
+            for index in range(27)
         ]
 
-        resultaat = DynamischHandelen._verdeel_eerste_uren_in_kwartierslots(slots, nu)
+        resultaat = DynamischHandelen._bouw_hybride_prijsslots(slots, start)
 
-        assert resultaat[0]["start"] == uur_start + timedelta(minutes=15)
-        assert resultaat[0]["end"] == uur_start + timedelta(minutes=30)
-        assert resultaat[0]["duration_h"] == 0.25
-        assert all(slot["end"] > nu for slot in resultaat)
+        assert len(resultaat) == 27
+        assert [slot["duration_h"] for slot in resultaat[-3:]] == [0.25] * 3
+        assert {slot["resolutie"] for slot in resultaat[-3:]} == {"kwartierprijs"}
 
-    def test_stopt_fijnmazige_slots_op_actief_kwartier_plus_drie_uur(self):
-        uur_start = datetime(2026, 5, 24, 15, 0, tzinfo=timezone.utc)
-        nu = uur_start + timedelta(minutes=16)
-        slots = [
-            _prijs_slot(uur_start + timedelta(hours=i), 1, 0.10 + i / 100.0)
-            for i in range(5)
+    def test_leest_verschillende_kwartierprijzen_rechtstreeks_uit_bron(self):
+        start = (
+            datetime.now().astimezone().replace(second=0, microsecond=0)
+            + timedelta(minutes=15)
+        )
+        bron_entity = "sensor.nordpool_kwh_nl_eur_3_09_0"
+        raw_today = [
+            _bron_prijs_slot(start + timedelta(minutes=15 * index), 15, prijs)
+            for index, prijs in enumerate((0.05, 0.08, 0.21, 0.13))
         ]
+        app = _maak_app({
+            "input_text.dynamisch_nordpool_sensor": bron_entity,
+            bron_entity: {
+                "state": "0.05",
+                "attributes": {"raw_today": raw_today, "raw_tomorrow": []},
+            },
+            "sensor.dynamisch_nordpool": {
+                "state": "0.1175",
+                "attributes": {
+                    "raw_today": [_bron_prijs_slot(start, 60, 0.1175)],
+                },
+            },
+        })
 
-        resultaat = DynamischHandelen._verdeel_eerste_uren_in_kwartierslots(slots, nu)
-        horizon = uur_start + timedelta(hours=3, minutes=15)
-        laatste_kwartier = [
-            slot for slot in resultaat
-            if slot["resolutie"] == "fijnmazig_kwartier"
-        ][-1]
-        eerste_bron = [
-            slot for slot in resultaat
-            if slot["resolutie"] == "bron"
-        ][0]
+        resultaat = app._haal_prijsslots()
 
-        assert laatste_kwartier["end"] == horizon
-        assert eerste_bron["start"] == horizon
-        assert eerste_bron["end"] == uur_start + timedelta(hours=4)
+        assert [slot["price"] for slot in resultaat] == [0.05, 0.08, 0.21, 0.13]
+        assert [slot["duration_h"] for slot in resultaat] == [0.25] * 4
+        assert {slot["resolutie"] for slot in resultaat} == {"kwartierprijs"}
+        assert {slot["prijs_bron"] for slot in resultaat} == {bron_entity}
+
+    def test_leest_raw_today_en_raw_tomorrow(self):
+        start = (
+            datetime.now().astimezone().replace(second=0, microsecond=0)
+            + timedelta(minutes=15)
+        )
+        bron_entity = "sensor.nordpool_kwartier"
+        app = _maak_app({
+            "input_text.dynamisch_nordpool_sensor": bron_entity,
+            bron_entity: {
+                "state": "0.10",
+                "attributes": {
+                    "raw_today": [_bron_prijs_slot(start, 15, 0.10)],
+                    "raw_tomorrow": [_bron_prijs_slot(start + timedelta(days=1), 15, 0.20)],
+                },
+            },
+        })
+
+        resultaat = app._haal_prijsslots()
+
+        assert [slot["price"] for slot in resultaat] == [0.10, 0.20]
+
+    def test_gebruikt_geen_uurprijs_als_kwartierprijs(self):
+        start = (
+            datetime.now().astimezone().replace(second=0, microsecond=0)
+            + timedelta(minutes=15)
+        )
+        bron_entity = "sensor.nordpool_uur"
+        app = _maak_app({
+            "input_text.dynamisch_nordpool_sensor": bron_entity,
+            bron_entity: {
+                "state": "0.10",
+                "attributes": {
+                    "raw_today": [_bron_prijs_slot(start, 60, 0.10)],
+                    "raw_tomorrow": [],
+                },
+            },
+        })
+
+        assert app._haal_prijsslots() == []
 
 
 class TestHistorischeStates:

@@ -920,6 +920,17 @@ def los_dp_op(
             * overschrijding_c
         )
 
+    # De overtemperatuur-rate hangt alleen af van temperatuur- en SoC-index.
+    # Bewaar elke combinatie eenmaal, zodat iedere DP-overgang alleen nog twee
+    # tabelwaarden hoeft op te tellen.
+    overtemp_penalty_rate_per_idx = [
+        [
+            overtemp_penalty_rate_eur_per_h_idx(temp_idx, soc_idx)
+            for soc_idx in range(n_soc + 1)
+        ]
+        for temp_idx in range(n_temp)
+    ]
+
     def overtemp_penalty_eur_idx(
         temp_voor_idx: int,
         soc_voor_idx: int,
@@ -932,8 +943,8 @@ def los_dp_op(
         return (
             0.5
             * (
-                overtemp_penalty_rate_eur_per_h_idx(temp_voor_idx, soc_voor_idx)
-                + overtemp_penalty_rate_eur_per_h_idx(temp_na_idx, soc_na_idx)
+                overtemp_penalty_rate_per_idx[temp_voor_idx][soc_voor_idx]
+                + overtemp_penalty_rate_per_idx[temp_na_idx][soc_na_idx]
             )
             * duur_h
         )
@@ -975,13 +986,32 @@ def los_dp_op(
         prijs  = slots[t]["price"]       # €/kWh
         duur_h = slots[t]["duration_h"]  # uren
 
+        # Een temperatuurtransitie hangt binnen een slot alleen af van de
+        # begin-temperatuur, actie en gekwantiseerde actie-energie. Kandidaten
+        # met dezelfde actie-energie delen daarom dezelfde overgangstabel.
+        temp_transitie_cache: dict[tuple[str, float], list[int]] = {}
+
+        def temp_transities(energie_accu_kwh: float, actie: str) -> list[int]:
+            sleutel = (actie, energie_accu_kwh)
+            transities = temp_transitie_cache.get(sleutel)
+            if transities is None:
+                transities = [
+                    volgende_temp_idx(q, t, energie_accu_kwh, actie)
+                    for q in range(n_temp)
+                ]
+                temp_transitie_cache[sleutel] = transities
+            return transities
+
+        q_rust_per_q = temp_transities(0.0, "rust")
+
         for s in range(n_soc + 1):
             soc_kwh = soc_kwh_per_idx[s]  # altijd een gridpunt (veelvoud van SOC_STAP_KWH)
 
-            # Deze kandidaten hangen alleen af van slot t en SoC-index s, niet van
-            # temperatuur-index q. De q-afhankelijke temperatuurovergang blijft
-            # hieronder in dezelfde volgorde berekend als voorheen.
+            # Deze kandidaten hangen alleen af van slot t en SoC-index s. De
+            # q-afhankelijke temperatuuruitkomsten staan als tabellen bij elke
+            # unieke kandidaat.
             laad_kandidaten = []
+            geziene_laad_bestemmingen: set[int] = set()
             derating = bereken_derating(max(0.0, soc_kwh), max_kwh)
             eff_laad_w = max_laad_w * derating
             ruimte_kwh = max_kwh - soc_kwh
@@ -993,6 +1023,12 @@ def los_dp_op(
                 s_laden = kwh_naar_idx_omlaag(soc_kwh + energie_ideaal)
                 if s_laden <= s:
                     continue
+                # Vermogensstappen staan oplopend. Wanneer meerdere opdrachten
+                # hetzelfde SoC-gridpunt bereiken, had de bestaande strikte
+                # tie-breaker altijd de eerste (laagste) opdracht behouden.
+                if s_laden in geziene_laad_bestemmingen:
+                    continue
+                geziene_laad_bestemmingen.add(s_laden)
 
                 energie_naar_accu_q = soc_kwh_per_idx[s_laden] - soc_kwh
                 energie_van_net = energie_naar_accu_q / eta_laad if eta_laad > 0 else 0.0
@@ -1002,6 +1038,11 @@ def los_dp_op(
                     duur_h,
                     warmte_penalty_laden_factor,
                 )
+                q_laden_per_q = temp_transities(energie_naar_accu_q, "laden")
+                kosten_temp_per_q = [
+                    overtemp_penalty_eur_idx(q, s, q_laden, s_laden, duur_h)
+                    for q, q_laden in enumerate(q_laden_per_q)
+                ]
                 laad_kandidaten.append((
                     stap_index,
                     vermogen_w,
@@ -1012,9 +1053,12 @@ def los_dp_op(
                         (soc_kwh + soc_kwh_per_idx[s_laden]) / 2.0,
                         duur_h,
                     ),
+                    q_laden_per_q,
+                    kosten_temp_per_q,
                 ))
 
             ontlaad_kandidaten = []
+            geziene_ontlaad_bestemmingen: set[int] = set()
             for stap_index, vermogen_w in enumerate(ontlaad_vermogensstappen):
                 if stap_index % 16 == 0:
                     controleer_annulering()
@@ -1025,6 +1069,9 @@ def los_dp_op(
                 s_ontladen = kwh_naar_idx_omhoog(soc_kwh - energie_ideaal_uit)
                 if s_ontladen >= s:
                     continue
+                if s_ontladen in geziene_ontlaad_bestemmingen:
+                    continue
+                geziene_ontlaad_bestemmingen.add(s_ontladen)
 
                 energie_uit_accu_q = soc_kwh - soc_kwh_per_idx[s_ontladen]
                 energie_naar_net = energie_uit_accu_q * eta_ontlaad
@@ -1038,27 +1085,47 @@ def los_dp_op(
                     soc_kwh_per_idx[s_ontladen],
                     duur_h,
                 )
+                s_ontladen_met_standby = kwh_naar_idx(soc_na_ontladen_met_standby)
+                q_ontladen_per_q = temp_transities(energie_uit_accu_q, "ontladen")
+                kosten_temp_per_q = [
+                    overtemp_penalty_eur_idx(
+                        q,
+                        s,
+                        q_ontladen,
+                        s_ontladen_met_standby,
+                        duur_h,
+                    )
+                    for q, q_ontladen in enumerate(q_ontladen_per_q)
+                ]
                 ontlaad_kandidaten.append((
                     stap_index,
                     vermogen_w,
                     s_ontladen,
                     energie_uit_accu_q,
                     soc_na_ontladen_met_standby,
+                    s_ontladen_met_standby,
                     opbrengst_ontladen - kosten_warmte,
                     *soc_verblijf_penalty_basis(
                         (soc_kwh + soc_na_ontladen_met_standby) / 2.0,
                         duur_h,
                     ),
+                    q_ontladen_per_q,
+                    kosten_temp_per_q,
                 ))
+
+            soc_rust_kwh = soc_met_standby_verlies(soc_kwh, duur_h)
+            s_rust = kwh_naar_idx(soc_rust_kwh)
+            kosten_overtemp_rust_per_q = [
+                overtemp_penalty_eur_idx(q, s, q_rust, s_rust, duur_h)
+                for q, q_rust in enumerate(q_rust_per_q)
+            ]
 
             for q in range(n_temp):
                 controleer_annulering()
                 # ── Optie: RUST ───────────────────────────────────────────────
                 # Geen actie, standby verlaagt SoC en temperatuur koelt richting buiten.
-                soc_rust_kwh = soc_met_standby_verlies(soc_kwh, duur_h)
-                s_rust = kwh_naar_idx(soc_rust_kwh)
-                q_rust = volgende_temp_idx(q, t, 0.0, "rust")
-                kosten_overtemp_rust = overtemp_penalty_eur_idx(q, s, q_rust, s_rust, duur_h)
+                q_rust = q_rust_per_q[q]
+                kosten_overtemp_rust = kosten_overtemp_rust_per_q[q]
                 kosten_soc_verblijf = soc_verblijf_penalty_componenten(
                     (soc_kwh + soc_rust_kwh) / 2.0,
                     idx_naar_temp(q_rust),
@@ -1081,11 +1148,13 @@ def los_dp_op(
                     waarde_basis,
                     hoge_soc_verblijf_basis,
                     lage_soc_verblijf_penalty,
+                    q_laden_per_q,
+                    kosten_temp_per_q,
                 ) in laad_kandidaten:
                     if stap_index % 16 == 0:
                         controleer_annulering()
-                    q_laden = volgende_temp_idx(q, t, energie_naar_accu_q, "laden")
-                    kosten_temp = overtemp_penalty_eur_idx(q, s, q_laden, s_laden, duur_h)
+                    q_laden = q_laden_per_q[q]
+                    kosten_temp = kosten_temp_per_q[q]
                     kosten_soc_verblijf = (
                         hoge_soc_verblijf_basis * temp_factor_per_idx[q_laden]
                         + lage_soc_verblijf_penalty
@@ -1109,21 +1178,17 @@ def los_dp_op(
                     s_ontladen,
                     energie_uit_accu_q,
                     soc_na_ontladen_met_standby,
+                    s_ontladen_met_standby,
                     waarde_basis,
                     hoge_soc_verblijf_basis,
                     lage_soc_verblijf_penalty,
+                    q_ontladen_per_q,
+                    kosten_temp_per_q,
                 ) in ontlaad_kandidaten:
                     if stap_index % 16 == 0:
                         controleer_annulering()
-                    q_ontladen = volgende_temp_idx(q, t, energie_uit_accu_q, "ontladen")
-                    s_ontladen_met_standby = kwh_naar_idx(soc_na_ontladen_met_standby)
-                    kosten_temp = overtemp_penalty_eur_idx(
-                        q,
-                        s,
-                        q_ontladen,
-                        s_ontladen_met_standby,
-                        duur_h,
-                    )
+                    q_ontladen = q_ontladen_per_q[q]
+                    kosten_temp = kosten_temp_per_q[q]
                     kosten_soc_verblijf = (
                         hoge_soc_verblijf_basis * temp_factor_per_idx[q_ontladen]
                         + lage_soc_verblijf_penalty

@@ -1343,6 +1343,26 @@ views:
                 icon: mdi:arrow-expand-vertical
               - type: attribute
                 entity: sensor.dynamisch_handelsstrategie
+                attribute: prijs_bron
+                name: Prijsbron
+                icon: mdi:database-clock-outline
+              - type: attribute
+                entity: sensor.dynamisch_handelsstrategie
+                attribute: planning_resolutie
+                name: Prijsresolutie
+                icon: mdi:clock-time-three-outline
+              - type: attribute
+                entity: sensor.dynamisch_handelsstrategie
+                attribute: kwartierprijs_slots
+                name: Kwartierprijzen in planning
+                icon: mdi:timeline-clock-outline
+              - type: attribute
+                entity: sensor.dynamisch_handelsstrategie
+                attribute: uurprijs_slots
+                name: Gemiddelde uurprijzen in planning
+                icon: mdi:clock-outline
+              - type: attribute
+                entity: sensor.dynamisch_handelsstrategie
                 attribute: bijgewerkt
                 name: Bijgewerkt
                 icon: mdi:clock-check

@@ -2,7 +2,7 @@
 Dynamisch Handelen - Home Assistant integratie (AppDaemon)
 ==========================================================
 
-AppDaemon app die dagelijks om 14:35 en op verzoek de optimale
+AppDaemon app die ieder uur om :55 en op verzoek de optimale
 laad/ontlaad strategie berekent en publiceert als sensor.dynamisch_handelsstrategie.
 
 BESTANDSLOCATIES IN HA
@@ -16,7 +16,7 @@ waardoor `from strategie_dp import ...` direct werkt.
 GEBRUIKTE HA-ENTITEITEN
 ------------------------
 Ingangen:
-  sensor.dynamisch_nordpool                              prijs vandaag + morgen
+  input_text.dynamisch_nordpool_sensor                   Nordpool-bron met kwartierprijzen
   sensor.zendure_2400_ac_indicatie_beschikbare_energie   kWh leverbaar naar net
   sensor.zendure_2400_ac_indicatie_benodigde_energie     kWh nodig van net om vol te laden
   sensor.zendure_2400_ac_laadpercentage                  actuele SoC (%) voor actieve-slot-correctie
@@ -78,8 +78,8 @@ from strategie_dp import (
 
 
 GRAFIEK_HISTORIE_UREN = 6.0
-FIJNMAZIGE_SLOT_MINUTEN = 15
-FIJNMAZIGE_HORIZON_UREN = 3.0
+KWARTIER_SLOT_MINUTEN = 15
+KWARTIER_HORIZON_UREN = 6.0
 
 
 def _lees_slot_datetimes(slot: dict) -> tuple[datetime, datetime] | None:
@@ -227,9 +227,9 @@ class DynamischHandelen(hass.Hass):
     def initialize(self):
         """
         AppDaemon roept initialize() aan bij opstarten en na een reload.
-        We registreren hier vier uurlijkse taken en knop/config-triggers.
+        We registreren hier de berekening op :55 en knop/config-triggers.
         """
-        self.log("Dynamisch Handelen: gestart, schema wordt elk kwartier herberekend")
+        self.log("Dynamisch Handelen: gestart, schema wordt ieder uur om :55 herberekend")
         self._berekening_bezig = False
         self._herberekening_gepland = False
         self._laatste_herberekening_kwargs = None
@@ -237,10 +237,7 @@ class DynamischHandelen(hass.Hass):
         self._zet_berekening_bezig(False)
         self._initialiseer_berekening_duur_sensor()
         self._initialiseer_advies_sensor()
-        self.run_hourly(self.bereken_strategie, time(0, 0, 0))
-        self.run_hourly(self.bereken_strategie, time(0, 15, 0))
-        self.run_hourly(self.bereken_strategie, time(0, 30, 0))
-        self.run_hourly(self.bereken_strategie, time(0, 45, 0))
+        self.run_hourly(self.bereken_strategie, time(0, 55, 0))
         self.listen_state(
             self._herbereken_op_knop,
             "input_button.dynamisch_handelsstrategie_herberekenen",
@@ -274,6 +271,7 @@ class DynamischHandelen(hass.Hass):
             "input_number.dynamisch_hoge_soc_verblijf_penalty_factor",
             "input_number.dynamisch_lage_soc_verblijf_penalty_factor",
             "input_number.dynamisch_standby_verbruik_w",
+            "input_text.dynamisch_nordpool_sensor",
             "input_text.dynamisch_buitentemperatuur_sensor",
             "input_text.dynamisch_weather_entity",
         ):
@@ -1069,14 +1067,20 @@ class DynamischHandelen(hass.Hass):
         plateau_spreiding = self._haal_plateau_spreiding()
         thermisch = self._haal_thermische_config(slots, dp_start_tijd)
         stop_als_geannuleerd()
-        fijnmazige_slots = [
+        kwartierprijs_slots = [
             s for s in slots
-            if s.get("resolutie") == "fijnmazig_kwartier"
+            if s.get("resolutie") == "kwartierprijs"
         ]
+        uurprijs_slots = [
+            s for s in slots
+            if s.get("resolutie") == "uurprijs_gemiddeld"
+        ]
+        prijs_bron = slots[0].get("prijs_bron")
 
         self.log(
             f"Dynamisch Handelen: {len(slots)} slots "
-            f"({len(fijnmazige_slots)} kwartierslots in eerste {FIJNMAZIGE_HORIZON_UREN:.0f} uur) | "
+            f"({len(kwartierprijs_slots)} kwartierprijzen / "
+            f"{len(uurprijs_slots)} gemiddelde uurprijzen uit {prijs_bron}) | "
             f"accu {accu.huidig_kwh:.2f}/{accu.max_kwh:.2f} kWh | "
             f"eta={accu.eta_laad:.3f} | "
             f"laad {accu.max_laad_w:.0f} W / ontlaad {accu.max_ontlaad_w:.0f} W | "
@@ -1205,11 +1209,15 @@ class DynamischHandelen(hass.Hass):
                 "grafiek_historie_uren": GRAFIEK_HISTORIE_UREN,
                 "grafiek_start":       grafiek_start,
                 "strategie_einde":     strategie_einde,
-                "planning_resolutie":   "eerste 3 uur per 15 min, daarna bronresolutie",
-                "fijnmazige_horizon_h": FIJNMAZIGE_HORIZON_UREN,
-                "fijnmazige_slot_minuten": FIJNMAZIGE_SLOT_MINUTEN,
-                "fijnmazige_slots":     len(fijnmazige_slots),
-                "bron_slots":           len(slots) - len(fijnmazige_slots),
+                "prijs_bron":           prijs_bron,
+                "planning_resolutie":   "eerste 6 uur kwartierprijzen, daarna gemiddelden per uur",
+                "kwartierprijs_slots":  len(kwartierprijs_slots),
+                "uurprijs_slots":       len(uurprijs_slots),
+                # Bestaande attribuutnamen blijven beschikbaar voor dashboards en automations.
+                "fijnmazige_horizon_h": KWARTIER_HORIZON_UREN,
+                "fijnmazige_slot_minuten": KWARTIER_SLOT_MINUTEN,
+                "fijnmazige_slots":     len(kwartierprijs_slots),
+                "bron_slots":           len(uurprijs_slots),
                 "laad_slots":          len(laad_slots),
                 "ontlaad_slots":       len(ontlaad_slots),
                 "spread_blokkades":    spread_blokkades,
@@ -1256,18 +1264,30 @@ class DynamischHandelen(hass.Hass):
 
     def _haal_prijsslots(self) -> list[dict]:
         """
-        Haalt alle beschikbare toekomstige prijsslots op uit de Nordpool sensor.
+        Haalt toekomstige kwartierprijzen rechtstreeks uit de Nordpool-bron.
 
-        sensor.dynamisch_nordpool aggregeert de ruwe Nordpool-data al naar de
-        gewenste tijdsresolutie (uur of kwartier) via de bestaande YAML-sensor.
-        We gebruiken raw_today én raw_tomorrow zodat we altijd zo ver mogelijk
-        vooruit plannen — morgen is beschikbaar vanaf ±14:00.
+        `input_text.dynamisch_nordpool_sensor` bevat de entity_id van de HACS
+        Nordpool-sensor. We lezen `raw_today` en `raw_tomorrow` van die bron,
+        zodat `input_boolean.dynamisch_15_minuten` geen kwartierprijzen meer tot
+        uurprijzen kan middelen voordat de DP ze ontvangt.
 
-        Slots die al volledig zijn verstreken worden overgeslagen. De eerste
-        drie uur worden opgesplitst in kwartierslots zodat de DP sneller kan
-        reageren op temperatuur- en SoC-drempels.
+        Alleen bron-slots van exact 15 minuten worden geaccepteerd. De eerste
+        zes uur blijven afzonderlijke marktprijzen. Daarna worden telkens vier
+        opeenvolgende kwartierprijzen gemiddeld tot één DP-slot van een uur.
+        Een onvolledige laatste groep blijft op kwartierresolutie staan. Slots
+        die al volledig zijn verstreken worden overgeslagen.
         """
-        attr         = self.get_state("sensor.dynamisch_nordpool", attribute="all") or {}
+        bron_entity = str(
+            self.get_state("input_text.dynamisch_nordpool_sensor") or ""
+        ).strip()
+        if not bron_entity.startswith("sensor."):
+            self.log(
+                "Dynamisch Handelen: input_text.dynamisch_nordpool_sensor bevat geen geldige sensor entity_id",
+                level="ERROR",
+            )
+            return []
+
+        attr         = self.get_state(bron_entity, attribute="all") or {}
         attributes   = attr.get("attributes", {})
         raw_today    = attributes.get("raw_today")    or []
         raw_tomorrow = attributes.get("raw_tomorrow") or []
@@ -1279,6 +1299,7 @@ class DynamischHandelen(hass.Hass):
             try:
                 start = datetime.fromisoformat(str(item["start"])).astimezone()
                 end   = datetime.fromisoformat(str(item["end"])).astimezone()
+                price = float(item["value"])
             except (KeyError, ValueError, TypeError) as exc:
                 self.log(f"Dynamisch Handelen: ongeldig prijsslot overgeslagen: {exc}", level="WARNING")
                 continue
@@ -1286,71 +1307,90 @@ class DynamischHandelen(hass.Hass):
             if end <= nu:
                 continue
 
+            duur_seconden = (end - start).total_seconds()
+            if not math.isclose(
+                duur_seconden,
+                KWARTIER_SLOT_MINUTEN * 60,
+                abs_tol=1.0,
+            ):
+                self.log(
+                    f"Dynamisch Handelen: prijsslot van {duur_seconden / 60:.1f} minuten "
+                    f"uit {bron_entity} overgeslagen; 15 minuten vereist",
+                    level="WARNING",
+                )
+                continue
+
             slots.append({
                 "start":      start,
                 "end":        end,
-                "price":      float(item["value"]),
-                "duration_h": (end - start).total_seconds() / 3600.0,
+                "price":      price,
+                "duration_h": duur_seconden / 3600.0,
+                "resolutie":  "kwartierprijs",
+                "prijs_bron": bron_entity,
             })
 
         slots.sort(key=lambda s: s["start"])
-        return self._verdeel_eerste_uren_in_kwartierslots(slots, nu)
+        return self._bouw_hybride_prijsslots(slots, nu)
 
     @staticmethod
-    def _verdeel_eerste_uren_in_kwartierslots(
-        slots: list[dict],
+    def _bouw_hybride_prijsslots(
+        kwartier_slots: list[dict],
         nu: datetime,
-        horizon_h: float = FIJNMAZIGE_HORIZON_UREN,
-        slot_minuten: int = FIJNMAZIGE_SLOT_MINUTEN,
+        horizon_h: float = KWARTIER_HORIZON_UREN,
     ) -> list[dict]:
-        """Splitst nabije prijsslots in kwartieren voor thermische sturing."""
-        if horizon_h <= 0 or slot_minuten <= 0:
-            return slots
+        """Behoudt zes uur kwartierprijzen en middelt latere groepen per uur."""
+        if not kwartier_slots or horizon_h <= 0:
+            return kwartier_slots
 
         horizon_start = nu.replace(
-            minute=(nu.minute // slot_minuten) * slot_minuten,
+            minute=(nu.minute // KWARTIER_SLOT_MINUTEN) * KWARTIER_SLOT_MINUTEN,
             second=0,
             microsecond=0,
         )
-        horizon = horizon_start + timedelta(hours=horizon_h)
-        stap = timedelta(minutes=slot_minuten)
-        verdeelde_slots: list[dict] = []
+        horizon_einde = horizon_start + timedelta(hours=horizon_h)
+        resultaat = [
+            dict(slot)
+            for slot in kwartier_slots
+            if slot["start"] < horizon_einde
+        ]
+        latere_slots = [
+            slot
+            for slot in kwartier_slots
+            if slot["start"] >= horizon_einde
+        ]
 
-        for slot in slots:
-            start = slot["start"]
-            end = slot["end"]
-            if end <= nu:
+        index = 0
+        while index < len(latere_slots):
+            groep = latere_slots[index:index + 4]
+            is_volledig_uur = (
+                len(groep) == 4
+                and all(
+                    groep[positie]["end"] == groep[positie + 1]["start"]
+                    for positie in range(3)
+                )
+            )
+            if not is_volledig_uur:
+                resultaat.append(dict(latere_slots[index]))
+                index += 1
                 continue
 
-            if start >= horizon:
-                nieuw_slot = dict(slot)
-                nieuw_slot.setdefault("resolutie", "bron")
-                nieuw_slot["duration_h"] = (end - start).total_seconds() / 3600.0
-                verdeelde_slots.append(nieuw_slot)
-                continue
+            totale_duur_h = sum(slot["duration_h"] for slot in groep)
+            gemiddelde_prijs = sum(
+                slot["price"] * slot["duration_h"]
+                for slot in groep
+            ) / totale_duur_h
+            resultaat.append({
+                "start":      groep[0]["start"],
+                "end":        groep[-1]["end"],
+                "price":      gemiddelde_prijs,
+                "duration_h": totale_duur_h,
+                "resolutie":  "uurprijs_gemiddeld",
+                "prijs_bron": groep[0].get("prijs_bron"),
+            })
+            index += 4
 
-            deel_start = start
-            while deel_start < end and deel_start < horizon:
-                deel_end = min(deel_start + stap, end, horizon)
-                if deel_end > nu:
-                    nieuw_slot = dict(slot)
-                    nieuw_slot["start"] = deel_start
-                    nieuw_slot["end"] = deel_end
-                    nieuw_slot["duration_h"] = (deel_end - deel_start).total_seconds() / 3600.0
-                    nieuw_slot["resolutie"] = "fijnmazig_kwartier"
-                    verdeelde_slots.append(nieuw_slot)
-                deel_start = deel_end
-
-            if deel_start < end:
-                nieuw_slot = dict(slot)
-                nieuw_slot["start"] = deel_start
-                nieuw_slot["end"] = end
-                nieuw_slot["duration_h"] = (end - deel_start).total_seconds() / 3600.0
-                nieuw_slot["resolutie"] = "bron"
-                verdeelde_slots.append(nieuw_slot)
-
-        verdeelde_slots.sort(key=lambda s: s["start"])
-        return verdeelde_slots
+        resultaat.sort(key=lambda s: s["start"])
+        return resultaat
 
     def _bepaal_dp_start_tijd(self, slots: list[dict]) -> datetime | None:
         """Gebruikt het begin van het lopende prijsslot als starttijd voor de DP."""

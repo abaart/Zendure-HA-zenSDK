@@ -9,6 +9,7 @@ Deze fork behoudt een paar lokale wijzigingen ten opzichte van `Gielz1986/Zendur
 
 - `dynamisch_minimale_spread` gebruikt een absolute spread in `ct/kWh`, geen percentage.
 - `sensor.dynamisch_spread_indicatie`, `sensor.dynamisch_spread_indicatie_nom`, `sensor.dynamisch_spread_indicatie_morgen`, en `sensor.dynamisch_spread_indicatie_nom_morgen` berekenen spread met `(gemiddelde dure prijs - gemiddelde goedkope prijs) * 100`, zodat de sensorwaarde past bij `unit_of_measurement: "ct/kWh"`.
+- `appdaemon/apps/dynamisch_handelen.py` leest echte 15-minutenprijzen rechtstreeks uit `raw_today` en `raw_tomorrow` van de sensor in `input_text.dynamisch_nordpool_sensor`; de eerste zes uur blijven kwartierprijzen en latere groepen van vier kwartieren worden voor de DP tot gemiddelde uurprijzen samengevoegd.
 - `.DS_Store` bestanden worden genegeerd met `.gitignore`, zodat macOS metadata-bestanden buiten commits blijven.
 
 ## Lokaal deployen naar Home Assistant
