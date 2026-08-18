@@ -7,7 +7,10 @@ ENV_FILE="${REPO_ROOT}/.env"
 
 DRY_RUN=0
 RESTART_APPDAEMON=1
-APPDAEMON_APP_NAME="dynamisch_handelen"
+APPDAEMON_APP_NAMES=(
+  "dynamisch_handelen"
+  "zendure_kwartieradministratie"
+)
 
 usage() {
   cat <<'EOF'
@@ -114,30 +117,36 @@ sync_file() {
   rsync "${rsync_args[@]}" -e "ssh -p ${HA_SSH_PORT}" "${source_path}" "${HA_SSH_USER}@${HA_SSH_HOST}:$(remote_quote "${target_path}")"
 }
 
-sync_apps_yaml_section() {
+sync_apps_yaml_sections() {
   local target_path="${HA_CONFIG_DIR}/appdaemon/apps/apps.yaml"
   local target_dir
   target_dir="$(dirname -- "${target_path}")"
   local temp_dir
   temp_dir="$(mktemp -d)"
   local remote_apps="${temp_dir}/remote-apps.yaml"
-  local merged_apps="${temp_dir}/merged-apps.yaml"
+  local current_apps="${temp_dir}/current-apps.yaml"
+  local next_apps="${temp_dir}/next-apps.yaml"
 
   remote_run "mkdir -p $(remote_quote "${target_dir}")"
   remote_run "[ -f $(remote_quote "${target_path}") ] && cat $(remote_quote "${target_path}") || true" >"${remote_apps}"
+  cp "${remote_apps}" "${current_apps}"
 
-  python3 "${REPO_ROOT}/scripts/merge_apps_yaml.py" \
-    --section "${APPDAEMON_APP_NAME}" \
-    --source "${REPO_ROOT}/appdaemon/apps/apps.yaml" \
-    --remote "${remote_apps}" \
-    --output "${merged_apps}"
+  local section
+  for section in "${APPDAEMON_APP_NAMES[@]}"; do
+    python3 "${REPO_ROOT}/scripts/merge_apps_yaml.py" \
+      --section "${section}" \
+      --source "${REPO_ROOT}/appdaemon/apps/apps.yaml" \
+      --remote "${current_apps}" \
+      --output "${next_apps}"
+    mv "${next_apps}" "${current_apps}"
+  done
 
   local rsync_args=(-avz)
   if [[ "${DRY_RUN}" -eq 1 ]]; then
     rsync_args+=(--dry-run)
   fi
 
-  rsync "${rsync_args[@]}" -e "ssh -p ${HA_SSH_PORT}" "${merged_apps}" "${HA_SSH_USER}@${HA_SSH_HOST}:$(remote_quote "${target_path}")"
+  rsync "${rsync_args[@]}" -e "ssh -p ${HA_SSH_PORT}" "${current_apps}" "${HA_SSH_USER}@${HA_SSH_HOST}:$(remote_quote "${target_path}")"
   rm -rf "${temp_dir}"
 }
 
@@ -171,11 +180,13 @@ require_command curl
 
 echo "Deploy naar ${HA_SSH_USER}@${HA_SSH_HOST}:${HA_CONFIG_DIR}"
 
-sync_apps_yaml_section
+sync_apps_yaml_sections
 sync_file "appdaemon/apps/dynamisch_handelen.py" "appdaemon/apps/dynamisch_handelen.py"
 sync_file "appdaemon/apps/strategie_dp.py" "appdaemon/apps/strategie_dp.py"
+sync_file "appdaemon/apps/kwartieradministratie.py" "appdaemon/apps/kwartieradministratie.py"
 sync_file "Dutch (NL) Integration/packages/zendure_gielz1986_nl.yaml" "packages/zendure_gielz1986_nl.yaml"
 sync_file "Dutch (NL) Integration/packages/zendure_local_nl.yaml" "packages/zendure_local_nl.yaml"
+sync_file "Dutch (NL) Integration/packages/zendure_kwartieradministratie_nl.yaml" "packages/zendure_kwartieradministratie_nl.yaml"
 
 check_and_reload_home_assistant
 

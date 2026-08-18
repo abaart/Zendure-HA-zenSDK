@@ -124,8 +124,9 @@ def _advies_slot(
 def test_initialize_plans_strategy_once_per_hour_at_minute_55():
     app = _maak_app()
     geplande_taken = []
+    state_listeners = []
     app.run_hourly = lambda callback, start: geplande_taken.append((callback, start))
-    app.listen_state = lambda *args, **kwargs: None
+    app.listen_state = lambda callback, entity, **kwargs: state_listeners.append(entity)
     app._zet_berekening_bezig = lambda bezig: None
     app._initialiseer_berekening_duur_sensor = lambda: None
     app._initialiseer_advies_sensor = lambda: None
@@ -133,6 +134,9 @@ def test_initialize_plans_strategy_once_per_hour_at_minute_55():
     app.initialize()
 
     assert geplande_taken == [(app.bereken_strategie, time(0, 55, 0))]
+    assert "input_number.dynamisch_minimum_vermogen_w" in state_listeners
+    assert "input_number.zendure_2400_ac_max_oplaadvermogen" in state_listeners
+    assert "input_number.zendure_2400_ac_max_ontlaadvermogen" in state_listeners
 
 
 class TestKwartierPrijsslots:
@@ -462,6 +466,38 @@ class TestStrategieConfig:
 
         assert app._haal_standby_verbruik_w() == 0.0
 
+    def test_haal_minimum_vermogen_gebruikt_helperwaarde(self):
+        app = _maak_app(
+            states={"input_number.dynamisch_minimum_vermogen_w": "225"}
+        )
+
+        assert app._haal_minimum_vermogen_w() == 225
+
+    def test_haal_minimum_vermogen_rondt_omhoog_naar_aansturingstap(self):
+        app = _maak_app(
+            states={"input_number.dynamisch_minimum_vermogen_w": "226"}
+        )
+
+        assert app._haal_minimum_vermogen_w() == 250
+
+    def test_haal_minimum_vermogen_gebruikt_default_bij_onbekende_helper(self):
+        app = _maak_app(
+            states={"input_number.dynamisch_minimum_vermogen_w": "unknown"}
+        )
+
+        assert app._haal_minimum_vermogen_w() == 100
+
+    def test_haal_minimum_vermogen_begrenst_bereik(self):
+        app_laag = _maak_app(
+            states={"input_number.dynamisch_minimum_vermogen_w": "25"}
+        )
+        app_hoog = _maak_app(
+            states={"input_number.dynamisch_minimum_vermogen_w": "3500"}
+        )
+
+        assert app_laag._haal_minimum_vermogen_w() == 50
+        assert app_hoog._haal_minimum_vermogen_w() == 3000
+
 
 def test_strategie_input_numbers_hebben_geen_initial_waarde():
     package = (
@@ -504,6 +540,7 @@ def test_strategie_helpernamen_zijn_kort():
         "name: Opwarming laden",
         "name: Max temp bij SoC >80%",
         "name: Straf boven temp-limiet",
+        "name: Minimum vermogen",
         "name: Buitentemp sensor",
         "name: Weer forecast",
     )
@@ -526,11 +563,15 @@ def test_strategie_dashboard_groepeert_korte_instellingen():
         "title: Advies",
         "title: Warmtemodel",
         "title: Temperatuurgrenzen",
+        "title: Vermogensgrenzen",
         "title: SoC-sturing",
         "title: Weerdata",
         "title: Straf per slot",
     ):
         assert titel in tekst
+
+    assert "input_number.dynamisch_minimum_vermogen_w" in tekst
+    assert "attribute: dp_vermogen_stap_w" in tekst
 
 
 def test_bouw_grafiek_slots_bewaart_laatste_zes_uur():

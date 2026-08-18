@@ -129,6 +129,14 @@ input_number:
     step: 1
     mode: slider
 
+  dynamisch_minimum_vermogen_w:
+    name: Minimum vermogen
+    icon: mdi:flash
+    min: 50
+    max: 3000
+    step: 25
+    mode: slider
+
 template:
   - sensor:
       - name: "Zendure 2400 AC Warmste Accutemperatuur"

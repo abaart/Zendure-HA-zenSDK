@@ -655,6 +655,36 @@ class TestMinimaleSpread:
             if slot["actie"] == "ontladen":
                 assert slot["vermogen_w"] in geldige_ontlaadwaarden
 
+    def test_dp_kiest_exact_niet_stap_maximum_als_dat_extra_energie_levert(self):
+        """
+        2150 W is geen veelvoud van de 250 W DP-tussenstap.
+
+        De exacte maximumkandidaat bereikt 0,15 kWh meer dan 2000 W en moet
+        daarom voor zowel laden als ontladen gekozen kunnen worden.
+        """
+        schema = los_dp_op(
+            maak_slots([0.01, 1.00]),
+            maak_accu(
+                huidig_kwh=0.0,
+                max_kwh=5.0,
+                eta=1.0,
+                max_laad_w=2150,
+                max_ontlaad_w=2150,
+            ),
+            plateau_spreiding=False,
+            minimum_vermogen_w=225,
+            warmte_penalty_laden_factor=0.0,
+            warmte_penalty_ontladen_factor=0.0,
+            hoge_soc_verblijf_penalty_factor=0.0,
+            lage_soc_verblijf_penalty_factor=0.0,
+            standby_verbruik_w=0.0,
+        )
+
+        assert [slot["actie"] for slot in schema] == ["laden", "ontladen"]
+        assert [slot["vermogen_w"] for slot in schema] == [2150, 2150]
+        assert schema[0]["minimum_vermogen_w"] == 225
+        assert schema[0]["dp_vermogen_stap_w"] == DP_VERMOGEN_STAP_W
+
     def test_warmte_penalty_ontladen_factor_nul_schakelt_ontladen_uit(self):
         accu = maak_accu(huidig_kwh=2.4, max_kwh=2.4)
 

@@ -2,3 +2,18 @@ dynamisch_handelen:
   module: dynamisch_handelen
   class: DynamischHandelen
   plateau_spreiding: false
+
+zendure_kwartieradministratie:
+  module: kwartieradministratie
+  class: ZendureKwartieradministratie
+  price_entity: sensor.zonneplan_current_quarter_hourly_electricity_tariff
+  legacy_price_entity: sensor.zonneplan_current_electricity_tariff
+  import_entity: sensor.zendure_2400_ac_energie_import
+  export_entity: sensor.zendure_2400_ac_energie_export
+  recorder_db_path: /homeassistant/home-assistant_v2.db
+  ledger_db_path: /share/zendure_kwartieren.sqlite
+  status_entity: sensor.zendure_2400_ac_kwartieradministratie
+  timezone: Europe/Amsterdam
+  backfill_days: 10
+  dashboard_days: 30
+  settlement_delay_seconds: 90

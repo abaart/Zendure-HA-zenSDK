@@ -513,6 +513,103 @@ views:
                 size: 0
                 hover:
                   size: 0
+          - type: custom:apexcharts-card
+            experimental:
+              color_threshold: true
+            cache: false
+            update_delay: 2s
+            header:
+              show: true
+              show_states: true
+              title: Werkelijk handelsresultaat uit kwartieradministratie
+            graph_span: 30d
+            series:
+              - entity: sensor.zendure_2400_ac_kwartieradministratie
+                name: Dagresultaat
+                type: column
+                float_precision: 2
+                unit: EUR
+                color_threshold:
+                  - value: -9999
+                    color: '#ef5350'
+                  - value: 0
+                    color: '#66bb6a'
+                show:
+                  in_chart: true
+                  in_header: false
+                  in_legend: true
+                data_generator: |
+                  return (entity.attributes.dagresultaten || []).map(dag => [
+                    new Date(dag.start).getTime(),
+                    Number.isFinite(Number(dag.netto_eur))
+                      ? Number(dag.netto_eur)
+                      : null
+                  ]);
+              - entity: sensor.zendure_2400_ac_kwartieradministratie
+                name: Cumulatief
+                type: line
+                curve: stepline
+                color: '#01a180'
+                stroke_width: 2
+                float_precision: 2
+                unit: EUR
+                show:
+                  in_chart: true
+                  in_header: true
+                  in_legend: true
+                data_generator: |
+                  return (entity.attributes.dagresultaten || []).map(dag => [
+                    new Date(dag.start).getTime(),
+                    Number.isFinite(Number(dag.cumulatief_eur))
+                      ? Number(dag.cumulatief_eur)
+                      : null
+                  ]);
+            apex_config:
+              tooltip:
+                shared: true
+                intersect: false
+                x:
+                  format: dd-MM-yyyy
+                y:
+                  formatter: |
+                    EVAL:function(v) { return 'EUR ' + Number(v).toFixed(2) }
+              xaxis:
+                type: datetime
+                labels:
+                  datetimeUTC: false
+                  style:
+                    colors: >-
+                      color-mix(in srgb, var(--primary-text-color) 75%,
+                      transparent)
+                axisTicks:
+                  show: false
+                axisBorder:
+                  color: color-mix(in srgb, var(--divider-color) 50%, transparent)
+              yaxis:
+                decimalsInFloat: 2
+                labels:
+                  style:
+                    colors: >-
+                      color-mix(in srgb, var(--primary-text-color) 75%,
+                      transparent)
+                  formatter: |
+                    EVAL:function(v) { return 'EUR ' + Number(v).toFixed(2) }
+              grid:
+                strokeDashArray: 0
+                borderColor: color-mix(in srgb, var(--divider-color) 50%, transparent)
+                show: true
+              chart:
+                height: 240px
+                toolbar:
+                  show: false
+                zoom:
+                  enabled: false
+              legend:
+                show: true
+              markers:
+                size: 0
+                hover:
+                  size: 3
           - type: heading
             heading: Thermisch model
             heading_style: title
@@ -1049,6 +1146,26 @@ views:
                 attribute: standby_verbruik_w
                 name: Standbyverbruik
                 icon: mdi:power-sleep
+              - type: attribute
+                entity: sensor.dynamisch_handelsstrategie
+                attribute: minimum_vermogen_w
+                name: Minimum vermogen
+                icon: mdi:flash
+              - type: attribute
+                entity: sensor.dynamisch_handelsstrategie
+                attribute: max_laad_w
+                name: Maximaal laadvermogen
+                icon: mdi:battery-arrow-up
+              - type: attribute
+                entity: sensor.dynamisch_handelsstrategie
+                attribute: max_ontlaad_w
+                name: Maximaal ontlaadvermogen
+                icon: mdi:battery-arrow-down
+              - type: attribute
+                entity: sensor.dynamisch_handelsstrategie
+                attribute: dp_vermogen_stap_w
+                name: DP-tussenstap
+                icon: mdi:tune-variant
             show_header_toggle: false
             state_color: true
       - type: grid
@@ -1090,6 +1207,17 @@ views:
                 name: Straf boven temp-limiet
               - entity: input_number.dynamisch_temp_penalty_100_soc_factor
                 name: Extra straf 100% SoC
+            show_header_toggle: false
+            state_color: false
+          - type: entities
+            title: Vermogensgrenzen
+            entities:
+              - entity: input_number.dynamisch_minimum_vermogen_w
+                name: Minimum laad/ontlaadvermogen
+              - entity: input_number.zendure_2400_ac_max_oplaadvermogen
+                name: Maximaal laadvermogen
+              - entity: input_number.zendure_2400_ac_max_ontlaadvermogen
+                name: Maximaal ontlaadvermogen
             show_header_toggle: false
             state_color: false
           - type: entities
@@ -1173,6 +1301,15 @@ views:
               **Standbyverbruik**: batterijverbruik in watt tijdens rust en
               ontladen. Bij `5 W` trekt de strategie 5 Wh per uur af van de
               batterij-SoC zolang het slot niet laadt.
+
+
+              **Minimum laad/ontlaadvermogen**: laagste vermogensopdracht die
+              de strategie mag kiezen. Rust met `0 W` blijft altijd mogelijk.
+              De DP test het minimum, tussenstappen van `250 W` en altijd ook
+              het exacte maximale laad- en ontlaadvermogen. Een maximum van
+              bijvoorbeeld `2150 W` hoeft dus geen veelvoud van `250 W` te
+              zijn. Een lagere opdracht kan toch dezelfde afgeronde
+              SoC-overgang bereiken en wordt dan bewust behouden.
 
 
               **Buitentemp sensor**: optionele `sensor.*` voor actuele

@@ -10,6 +10,7 @@ Deze fork behoudt een paar lokale wijzigingen ten opzichte van `Gielz1986/Zendur
 - `dynamisch_minimale_spread` gebruikt een absolute spread in `ct/kWh`, geen percentage.
 - `sensor.dynamisch_spread_indicatie`, `sensor.dynamisch_spread_indicatie_nom`, `sensor.dynamisch_spread_indicatie_morgen`, en `sensor.dynamisch_spread_indicatie_nom_morgen` berekenen spread met `(gemiddelde dure prijs - gemiddelde goedkope prijs) * 100`, zodat de sensorwaarde past bij `unit_of_measurement: "ct/kWh"`.
 - `appdaemon/apps/dynamisch_handelen.py` leest echte 15-minutenprijzen rechtstreeks uit `raw_today` en `raw_tomorrow` van de sensor in `input_text.dynamisch_nordpool_sensor`; ieder beschikbaar kwartier blijft over de volledige DP-horizon een afzonderlijk prijsslot.
+- `appdaemon/apps/kwartieradministratie.py` bewaart Zonneplan-kwartierprijzen en gemeten Zendure-import/export idempotent in `/share/zendure_kwartieren.sqlite`; de aparte SQL-sensoren tonen importkosten, exportopbrengst en netto handelsresultaat zonder afhankelijk te blijven van gepurgede kwartierhistorie.
 - `.DS_Store` bestanden worden genegeerd met `.gitignore`, zodat macOS metadata-bestanden buiten commits blijven.
 
 ## Lokaal deployen naar Home Assistant
@@ -50,11 +51,13 @@ scripts/deploy_ha.sh
 
 `scripts/deploy_ha.sh` schrijft deze Home Assistant bestanden:
 
-- `/config/appdaemon/apps/apps.yaml`: vervangt alleen de top-level sectie `dynamisch_handelen:` en laat andere AppDaemon apps in `apps.yaml` staan.
+- `/config/appdaemon/apps/apps.yaml`: vervangt alleen de top-level secties `dynamisch_handelen:` en `zendure_kwartieradministratie:` en laat andere AppDaemon apps in `apps.yaml` staan.
 - `/config/appdaemon/apps/dynamisch_handelen.py`
 - `/config/appdaemon/apps/strategie_dp.py`
+- `/config/appdaemon/apps/kwartieradministratie.py`
 - `/config/packages/zendure_gielz1986_nl.yaml`
 - `/config/packages/zendure_local_nl.yaml`
+- `/config/packages/zendure_kwartieradministratie_nl.yaml`
 
 Na het kopieren voert `scripts/deploy_ha.sh` `ha core check` uit. Wanneer `ha core check` slaagt, voert `scripts/deploy_ha.sh` `POST /api/services/homeassistant/reload_all` uit via `HA_URL` en `HA_TOKEN`. Wanneer `ha core check` faalt, stopt `scripts/deploy_ha.sh` zonder YAML reload en zonder AppDaemon restart.
 
@@ -147,6 +150,7 @@ homeassistant:
 | **Configuratie (Dynamisch)** |**Informatie**|  
 | `dynamisch_nordpool_sensor` | **bijvoorbeeld `sensor.nordpool_kwh_nl_eur_3_09_0`** – je eigen sensor van Nordpool (HACS) toevoegen. Wanneer je het Dynamisch Nordpool gedeelte in gebruik gaat nemen moet je voor dat je deze in gebruik neemt bij `dynamisch_handmatige_periode` en `dynamisch_handmatige_periode_morgen` even **unknown** weghalen. Hierna zal het dynamisch gedeelte werken. Alles wat in de forecast (morgen) gezet word zal overgenomen worden om 00:00 via de automatisering en verschijnen in vandaag. |  
 | `dynamisch_minimale_spread` | **bijvoorbeeld 25 ct/kWh** - Hiermee geef je aan vanaf hoeveel spread in ct/kWh de batterij dynamisch gaat laden en ontladen op hoog vermogen.  |  
+| `dynamisch_minimum_vermogen_w` | Laagste laad- of ontlaadopdracht die de DP-strategie mag kiezen; rust met 0 W blijft altijd mogelijk. |
 | `dynamisch_15_minuten` | Vink dit aan wanneer je gebruik wilt maken van 15 minuten periodes.  |  
 | **Configuratie (Dashboard)** |**Informatie**|  
 | `help_tonen_op_dashboard` | Vink dit aan om de helpteksten te tonen bij de meest relevante onderdelen.  | 

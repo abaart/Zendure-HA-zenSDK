@@ -36,6 +36,7 @@ Ingangen:
   input_number.dynamisch_hoge_soc_verblijf_penalty_factor verblijfskosten boven 90% SoC
   input_number.dynamisch_lage_soc_verblijf_penalty_factor verblijfskosten onder 10% SoC
   input_number.dynamisch_standby_verbruik_w               standbyverbruik bij niet-laden (W)
+  input_number.dynamisch_minimum_vermogen_w               minimum laad/ontlaadvermogen voor DP (W)
   input_text.dynamisch_buitentemperatuur_sensor           optionele sensor met actuele buitentemperatuur
   input_text.dynamisch_weather_entity                     optionele weather entity voor forecast
   input_button.dynamisch_handelsstrategie_herberekenen   knop voor handmatige herberekening
@@ -58,8 +59,10 @@ import appdaemon.plugins.hass.hassapi as hass
 # strategie_dp.py staat in dezelfde apps-map; AppDaemon zet die map op sys.path.
 from strategie_dp import (
     Accustatus,
+    DP_VERMOGEN_STAP_W,
     HOGE_SOC_VERBLIJF_PENALTY_FACTOR,
     LAGE_SOC_VERBLIJF_PENALTY_FACTOR,
+    MINIMUM_VERMOGEN_W,
     STANDBY_VERBRUIK_W,
     StrategieBerekeningGeannuleerd,
     WARMTE_STIJGING_LADEN_C_PER_C2H,
@@ -70,6 +73,7 @@ from strategie_dp import (
     TEMP_LIMIET_LAGE_SOC_C,
     TEMP_PENALTY_100_SOC_FACTOR,
     TEMP_PENALTY_FACTOR,
+    VERMOGEN_STAP_W,
     bereken_derating,
     bereken_laadvermogen_voor_aansturing,
     los_dp_op,
@@ -270,6 +274,10 @@ class DynamischHandelen(hass.Hass):
             "input_number.dynamisch_hoge_soc_verblijf_penalty_factor",
             "input_number.dynamisch_lage_soc_verblijf_penalty_factor",
             "input_number.dynamisch_standby_verbruik_w",
+            "input_number.dynamisch_minimum_vermogen_w",
+            "input_number.dynamisch_minimale_spread",
+            "input_number.zendure_2400_ac_max_oplaadvermogen",
+            "input_number.zendure_2400_ac_max_ontlaadvermogen",
             "input_text.dynamisch_nordpool_sensor",
             "input_text.dynamisch_buitentemperatuur_sensor",
             "input_text.dynamisch_weather_entity",
@@ -368,7 +376,7 @@ class DynamischHandelen(hass.Hass):
         try:
             self.set_state(
                 "sensor.dynamisch_handelsstrategie_berekening_duur",
-                state=0.0,
+                state="0.0",
                 attributes={
                     "unit_of_measurement": "s",
                     "device_class": "duration",
@@ -400,7 +408,7 @@ class DynamischHandelen(hass.Hass):
         try:
             self.set_state(
                 "sensor.dynamisch_handelsstrategie_berekening_duur",
-                state=round(duur_s, 2),
+                state=str(round(duur_s, 2)),
                 attributes={
                     "unit_of_measurement": "s",
                     "device_class": "duration",
@@ -1063,6 +1071,7 @@ class DynamischHandelen(hass.Hass):
         warmte_penalty_laden_factor = self._haal_warmte_penalty_laden_factor()
         warmte_penalty_ontladen_factor = self._haal_warmte_penalty_ontladen_factor()
         standby_verbruik_w = self._haal_standby_verbruik_w()
+        minimum_vermogen_w = self._haal_minimum_vermogen_w()
         plateau_spreiding = self._haal_plateau_spreiding()
         thermisch = self._haal_thermische_config(slots, dp_start_tijd)
         stop_als_geannuleerd()
@@ -1090,6 +1099,7 @@ class DynamischHandelen(hass.Hass):
             f"warmte laden {warmte_penalty_laden_factor:.2f} | "
             f"warmte ontladen {warmte_penalty_ontladen_factor:.2f} | "
             f"standby {standby_verbruik_w:.1f} W | "
+            f"minimum vermogen {minimum_vermogen_w:d} W | "
             f"plateau {'aan' if plateau_spreiding else 'uit'} | "
             f"accutemp {thermisch['batterij_temp_start_c'] if thermisch['batterij_temp_start_c'] is not None else '-'} °C | "
             f"warmte stijging laden {thermisch['warmte_stijging_laden_c_per_c2h']:.2f} °C/C²h | "
@@ -1109,6 +1119,7 @@ class DynamischHandelen(hass.Hass):
             warmte_penalty_laden_factor=warmte_penalty_laden_factor,
             warmte_penalty_ontladen_factor=warmte_penalty_ontladen_factor,
             standby_verbruik_w=standby_verbruik_w,
+            minimum_vermogen_w=minimum_vermogen_w,
             batterij_temp_start_c=thermisch["batterij_temp_start_c"],
             warmte_afkoeling_halveringstijd_h=thermisch["warmte_afkoeling_halveringstijd_h"],
             warmte_stijging_laden_c_per_c2h=thermisch["warmte_stijging_laden_c_per_c2h"],
@@ -1200,7 +1211,7 @@ class DynamischHandelen(hass.Hass):
 
         self.set_state(
             "sensor.dynamisch_handelsstrategie",
-            state=round(verwachte_winst, 3),
+            state=str(round(verwachte_winst, 3)),
             attributes={
                 "unit_of_measurement": "EUR",
                 "friendly_name":       "Dynamisch Handelen Verwachte Winst",
@@ -1231,6 +1242,8 @@ class DynamischHandelen(hass.Hass):
                 "volgende_start":      volgende["start"] if volgende else None,
                 "accu_huidig_kwh":     round(accu.huidig_kwh, 3),
                 "accu_max_kwh":        round(accu.max_kwh,    3),
+                "max_laad_w":          round(accu.max_laad_w),
+                "max_ontlaad_w":       round(accu.max_ontlaad_w),
                 "dp_start":            dp_start_tijd.isoformat() if dp_start_tijd else None,
                 "accu_bronnen":        accu_bronnen,
                 "eta":                 round(accu.eta_laad,   3),
@@ -1238,6 +1251,9 @@ class DynamischHandelen(hass.Hass):
                 "warmte_penalty_laden_factor": warmte_penalty_laden_factor,
                 "warmte_penalty_ontladen_factor": warmte_penalty_ontladen_factor,
                 "standby_verbruik_w": standby_verbruik_w,
+                "minimum_vermogen_w": minimum_vermogen_w,
+                "dp_vermogen_stap_w": DP_VERMOGEN_STAP_W,
+                "aansturing_vermogen_stap_w": VERMOGEN_STAP_W,
                 "batterij_temp_start_c": thermisch["batterij_temp_start_c"],
                 "batterij_temp_bron": thermisch["batterij_temp_bron"],
                 "buiten_temp_huidig_c": thermisch["buiten_temp_huidig_c"],
@@ -1836,6 +1852,16 @@ class DynamischHandelen(hass.Hass):
             STANDBY_VERBRUIK_W,
             minimum=0.0,
         )
+
+    def _haal_minimum_vermogen_w(self) -> int:
+        """Leest de minimumgrens voor DP-laad- en ontlaadvermogen in W."""
+        waarde = self._haal_float_met_default(
+            "input_number.dynamisch_minimum_vermogen_w",
+            MINIMUM_VERMOGEN_W,
+            minimum=50.0,
+        )
+        begrensd = min(3000.0, waarde)
+        return int(math.ceil(begrensd / VERMOGEN_STAP_W) * VERMOGEN_STAP_W)
 
     def _haal_float_met_default(self, entity_id: str, default: float, minimum: float | None = None) -> float:
         """Leest een numerieke HA-helper en gebruikt default bij unknown/unavailable."""

@@ -1,0 +1,89 @@
+sql:
+  - name: "Zendure 2400 AC Handelsresultaat Totaal"
+    unique_id: zendure_2400_ac_handelsresultaat_totaal
+    db_url: "sqlite:////share/zendure_kwartieren.sqlite"
+    query: >-
+      SELECT ROUND(
+        COALESCE(
+          (SELECT CAST(value AS REAL) FROM ledger_meta
+           WHERE key = 'legacy_net_result_eur'),
+          0
+        ) +
+        COALESCE(
+          (SELECT SUM(net_result_eur) FROM zendure_quarters
+           WHERE status = 'complete'),
+          0
+        ),
+        4
+      ) AS value;
+    column: value
+    unit_of_measurement: "EUR"
+    device_class: monetary
+    state_class: total
+    icon: mdi:cash-multiple
+
+  - name: "Zendure 2400 AC Importkosten Totaal"
+    unique_id: zendure_2400_ac_importkosten_totaal
+    db_url: "sqlite:////share/zendure_kwartieren.sqlite"
+    query: >-
+      SELECT ROUND(
+        COALESCE(
+          (SELECT CAST(value AS REAL) FROM ledger_meta
+           WHERE key = 'legacy_import_cost_eur'),
+          0
+        ) +
+        COALESCE(
+          (SELECT SUM(import_cost_eur) FROM zendure_quarters
+           WHERE status = 'complete'),
+          0
+        ),
+        4
+      ) AS value;
+    column: value
+    unit_of_measurement: "EUR"
+    device_class: monetary
+    state_class: total
+    icon: mdi:cash-minus
+
+  - name: "Zendure 2400 AC Exportopbrengst Totaal"
+    unique_id: zendure_2400_ac_exportopbrengst_totaal
+    db_url: "sqlite:////share/zendure_kwartieren.sqlite"
+    query: >-
+      SELECT ROUND(
+        COALESCE(
+          (SELECT CAST(value AS REAL) FROM ledger_meta
+           WHERE key = 'legacy_export_revenue_eur'),
+          0
+        ) +
+        COALESCE(
+          (SELECT SUM(export_revenue_eur) FROM zendure_quarters
+           WHERE status = 'complete'),
+          0
+        ),
+        4
+      ) AS value;
+    column: value
+    unit_of_measurement: "EUR"
+    device_class: monetary
+    state_class: total
+    icon: mdi:cash-plus
+
+  - name: "Zendure 2400 AC Resultaat Laatste Kwartier"
+    unique_id: zendure_2400_ac_resultaat_laatste_kwartier
+    db_url: "sqlite:////share/zendure_kwartieren.sqlite"
+    query: >-
+      SELECT ROUND(
+        COALESCE(
+          (SELECT net_result_eur FROM zendure_quarters
+           WHERE status = 'complete'
+           ORDER BY quarter_start DESC
+           LIMIT 1),
+          0
+        ),
+        4
+      ) AS value;
+    column: value
+    unit_of_measurement: "EUR"
+    device_class: monetary
+    state_class: measurement
+    icon: mdi:cash-clock
