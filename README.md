@@ -7,7 +7,7 @@
 
 Deze fork behoudt een paar lokale wijzigingen ten opzichte van `Gielz1986/Zendure-HA-zenSDK`:
 
-- `dynamisch_minimale_spread` gebruikt een absolute spread in `ct/kWh`, geen percentage.
+- `dynamisch_minimale_spread` gebruikt een absolute spread in `ct/kWh`, geen percentage. AppDaemon gebruikt 2 ct/kWh als de persistente Home Assistant-helper tijdelijk geen geldige waarde heeft.
 - `sensor.dynamisch_spread_indicatie`, `sensor.dynamisch_spread_indicatie_nom`, `sensor.dynamisch_spread_indicatie_morgen`, en `sensor.dynamisch_spread_indicatie_nom_morgen` berekenen spread met `(gemiddelde dure prijs - gemiddelde goedkope prijs) * 100`, zodat de sensorwaarde past bij `unit_of_measurement: "ct/kWh"`.
 - `appdaemon/apps/dynamisch_handelen.py` leest echte 15-minutenprijzen rechtstreeks uit `raw_today` en `raw_tomorrow` van de sensor in `input_text.dynamisch_nordpool_sensor`; ieder beschikbaar kwartier blijft een afzonderlijk prijsslot en ontbrekende tijd tot 12:00 na het einde van de bekende prijsreeks krijgt uurprijzen op basis van het gemiddelde van maximaal de laatste 24 uur geldige bronkwartieren.
 - `appdaemon/apps/kwartieradministratie.py` bewaart Zonneplan-kwartierprijzen en gemeten Zendure-import/export idempotent in `/share/zendure_kwartieren.sqlite`; de aparte SQL-sensoren tonen importkosten, exportopbrengst en netto handelsresultaat zonder afhankelijk te blijven van gepurgede kwartierhistorie.
@@ -149,7 +149,7 @@ homeassistant:
 | `zendure_2400_ac_batterij_volgorde` | **bijvoorbeeld 1;5;3;4;2** – hiermee bepaal je zelf een afwijkende volgorde van de batterijen. De juiste volgorde bepaal je mede aan de hand van `sensor.zendure_2400_ac_batterij_serienummers` en de sticker op de batterij(en). Op deze manier zullen de batterijtemperaturen en het laadpercentage de juiste volgorde hebben zoals die van de batterij(en) in de stapel. | 
 | **Configuratie (Dynamisch)** |**Informatie**|  
 | `dynamisch_nordpool_sensor` | **bijvoorbeeld `sensor.nordpool_kwh_nl_eur_3_09_0`** – je eigen sensor van Nordpool (HACS) toevoegen. Wanneer je het Dynamisch Nordpool gedeelte in gebruik gaat nemen moet je voor dat je deze in gebruik neemt bij `dynamisch_handmatige_periode` en `dynamisch_handmatige_periode_morgen` even **unknown** weghalen. Hierna zal het dynamisch gedeelte werken. Alles wat in de forecast (morgen) gezet word zal overgenomen worden om 00:00 via de automatisering en verschijnen in vandaag. |  
-| `dynamisch_minimale_spread` | **bijvoorbeeld 25 ct/kWh** - Hiermee geef je aan vanaf hoeveel spread in ct/kWh de batterij dynamisch gaat laden en ontladen op hoog vermogen.  |  
+| `dynamisch_minimale_spread` | **Instellingsadvies: 2 ct/kWh** – extra marge boven op het al meegerekende round-trip rendementsverlies. Home Assistant bewaart de gekozen waarde bij herstarts; 0 ct/kWh blijft mogelijk. |
 | `dynamisch_minimum_vermogen_w` | Laagste laad- of ontlaadopdracht die de DP-strategie mag kiezen; rust met 0 W blijft altijd mogelijk. |
 | `dynamisch_15_minuten` | Vink dit aan wanneer je gebruik wilt maken van 15 minuten periodes.  |  
 | **Configuratie (Dashboard)** |**Informatie**|  

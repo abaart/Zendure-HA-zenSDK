@@ -84,6 +84,7 @@ from strategie_dp import (
 
 GRAFIEK_HISTORIE_UREN = 6.0
 KWARTIER_SLOT_MINUTEN = 15
+DEFAULT_MINIMALE_SPREAD_CT_PER_KWH = 2.0
 FALLBACK_NA_BEKENDE_PRIJZEN_UREN = 12
 FALLBACK_PRIJS_BASIS_UREN = 24
 FALLBACK_SLOT_UREN = 1.0
@@ -1918,8 +1919,16 @@ class DynamischHandelen(hass.Hass):
         Leest de gebruikersingestelde minimale spread (ct/kWh).
         Voorkomt handel bij kleine prijsverschillen die weliswaar theoretisch
         winstgevend zijn maar in de praktijk onzeker zijn.
+
+        Home Assistant herstelt de laatst ingestelde helperwaarde. Alleen als
+        die waarde tijdelijk ontbreekt of ongeldig is, gebruikt AppDaemon de
+        aanbevolen buffer van 2 ct/kWh.
         """
-        return float(self.get_state("input_number.dynamisch_minimale_spread") or 0)
+        return self._haal_float_met_default(
+            "input_number.dynamisch_minimale_spread",
+            DEFAULT_MINIMALE_SPREAD_CT_PER_KWH,
+            minimum=0.0,
+        )
 
     def _haal_advies_analyse_dagen(self) -> int:
         """

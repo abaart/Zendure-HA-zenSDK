@@ -35,6 +35,7 @@ def _installeer_fake_appdaemon() -> None:
 _installeer_fake_appdaemon()
 
 from dynamisch_handelen import (  # noqa: E402
+    DEFAULT_MINIMALE_SPREAD_CT_PER_KWH,
     DynamischHandelen,
     bouw_grafiek_slots,
     haal_grafiek_slots_uit_history_items,
@@ -137,6 +138,24 @@ def test_initialize_plans_strategy_once_per_hour_at_minute_55():
     assert "input_number.dynamisch_minimum_vermogen_w" in state_listeners
     assert "input_number.zendure_2400_ac_max_oplaadvermogen" in state_listeners
     assert "input_number.zendure_2400_ac_max_ontlaadvermogen" in state_listeners
+
+
+class TestMinimaleSpread:
+    def test_leest_persistente_helperwaarde(self):
+        app = _maak_app({"input_number.dynamisch_minimale_spread": "1.0"})
+
+        assert app._haal_minimale_spread() == 1.0
+
+    @pytest.mark.parametrize("waarde", [None, "unknown", "unavailable", "ongeldig"])
+    def test_gebruikt_twee_cent_bij_ontbrekende_of_ongeldige_helper(self, waarde):
+        app = _maak_app({"input_number.dynamisch_minimale_spread": waarde})
+
+        assert app._haal_minimale_spread() == DEFAULT_MINIMALE_SPREAD_CT_PER_KWH
+
+    def test_staat_nul_toe_als_bewuste_gebruikerskeuze(self):
+        app = _maak_app({"input_number.dynamisch_minimale_spread": "0"})
+
+        assert app._haal_minimale_spread() == 0.0
 
 
 class TestKwartierPrijsslots:
