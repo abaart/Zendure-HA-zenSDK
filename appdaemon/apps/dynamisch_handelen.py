@@ -133,6 +133,22 @@ def bereken_penalty_totalen_eur(schema: list[dict]) -> dict[str, float]:
     return afgerond
 
 
+def formatteer_penalty_attributen(totalen: dict[str, float]) -> dict[str, str]:
+    """Publiceert ook nulwaarden; AppDaemon laat numerieke 0.0-attributen weg."""
+    namen = {
+        "penalty_totaal_eur": "totaal_eur",
+        "warmte_penalty_laden_totaal_eur": "warmte_laden_eur",
+        "warmte_penalty_ontladen_totaal_eur": "warmte_ontladen_eur",
+        "overtemp_penalty_totaal_eur": "overtemp_eur",
+        "hoge_soc_verblijf_penalty_totaal_eur": "hoge_soc_verblijf_eur",
+        "lage_soc_verblijf_penalty_totaal_eur": "lage_soc_verblijf_eur",
+    }
+    return {
+        attribuut: f"{float(totalen.get(categorie, 0.0)):.6f}"
+        for attribuut, categorie in namen.items()
+    }
+
+
 def _lees_slot_datetimes(slot: dict) -> tuple[datetime, datetime] | None:
     """Leest start en end uit een strategieslot als timezone-aware datetimes."""
     try:
@@ -1093,14 +1109,7 @@ class DynamischHandelen(hass.Hass):
 
         if not slots:
             self.log("Dynamisch Handelen: geen prijsslots beschikbaar", level="WARNING")
-            lege_penalty_attributen = {
-                "penalty_totaal_eur": 0.0,
-                "warmte_penalty_laden_totaal_eur": 0.0,
-                "warmte_penalty_ontladen_totaal_eur": 0.0,
-                "overtemp_penalty_totaal_eur": 0.0,
-                "hoge_soc_verblijf_penalty_totaal_eur": 0.0,
-                "lage_soc_verblijf_penalty_totaal_eur": 0.0,
-            }
+            lege_penalty_attributen = formatteer_penalty_attributen({})
             self.set_state(
                 "sensor.dynamisch_handelsstrategie",
                 state="geen_data",
@@ -1360,22 +1369,7 @@ class DynamischHandelen(hass.Hass):
                 "verwachte_winst_eur": round(economische_verwachte_winst, 4),
                 "gekozen_verwachte_winst_eur": round(verwachte_winst, 4),
                 "winstverschil_eur": round(winstverschil, 4),
-                "penalty_totaal_eur": economische_penalty_totalen["totaal_eur"],
-                "warmte_penalty_laden_totaal_eur": economische_penalty_totalen[
-                    "warmte_laden_eur"
-                ],
-                "warmte_penalty_ontladen_totaal_eur": economische_penalty_totalen[
-                    "warmte_ontladen_eur"
-                ],
-                "overtemp_penalty_totaal_eur": economische_penalty_totalen[
-                    "overtemp_eur"
-                ],
-                "hoge_soc_verblijf_penalty_totaal_eur": economische_penalty_totalen[
-                    "hoge_soc_verblijf_eur"
-                ],
-                "lage_soc_verblijf_penalty_totaal_eur": economische_penalty_totalen[
-                    "lage_soc_verblijf_eur"
-                ],
+                **formatteer_penalty_attributen(economische_penalty_totalen),
                 "gekozen_strategie_entity": "sensor.dynamisch_handelsstrategie",
                 "slots": economisch_schema,
                 "strategie_einde": strategie_einde,
@@ -1427,20 +1421,7 @@ class DynamischHandelen(hass.Hass):
                     4,
                 ),
                 "winstverschil_eur": round(winstverschil, 4),
-                "penalty_totaal_eur": penalty_totalen["totaal_eur"],
-                "warmte_penalty_laden_totaal_eur": penalty_totalen[
-                    "warmte_laden_eur"
-                ],
-                "warmte_penalty_ontladen_totaal_eur": penalty_totalen[
-                    "warmte_ontladen_eur"
-                ],
-                "overtemp_penalty_totaal_eur": penalty_totalen["overtemp_eur"],
-                "hoge_soc_verblijf_penalty_totaal_eur": penalty_totalen[
-                    "hoge_soc_verblijf_eur"
-                ],
-                "lage_soc_verblijf_penalty_totaal_eur": penalty_totalen[
-                    "lage_soc_verblijf_eur"
-                ],
+                **formatteer_penalty_attributen(penalty_totalen),
                 "economische_strategie_entity": ECONOMISCHE_STRATEGIE_ENTITY,
                 "slots":               schema,
                 "slots_grafiek":       grafiek_slots,

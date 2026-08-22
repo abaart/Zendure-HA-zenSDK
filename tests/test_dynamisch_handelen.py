@@ -42,6 +42,7 @@ from dynamisch_handelen import (  # noqa: E402
     bereken_penalty_totalen_eur,
     bereken_prijs_rte_winst_eur,
     bouw_grafiek_slots,
+    formatteer_penalty_attributen,
     haal_grafiek_slots_uit_history_items,
 )
 
@@ -213,6 +214,17 @@ def test_penalty_totalen_splitsen_categorieen_zonder_dubbeltelling():
     }
 
 
+def test_penalty_attributen_behouden_nulwaarden_als_decimale_tekst():
+    assert formatteer_penalty_attributen({"totaal_eur": 1.25}) == {
+        "penalty_totaal_eur": "1.250000",
+        "warmte_penalty_laden_totaal_eur": "0.000000",
+        "warmte_penalty_ontladen_totaal_eur": "0.000000",
+        "overtemp_penalty_totaal_eur": "0.000000",
+        "hoge_soc_verblijf_penalty_totaal_eur": "0.000000",
+        "lage_soc_verblijf_penalty_totaal_eur": "0.000000",
+    }
+
+
 def test_economische_strategie_zet_keuzepenalties_uit(monkeypatch):
     ontvangen = {}
 
@@ -277,7 +289,7 @@ def test_geen_prijsdata_publiceert_beide_strategiesensoren():
         ECONOMISCHE_STRATEGIE_ENTITY,
     ]
     assert all(item[1] == "geen_data" for item in gepubliceerd)
-    assert all(item[2]["penalty_totaal_eur"] == 0.0 for item in gepubliceerd)
+    assert all(item[2]["penalty_totaal_eur"] == "0.000000" for item in gepubliceerd)
 
 
 class TestKwartierPrijsslots:
