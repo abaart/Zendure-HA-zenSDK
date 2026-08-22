@@ -21,17 +21,38 @@ views:
               - type: entity
                 show_state: true
                 show_icon: true
+                entity: sensor.dynamisch_handelsstrategie_economisch
+                color: '#42a5f5'
+                tap_action:
+                  action: more-info
+              - type: entity
+                show_state: true
+                show_icon: true
                 entity: sensor.zendure_2400_ac_laadpercentage
                 color: '#01a180'
                 tap_action:
                   action: more-info
+          - type: grid
+            columns: 2
+            square: false
+            cards:
+              - type: tile
+                entity: sensor.dynamisch_handelsstrategie
+                name: Gekozen met penalties
+                color: '#01a180'
+                vertical: false
+              - type: tile
+                entity: sensor.dynamisch_handelsstrategie_economisch
+                name: Economisch optimaal
+                color: '#42a5f5'
+                vertical: false
           - type: custom:apexcharts-card
             cache: false
             update_delay: 2s
             header:
               show: true
               show_states: true
-              title: Geplande SoC en prijzen
+              title: Geplande SoC — gekozen versus economisch
             graph_span: 48h
             span:
               start: hour
@@ -41,7 +62,7 @@ views:
               color: '#ef5350'
             series:
               - entity: sensor.dynamisch_handelsstrategie
-                name: SoC
+                name: SoC gekozen
                 type: area
                 curve: stepline
                 extend_to: false
@@ -221,6 +242,64 @@ views:
                     new Date(s.start).getTime(),
                     s.geen_laden_reden === 'spread_te_klein' ? s.spread_tekort_ct : null
                   ]);
+              - entity: sensor.dynamisch_handelsstrategie_economisch
+                name: SoC economisch
+                type: line
+                curve: stepline
+                extend_to: false
+                color: '#42a5f5'
+                stroke_width: 2
+                float_precision: 0
+                unit: '%'
+                yaxis_id: percentage
+                show:
+                  in_chart: true
+                  in_header: true
+                  in_legend: true
+                data_generator: >
+                  const slots = entity.attributes.slots || [];
+
+                  const pts = slots.map(s => [new Date(s.start).getTime(),
+                  s.soc_voor_pct ?? 0]);
+
+                  if (slots.length) {
+                    const last = slots[slots.length - 1];
+                    pts.push([new Date(last.end).getTime(), last.soc_na_pct ?? 0]);
+                  }
+
+                  return pts;
+              - entity: sensor.dynamisch_handelsstrategie_economisch
+                name: Vermogen economisch
+                type: line
+                extend_to: false
+                stroke_width: 0
+                opacity: 0
+                yaxis_id: extra
+                show:
+                  in_chart: true
+                  in_header: false
+                  in_legend: false
+                data_generator: |
+                  return (entity.attributes.slots || []).map(s => [
+                    new Date(s.start).getTime(),
+                    s.actie !== 'rust' ? (s.vermogen_w ?? 0) : null
+                  ]);
+              - entity: sensor.dynamisch_handelsstrategie_economisch
+                name: Actie economisch
+                type: line
+                extend_to: false
+                stroke_width: 0
+                opacity: 0
+                yaxis_id: extra
+                show:
+                  in_chart: true
+                  in_header: false
+                  in_legend: false
+                data_generator: |
+                  return (entity.attributes.slots || []).map(s => [
+                    new Date(s.start).getTime(),
+                    s.actie === 'laden' ? 1 : s.actie === 'ontladen' ? 2 : 0
+                  ]);
               - entity: input_boolean.dynamisch_handelsstrategie_berekening_bezig
                 name: Refresh trigger
                 type: line
@@ -244,7 +323,11 @@ views:
                     var nodigeVerkoop = series[7][dataPointIndex];
                     var minSpread = series[8][dataPointIndex];
                     var spreadTekort = series[9][dataPointIndex];
+                    var economischeSoc = series[10][dataPointIndex];
+                    var economischVermogen = series[11][dataPointIndex];
+                    var economischeActieCode = series[12][dataPointIndex];
                     var actieLabel = actieCode === 1 ? 'Laden' : actieCode === 2 ? 'Ontladen' : 'Rust';
+                    var economischeActieLabel = economischeActieCode === 1 ? 'Laden' : economischeActieCode === 2 ? 'Ontladen' : 'Rust';
                     var ts = w.globals.seriesX[0] && w.globals.seriesX[0][dataPointIndex];
                     if (!ts) return '';
                     var d = new Date(ts);
@@ -252,10 +335,13 @@ views:
                     var time = pad(d.getDate()) + '-' + pad(d.getMonth()+1) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
                     var html = '<div style="padding:8px 12px;font-size:0.85em;background:var(--card-background-color);border:1px solid var(--divider-color);border-radius:4px">';
                     html += '<div style="margin-bottom:4px;font-weight:bold;color:var(--primary-text-color)">' + time + '</div>';
-                    html += '<div style="color:var(--secondary-text-color)">SoC&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;: <span style="color:var(--primary-text-color);font-weight:bold">' + (soc != null ? soc.toFixed(0) + ' %' : '\u2014') + '</span></div>';
+                    html += '<div style="color:var(--secondary-text-color)">SoC gekozen&nbsp;&nbsp;&nbsp;: <span style="color:var(--primary-text-color);font-weight:bold">' + (soc != null ? soc.toFixed(0) + ' %' : '\u2014') + '</span></div>';
+                    html += '<div style="color:var(--secondary-text-color)">SoC economisch: <span style="color:#42a5f5;font-weight:bold">' + (economischeSoc != null ? economischeSoc.toFixed(0) + ' %' : '\u2014') + '</span></div>';
                     html += '<div style="color:var(--secondary-text-color)">Prijs&nbsp;&nbsp;&nbsp;&nbsp;: <span style="color:var(--primary-text-color);font-weight:bold">' + (prijs != null ? prijs.toFixed(1) + ' ct/kWh' : '\u2014') + '</span></div>';
-                    html += '<div style="color:var(--secondary-text-color)">Actie&nbsp;&nbsp;&nbsp;&nbsp;: <span style="color:var(--primary-text-color);font-weight:bold">' + actieLabel + '</span></div>';
-                    if (actieCode) { html += '<div style="color:var(--secondary-text-color)">Vermogen : <span style="color:var(--primary-text-color);font-weight:bold">' + (vermogen != null ? Math.round(vermogen) + ' W' : '\u2014') + '</span></div>'; }
+                    html += '<div style="color:var(--secondary-text-color)">Actie gekozen&nbsp;&nbsp;&nbsp;: <span style="color:var(--primary-text-color);font-weight:bold">' + actieLabel + '</span></div>';
+                    html += '<div style="color:var(--secondary-text-color)">Actie economisch: <span style="color:#42a5f5;font-weight:bold">' + economischeActieLabel + '</span></div>';
+                    if (actieCode) { html += '<div style="color:var(--secondary-text-color)">Vermogen gekozen&nbsp;&nbsp;&nbsp;: <span style="color:var(--primary-text-color);font-weight:bold">' + (vermogen != null ? Math.round(vermogen) + ' W' : '\u2014') + '</span></div>'; }
+                    if (economischeActieCode) { html += '<div style="color:var(--secondary-text-color)">Vermogen economisch: <span style="color:#42a5f5;font-weight:bold">' + (economischVermogen != null ? Math.round(economischVermogen) + ' W' : '\u2014') + '</span></div>'; }
                     if (actieCode && stopSoc != null) { html += '<div style="color:var(--secondary-text-color)">Stop-SoC: <span style="color:var(--primary-text-color);font-weight:bold">' + stopSoc.toFixed(1) + ' %</span></div>'; }
                     if (spreadBlokkade != null && besteVerkoop != null && nodigeVerkoop != null && minSpread != null && spreadTekort != null) {
                       html += '<div style="margin-top:4px;color:#ef5350;font-weight:bold">Niet laden: spread te klein</div>';
@@ -279,7 +365,7 @@ views:
                   color: color-mix(in srgb, var(--divider-color) 50%, transparent)
               yaxis:
                 - id: percentage
-                  seriesName: SoC
+                  seriesName: SoC gekozen
                   min: 0
                   max: 105
                   decimalsInFloat: 0
@@ -356,7 +442,7 @@ views:
             header:
               show: true
               show_states: false
-              title: Geplande acties (groen = laden, oranje = ontladen)
+              title: Geplande acties — gekozen versus economisch
             graph_span: 48h
             span:
               start: hour
@@ -366,7 +452,7 @@ views:
               color: '#ef5350'
             series:
               - entity: sensor.dynamisch_handelsstrategie
-                name: Vermogen
+                name: Gekozen met penalties
                 type: column
                 float_precision: 0
                 unit: W
@@ -375,6 +461,21 @@ views:
                     color: '#ff7043'
                   - value: 0
                     color: '#66bb6a'
+                data_generator: |
+                  return (entity.attributes.slots || []).map(s => [
+                    new Date(s.start).getTime(),
+                    s.actie === 'laden'    ?  (s.vermogen_w ?? 0) :
+                    s.actie === 'ontladen' ? -(s.vermogen_w ?? 0) :
+                    null
+                  ]);
+              - entity: sensor.dynamisch_handelsstrategie_economisch
+                name: Economisch optimaal
+                type: line
+                curve: stepline
+                float_precision: 0
+                unit: W
+                color: '#42a5f5'
+                stroke_width: 2
                 data_generator: |
                   return (entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
@@ -425,7 +526,7 @@ views:
                 zoom:
                   enabled: false
               legend:
-                show: false
+                show: true
               markers:
                 size: 0
                 hover:
@@ -439,7 +540,7 @@ views:
             header:
               show: true
               show_states: false
-              title: Verwachte winst per slot (groen = opbrengst, rood = kosten)
+              title: Verwachte prijs+RTE-winst per slot
             graph_span: 48h
             span:
               start: hour
@@ -449,7 +550,7 @@ views:
               color: '#ef5350'
             series:
               - entity: sensor.dynamisch_handelsstrategie
-                name: Winst
+                name: Gekozen met penalties
                 type: column
                 float_precision: 2
                 unit: ct
@@ -458,6 +559,21 @@ views:
                     color: '#ef5350'
                   - value: 0
                     color: '#66bb6a'
+                data_generator: |
+                  return (entity.attributes.slots || []).map(s => [
+                    new Date(s.start).getTime(),
+                    (s.winst_eur ?? 0) !== 0
+                      ? parseFloat(((s.winst_eur ?? 0) * 100).toFixed(2))
+                      : null
+                  ]);
+              - entity: sensor.dynamisch_handelsstrategie_economisch
+                name: Economisch optimaal
+                type: line
+                curve: stepline
+                float_precision: 2
+                unit: ct
+                color: '#42a5f5'
+                stroke_width: 2
                 data_generator: |
                   return (entity.attributes.slots || []).map(s => [
                     new Date(s.start).getTime(),
@@ -508,7 +624,7 @@ views:
                 zoom:
                   enabled: false
               legend:
-                show: false
+                show: true
               markers:
                 size: 0
                 hover:
@@ -1069,6 +1185,47 @@ views:
                 show: true
               markers:
                 size: 0
+          - type: entities
+            title: Cumulatieve penalties — huidige planning
+            entities:
+              - type: attribute
+                entity: sensor.dynamisch_handelsstrategie
+                attribute: penalty_totaal_eur
+                name: Totaal modelpenalties
+                icon: mdi:sigma
+                suffix: ' EUR'
+              - type: attribute
+                entity: sensor.dynamisch_handelsstrategie
+                attribute: warmte_penalty_laden_totaal_eur
+                name: Warmtestraf laden
+                icon: mdi:battery-arrow-up
+                suffix: ' EUR'
+              - type: attribute
+                entity: sensor.dynamisch_handelsstrategie
+                attribute: warmte_penalty_ontladen_totaal_eur
+                name: Warmtestraf ontladen
+                icon: mdi:battery-arrow-down
+                suffix: ' EUR'
+              - type: attribute
+                entity: sensor.dynamisch_handelsstrategie
+                attribute: overtemp_penalty_totaal_eur
+                name: Straf boven temperatuurgrens
+                icon: mdi:thermometer-alert
+                suffix: ' EUR'
+              - type: attribute
+                entity: sensor.dynamisch_handelsstrategie
+                attribute: hoge_soc_verblijf_penalty_totaal_eur
+                name: Verblijf SoC >90%
+                icon: mdi:battery-high
+                suffix: ' EUR'
+              - type: attribute
+                entity: sensor.dynamisch_handelsstrategie
+                attribute: lage_soc_verblijf_penalty_totaal_eur
+                name: Verblijf SoC <10%
+                icon: mdi:battery-low
+                suffix: ' EUR'
+            show_header_toggle: false
+            state_color: false
           - type: entities
             title: Waardes gebruikt in huidige berekening
             entities:

@@ -34,9 +34,13 @@ def _installeer_fake_appdaemon() -> None:
 
 _installeer_fake_appdaemon()
 
+import dynamisch_handelen as dynamisch_handelen_module  # noqa: E402
 from dynamisch_handelen import (  # noqa: E402
     DEFAULT_MINIMALE_SPREAD_CT_PER_KWH,
+    ECONOMISCHE_STRATEGIE_ENTITY,
     DynamischHandelen,
+    bereken_penalty_totalen_eur,
+    bereken_prijs_rte_winst_eur,
     bouw_grafiek_slots,
     haal_grafiek_slots_uit_history_items,
 )
@@ -156,6 +160,124 @@ class TestMinimaleSpread:
         app = _maak_app({"input_number.dynamisch_minimale_spread": "0"})
 
         assert app._haal_minimale_spread() == 0.0
+
+
+def test_prijs_rte_winst_telt_geen_penalties_mee():
+    schema = [
+        {
+            "winst_eur": -0.2,
+            "warmte_penalty_eur": 5.0,
+            "overtemp_penalty_eur": 7.0,
+            "soc_verblijf_penalty_eur": 11.0,
+        },
+        {
+            "winst_eur": 0.5,
+            "warmte_penalty_eur": 13.0,
+            "overtemp_penalty_eur": 17.0,
+            "soc_verblijf_penalty_eur": 19.0,
+        },
+    ]
+
+    assert bereken_prijs_rte_winst_eur(schema) == pytest.approx(0.3)
+
+
+def test_penalty_totalen_splitsen_categorieen_zonder_dubbeltelling():
+    schema = [
+        {
+            "actie": "rust",
+            "geplande_actie": "laden",
+            "warmte_penalty_eur": 0.1,
+            "overtemp_penalty_eur": 0.2,
+            "temp_penalty_eur": 99.0,
+            "soc_verblijf_penalty_eur": 0.7,
+            "hoge_soc_verblijf_penalty_eur": 0.3,
+            "lage_soc_verblijf_penalty_eur": 0.4,
+        },
+        {
+            "actie": "ontladen",
+            "warmte_penalty_eur": 0.5,
+            "temp_penalty_eur": 0.6,
+            "soc_verblijf_penalty_eur": 0.1,
+            "hoge_soc_verblijf_penalty_eur": 0.0,
+            "lage_soc_verblijf_penalty_eur": 0.1,
+        },
+    ]
+
+    assert bereken_penalty_totalen_eur(schema) == {
+        "warmte_laden_eur": 0.1,
+        "warmte_ontladen_eur": 0.5,
+        "overtemp_eur": 0.8,
+        "hoge_soc_verblijf_eur": 0.3,
+        "lage_soc_verblijf_eur": 0.5,
+        "totaal_eur": 2.2,
+    }
+
+
+def test_economische_strategie_zet_keuzepenalties_uit(monkeypatch):
+    ontvangen = {}
+
+    def fake_los_dp_op(slots, accu, **kwargs):
+        ontvangen["slots"] = slots
+        ontvangen["accu"] = accu
+        ontvangen["kwargs"] = kwargs
+        return [{"actie": "rust"}]
+
+    monkeypatch.setattr(dynamisch_handelen_module, "los_dp_op", fake_los_dp_op)
+    app = _maak_app()
+    slots = [{"price": 0.1}]
+    accu = object()
+
+    def annuleer_check():
+        return False
+
+    resultaat = app._bereken_economisch_schema(
+        slots,
+        accu,
+        standby_verbruik_w=8.0,
+        minimum_vermogen_w=225,
+        hw_min_pct=5.0,
+        hw_max_pct=95.0,
+        annuleer_check=annuleer_check,
+    )
+
+    assert resultaat == [{"actie": "rust"}]
+    assert ontvangen["slots"] is slots
+    assert ontvangen["accu"] is accu
+    assert ontvangen["kwargs"] == {
+        "min_spread_ct_per_kwh": 0.0,
+        "plateau_spreiding": False,
+        "warmte_penalty_laden_factor": 0.0,
+        "warmte_penalty_ontladen_factor": 0.0,
+        "standby_verbruik_w": 8.0,
+        "minimum_vermogen_w": 225,
+        "batterij_temp_start_c": None,
+        "temp_penalty_factor": 0.0,
+        "temp_penalty_100_soc_factor": 1.0,
+        "hoge_soc_verblijf_penalty_factor": 0.0,
+        "lage_soc_verblijf_penalty_factor": 0.0,
+        "soc_min_pct": 5.0,
+        "soc_max_pct": 95.0,
+        "annuleer_check": annuleer_check,
+    }
+
+
+def test_geen_prijsdata_publiceert_beide_strategiesensoren():
+    app = _maak_app()
+    app._berekening_generatie = 4
+    app._haal_prijsslots = lambda: []
+    gepubliceerd = []
+    app.set_state = lambda entity, state, attributes: gepubliceerd.append(
+        (entity, state, attributes)
+    )
+
+    app._bereken_strategie_impl({"trigger": "test"}, 4)
+
+    assert [item[0] for item in gepubliceerd] == [
+        "sensor.dynamisch_handelsstrategie",
+        ECONOMISCHE_STRATEGIE_ENTITY,
+    ]
+    assert all(item[1] == "geen_data" for item in gepubliceerd)
+    assert all(item[2]["penalty_totaal_eur"] == 0.0 for item in gepubliceerd)
 
 
 class TestKwartierPrijsslots:
@@ -707,6 +829,20 @@ def test_strategie_dashboard_groepeert_korte_instellingen():
 
     assert "input_number.dynamisch_minimum_vermogen_w" in tekst
     assert "attribute: dp_vermogen_stap_w" in tekst
+    assert "sensor.dynamisch_handelsstrategie_economisch" in tekst
+    assert "name: Gekozen met penalties" in tekst
+    assert "name: Economisch optimaal" in tekst
+    assert "title: Verwachte prijs+RTE-winst per slot" in tekst
+    assert "title: Cumulatieve penalties — huidige planning" in tekst
+    for attribuut in (
+        "penalty_totaal_eur",
+        "warmte_penalty_laden_totaal_eur",
+        "warmte_penalty_ontladen_totaal_eur",
+        "overtemp_penalty_totaal_eur",
+        "hoge_soc_verblijf_penalty_totaal_eur",
+        "lage_soc_verblijf_penalty_totaal_eur",
+    ):
+        assert f"attribute: {attribuut}" in tekst
 
 
 def test_bouw_grafiek_slots_bewaart_laatste_zes_uur():

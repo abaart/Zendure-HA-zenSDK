@@ -2,8 +2,9 @@
 Dynamisch Handelen - Home Assistant integratie (AppDaemon)
 ==========================================================
 
-AppDaemon app die ieder uur om :55 en op verzoek de optimale
-laad/ontlaad strategie berekent en publiceert als sensor.dynamisch_handelsstrategie.
+AppDaemon app die ieder uur om :55 en op verzoek twee laad/ontlaadstrategieën
+berekent: de gekozen strategie met penalties en de economisch optimale
+vergelijkingsstrategie zonder penalties.
 
 BESTANDSLOCATIES IN HA
 -----------------------
@@ -45,7 +46,8 @@ Ingangen:
   input_boolean.dynamisch_handelsstrategie_berekening_bezig  laadstatus voor dashboardknop
 
 Uitgang:
-  sensor.dynamisch_handelsstrategie   verwachte winst (€) + volledig schema als attribuut
+  sensor.dynamisch_handelsstrategie   gekozen schema met penalties + prijs/RTE-winst (€)
+  sensor.dynamisch_handelsstrategie_economisch  economisch schema + prijs/RTE-winst (€)
   sensor.dynamisch_strategie_advies   advies over DP- en thermische parameters
   sensor.dynamisch_handelsstrategie_berekening_duur  duur van de laatste bereken-run
 """
@@ -89,6 +91,46 @@ FALLBACK_NA_BEKENDE_PRIJZEN_UREN = 12
 FALLBACK_PRIJS_BASIS_UREN = 24
 FALLBACK_SLOT_UREN = 1.0
 PLANNING_TIJDZONE = ZoneInfo("Europe/Amsterdam")
+ECONOMISCHE_STRATEGIE_ENTITY = "sensor.dynamisch_handelsstrategie_economisch"
+
+
+def bereken_prijs_rte_winst_eur(schema: list[dict]) -> float:
+    """Telt alleen de prijs- en RTE-opbrengst van de gekozen slotacties op."""
+    return sum(float(slot.get("winst_eur") or 0.0) for slot in schema)
+
+
+def bereken_penalty_totalen_eur(schema: list[dict]) -> dict[str, float]:
+    """Telt de niet-overlappende DP-penaltycategorieën over het schema op."""
+    totalen = {
+        "warmte_laden_eur": 0.0,
+        "warmte_ontladen_eur": 0.0,
+        "overtemp_eur": 0.0,
+        "hoge_soc_verblijf_eur": 0.0,
+        "lage_soc_verblijf_eur": 0.0,
+    }
+
+    for slot in schema:
+        actie = slot.get("geplande_actie") or slot.get("actie")
+        warmte_penalty = float(slot.get("warmte_penalty_eur") or 0.0)
+        if actie == "laden":
+            totalen["warmte_laden_eur"] += warmte_penalty
+        elif actie == "ontladen":
+            totalen["warmte_ontladen_eur"] += warmte_penalty
+
+        overtemp_penalty = slot.get("overtemp_penalty_eur")
+        if overtemp_penalty is None:
+            overtemp_penalty = slot.get("temp_penalty_eur")
+        totalen["overtemp_eur"] += float(overtemp_penalty or 0.0)
+        totalen["hoge_soc_verblijf_eur"] += float(
+            slot.get("hoge_soc_verblijf_penalty_eur") or 0.0
+        )
+        totalen["lage_soc_verblijf_eur"] += float(
+            slot.get("lage_soc_verblijf_penalty_eur") or 0.0
+        )
+
+    afgerond = {naam: round(waarde, 6) for naam, waarde in totalen.items()}
+    afgerond["totaal_eur"] = round(sum(totalen.values()), 6)
+    return afgerond
 
 
 def _lees_slot_datetimes(slot: dict) -> tuple[datetime, datetime] | None:
@@ -1051,10 +1093,31 @@ class DynamischHandelen(hass.Hass):
 
         if not slots:
             self.log("Dynamisch Handelen: geen prijsslots beschikbaar", level="WARNING")
+            lege_penalty_attributen = {
+                "penalty_totaal_eur": 0.0,
+                "warmte_penalty_laden_totaal_eur": 0.0,
+                "warmte_penalty_ontladen_totaal_eur": 0.0,
+                "overtemp_penalty_totaal_eur": 0.0,
+                "hoge_soc_verblijf_penalty_totaal_eur": 0.0,
+                "lage_soc_verblijf_penalty_totaal_eur": 0.0,
+            }
             self.set_state(
                 "sensor.dynamisch_handelsstrategie",
                 state="geen_data",
-                attributes={"slots": [], "verwachte_winst_eur": 0},
+                attributes={
+                    "slots": [],
+                    "verwachte_winst_eur": 0,
+                    **lege_penalty_attributen,
+                },
+            )
+            self.set_state(
+                ECONOMISCHE_STRATEGIE_ENTITY,
+                state="geen_data",
+                attributes={
+                    "slots": [],
+                    "verwachte_winst_eur": 0,
+                    **lege_penalty_attributen,
+                },
             )
             return
 
@@ -1156,7 +1219,24 @@ class DynamischHandelen(hass.Hass):
             annuleer_check=is_geannuleerd,
         )
         stop_als_geannuleerd()
+        economisch_schema = self._bereken_economisch_schema(
+            slots,
+            accu,
+            standby_verbruik_w,
+            minimum_vermogen_w,
+            hw_min_pct,
+            hw_max_pct,
+            is_geannuleerd,
+        )
+        stop_als_geannuleerd()
         self._corrigeer_actief_slot_vermogen(schema, accu, hw_min_pct, hw_max_pct)
+        self._corrigeer_actief_slot_vermogen(
+            economisch_schema,
+            accu,
+            hw_min_pct,
+            hw_max_pct,
+            strategie_entity_id=ECONOMISCHE_STRATEGIE_ENTITY,
+        )
         stop_als_geannuleerd()
         spread_blokkades = self._markeer_spread_blokkades(schema, accu.eta_laad, min_spread)
         stop_als_geannuleerd()
@@ -1164,22 +1244,46 @@ class DynamischHandelen(hass.Hass):
         # Vertaal DP-interne SoC% (0–100% van hw-venster) naar echte battery-%
         # zodat de grafiek overeenkomt met wat de Zendure rapporteert.
         hw_range = hw_max_pct - hw_min_pct
-        for s in schema:
-            s["soc_voor_pct"] = round(hw_min_pct + s["soc_voor_pct"] / 100.0 * hw_range, 1)
-            s["soc_na_pct"]   = round(hw_min_pct + s["soc_na_pct"]   / 100.0 * hw_range, 1)
-            if s.get("stop_soc_pct") is not None:
-                try:
-                    stop_soc_pct = float(s["stop_soc_pct"])
-                except (TypeError, ValueError):
-                    s["stop_soc_pct"] = None
-                else:
-                    s["stop_soc_pct"] = round(hw_min_pct + stop_soc_pct / 100.0 * hw_range, 1)
+        for strategie_schema in (schema, economisch_schema):
+            for s in strategie_schema:
+                s["soc_voor_pct"] = round(
+                    hw_min_pct + s["soc_voor_pct"] / 100.0 * hw_range,
+                    1,
+                )
+                s["soc_na_pct"] = round(
+                    hw_min_pct + s["soc_na_pct"] / 100.0 * hw_range,
+                    1,
+                )
+                if s.get("stop_soc_pct") is not None:
+                    try:
+                        stop_soc_pct = float(s["stop_soc_pct"])
+                    except (TypeError, ValueError):
+                        s["stop_soc_pct"] = None
+                    else:
+                        s["stop_soc_pct"] = round(
+                            hw_min_pct + stop_soc_pct / 100.0 * hw_range,
+                            1,
+                        )
         stop_als_geannuleerd()
 
-        verwachte_winst = sum(s["winst_eur"] for s in schema)
+        verwachte_winst = bereken_prijs_rte_winst_eur(schema)
+        economische_verwachte_winst = bereken_prijs_rte_winst_eur(economisch_schema)
+        winstverschil = economische_verwachte_winst - verwachte_winst
+        penalty_totalen = bereken_penalty_totalen_eur(schema)
+        economische_penalty_totalen = bereken_penalty_totalen_eur(economisch_schema)
         laad_slots      = [s for s in schema if s["actie"] == "laden"]
         ontlaad_slots   = [s for s in schema if s["actie"] == "ontladen"]
+        economische_laad_slots = [
+            s for s in economisch_schema if s["actie"] == "laden"
+        ]
+        economische_ontlaad_slots = [
+            s for s in economisch_schema if s["actie"] == "ontladen"
+        ]
         volgende        = next((s for s in schema if s["actie"] != "rust"), None)
+        economische_volgende = next(
+            (s for s in economisch_schema if s["actie"] != "rust"),
+            None,
+        )
         nu_publicatie   = datetime.now().astimezone()
         huidig = None
         for slot in schema:
@@ -1189,6 +1293,15 @@ class DynamischHandelen(hass.Hass):
             start, end = datetimes
             if start <= nu_publicatie < end:
                 huidig = slot
+                break
+        economisch_huidig = None
+        for slot in economisch_schema:
+            datetimes = _lees_slot_datetimes(slot)
+            if datetimes is None:
+                continue
+            start, end = datetimes
+            if start <= nu_publicatie < end:
+                economisch_huidig = slot
                 break
         history_grafiek_slots: list[dict] = []
         try:
@@ -1223,7 +1336,9 @@ class DynamischHandelen(hass.Hass):
         strategie_einde = schema[-1]["end"] if schema else None
 
         self.log(
-            f"Dynamisch Handelen: verwacht EUR {verwachte_winst:.3f} | "
+            f"Dynamisch Handelen: verwacht gekozen EUR {verwachte_winst:.3f} | "
+            f"economisch EUR {economische_verwachte_winst:.3f} | "
+            f"verschil EUR {winstverschil:.3f} | "
             f"{len(laad_slots)} laadslots / {len(ontlaad_slots)} ontlaadslots | "
             f"volgende: {volgende['actie'] if volgende else 'rust'} "
             f"om {volgende['start'] if volgende else '-'}",
@@ -1231,13 +1346,102 @@ class DynamischHandelen(hass.Hass):
         )
 
         self.set_state(
+            ECONOMISCHE_STRATEGIE_ENTITY,
+            state=str(round(economische_verwachte_winst, 3)),
+            attributes={
+                "unit_of_measurement": "EUR",
+                "friendly_name": "Economisch Optimale Strategie Verwachte Winst",
+                "icon": "mdi:cash-fast",
+                "device_class": "monetary",
+                "strategie_type": "economisch_optimaal",
+                "optimalisatie": "prijs_en_rte",
+                "penalties_actief": False,
+                "verwachte_winst_berekening": "prijs_en_rte",
+                "verwachte_winst_eur": round(economische_verwachte_winst, 4),
+                "gekozen_verwachte_winst_eur": round(verwachte_winst, 4),
+                "winstverschil_eur": round(winstverschil, 4),
+                "penalty_totaal_eur": economische_penalty_totalen["totaal_eur"],
+                "warmte_penalty_laden_totaal_eur": economische_penalty_totalen[
+                    "warmte_laden_eur"
+                ],
+                "warmte_penalty_ontladen_totaal_eur": economische_penalty_totalen[
+                    "warmte_ontladen_eur"
+                ],
+                "overtemp_penalty_totaal_eur": economische_penalty_totalen[
+                    "overtemp_eur"
+                ],
+                "hoge_soc_verblijf_penalty_totaal_eur": economische_penalty_totalen[
+                    "hoge_soc_verblijf_eur"
+                ],
+                "lage_soc_verblijf_penalty_totaal_eur": economische_penalty_totalen[
+                    "lage_soc_verblijf_eur"
+                ],
+                "gekozen_strategie_entity": "sensor.dynamisch_handelsstrategie",
+                "slots": economisch_schema,
+                "strategie_einde": strategie_einde,
+                "prijs_bron": prijs_bron,
+                "planning_resolutie": "volledige horizon kwartierprijzen",
+                "laad_slots": len(economische_laad_slots),
+                "ontlaad_slots": len(economische_ontlaad_slots),
+                "huidige_actie": (
+                    economisch_huidig["actie"] if economisch_huidig else "rust"
+                ),
+                "volgende_actie": (
+                    economische_volgende["actie"] if economische_volgende else "rust"
+                ),
+                "volgende_start": (
+                    economische_volgende["start"] if economische_volgende else None
+                ),
+                "min_spread_ct": 0.0,
+                "warmte_penalty_laden_factor": 0.0,
+                "warmte_penalty_ontladen_factor": 0.0,
+                "temp_penalty_factor": 0.0,
+                "hoge_soc_verblijf_penalty_factor": 0.0,
+                "lage_soc_verblijf_penalty_factor": 0.0,
+                "plateau_spreiding": False,
+                "standby_verbruik_w": standby_verbruik_w,
+                "minimum_vermogen_w": minimum_vermogen_w,
+                "dp_vermogen_stap_w": DP_VERMOGEN_STAP_W,
+                "accu_huidig_kwh": round(accu.huidig_kwh, 3),
+                "accu_max_kwh": round(accu.max_kwh, 3),
+                "eta": round(accu.eta_laad, 3),
+                "bijgewerkt": nu_publicatie.isoformat(),
+            },
+        )
+
+        self.set_state(
             "sensor.dynamisch_handelsstrategie",
             state=str(round(verwachte_winst, 3)),
             attributes={
                 "unit_of_measurement": "EUR",
-                "friendly_name":       "Dynamisch Handelen Verwachte Winst",
+                "friendly_name":       "Gekozen Strategie Verwachte Winst",
                 "icon":                "mdi:cash-plus",
                 "device_class":        "monetary",
+                "strategie_type":       "gekozen_met_penalties",
+                "optimalisatie":        "prijs_rte_en_penalties",
+                "penalties_actief":     True,
+                "verwachte_winst_berekening": "prijs_en_rte",
+                "verwachte_winst_eur": round(verwachte_winst, 4),
+                "economische_verwachte_winst_eur": round(
+                    economische_verwachte_winst,
+                    4,
+                ),
+                "winstverschil_eur": round(winstverschil, 4),
+                "penalty_totaal_eur": penalty_totalen["totaal_eur"],
+                "warmte_penalty_laden_totaal_eur": penalty_totalen[
+                    "warmte_laden_eur"
+                ],
+                "warmte_penalty_ontladen_totaal_eur": penalty_totalen[
+                    "warmte_ontladen_eur"
+                ],
+                "overtemp_penalty_totaal_eur": penalty_totalen["overtemp_eur"],
+                "hoge_soc_verblijf_penalty_totaal_eur": penalty_totalen[
+                    "hoge_soc_verblijf_eur"
+                ],
+                "lage_soc_verblijf_penalty_totaal_eur": penalty_totalen[
+                    "lage_soc_verblijf_eur"
+                ],
+                "economische_strategie_entity": ECONOMISCHE_STRATEGIE_ENTITY,
                 "slots":               schema,
                 "slots_grafiek":       grafiek_slots,
                 "grafiek_historie_uren": GRAFIEK_HISTORIE_UREN,
@@ -1301,6 +1505,42 @@ class DynamischHandelen(hass.Hass):
                 "plateau_spreiding":   plateau_spreiding,
                 "bijgewerkt":          nu_publicatie.isoformat(),
             },
+        )
+
+    def _bereken_economisch_schema(
+        self,
+        slots: list[dict],
+        accu: "Accustatus",
+        standby_verbruik_w: float,
+        minimum_vermogen_w: int,
+        hw_min_pct: float,
+        hw_max_pct: float,
+        annuleer_check,
+    ) -> list[dict]:
+        """
+        Optimaliseert alleen op marktprijs en RTE binnen de fysieke accugrenzen.
+
+        Minimale spread, thermische penalties, SoC-verblijfskosten en
+        plateau-spreiding staan uit. Standbyverlies, vermogensgrenzen, derating
+        en het beschikbare SoC-venster blijven fysieke modelvoorwaarden.
+        """
+        return los_dp_op(
+            slots,
+            accu,
+            min_spread_ct_per_kwh=0.0,
+            plateau_spreiding=False,
+            warmte_penalty_laden_factor=0.0,
+            warmte_penalty_ontladen_factor=0.0,
+            standby_verbruik_w=standby_verbruik_w,
+            minimum_vermogen_w=minimum_vermogen_w,
+            batterij_temp_start_c=None,
+            temp_penalty_factor=0.0,
+            temp_penalty_100_soc_factor=1.0,
+            hoge_soc_verblijf_penalty_factor=0.0,
+            lage_soc_verblijf_penalty_factor=0.0,
+            soc_min_pct=hw_min_pct,
+            soc_max_pct=hw_max_pct,
+            annuleer_check=annuleer_check,
         )
 
     # ── DATA OPHALEN ─────────────────────────────────────────────────────────
@@ -1547,6 +1787,7 @@ class DynamischHandelen(hass.Hass):
         accu: "Accustatus",
         hw_min_pct: float,
         hw_max_pct: float,
+        strategie_entity_id: str = "sensor.dynamisch_handelsstrategie",
     ) -> None:
         """
         Corrigeert alleen het lopende slot op basis van de actuele Zendure-SoC.
@@ -1612,6 +1853,7 @@ class DynamischHandelen(hass.Hass):
             raw_actuele_soc_kwh,
             accu,
             nu,
+            strategie_entity_id,
         )
 
         if actie == "laden":
@@ -1712,6 +1954,7 @@ class DynamischHandelen(hass.Hass):
         raw_soc_kwh: float,
         accu: "Accustatus",
         nu: datetime,
+        strategie_entity_id: str = "sensor.dynamisch_handelsstrategie",
     ) -> tuple[float, str]:
         """
         Schat de actuele SoC binnen hetzelfde actieve slot wanneer electricLevel
@@ -1719,7 +1962,7 @@ class DynamischHandelen(hass.Hass):
         """
         start = str(actief["start"])
         end = str(actief["end"])
-        vorige_slots = self.get_state("sensor.dynamisch_handelsstrategie", attribute="slots") or []
+        vorige_slots = self.get_state(strategie_entity_id, attribute="slots") or []
         vorige_slot = None
         for slot in vorige_slots:
             if str(slot.get("start")) == start and str(slot.get("end")) == end:
