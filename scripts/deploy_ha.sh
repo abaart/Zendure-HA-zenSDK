@@ -183,6 +183,7 @@ echo "Deploy naar ${HA_SSH_USER}@${HA_SSH_HOST}:${HA_CONFIG_DIR}"
 sync_apps_yaml_sections
 sync_file "appdaemon/apps/dynamisch_handelen.py" "appdaemon/apps/dynamisch_handelen.py"
 sync_file "appdaemon/apps/strategie_dp.py" "appdaemon/apps/strategie_dp.py"
+sync_file "appdaemon/apps/wattwanneer_forecast.py" "appdaemon/apps/wattwanneer_forecast.py"
 sync_file "appdaemon/apps/kwartieradministratie.py" "appdaemon/apps/kwartieradministratie.py"
 sync_file "Dutch (NL) Integration/packages/zendure_gielz1986_nl.yaml" "packages/zendure_gielz1986_nl.yaml"
 sync_file "Dutch (NL) Integration/packages/zendure_local_nl.yaml" "packages/zendure_local_nl.yaml"

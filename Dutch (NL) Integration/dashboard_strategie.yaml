@@ -46,6 +46,23 @@ views:
                 name: Economisch optimaal
                 color: '#42a5f5'
                 vertical: false
+          - type: conditional
+            conditions:
+              - entity: sensor.wattwanneer_forecast_status
+                state_not: ok
+            card:
+              type: markdown
+              content: >-
+                <ha-alert alert-type="error">
+                  <h2>WattWanneer-forecast of prijsopslag niet in orde</h2>
+                  <p><strong>De 72-uursstrategie gebruikt waar mogelijk de laatste geldige SQLite-cache en voor overige uren de 24-uursgemiddelde fallback.</strong></p>
+                  <p><strong>Fout:</strong> {{ state_attr('sensor.wattwanneer_forecast_status', 'fout') or 'Nog geen succesvolle ophaalpoging.' }}</p>
+                  <p><strong>Laatste poging:</strong> {{ state_attr('sensor.wattwanneer_forecast_status', 'laatste_poging') or 'nog niet' }}<br>
+                  <strong>Volgende poging:</strong> {{ state_attr('sensor.wattwanneer_forecast_status', 'volgende_poging') or 'bij de volgende strategieberekening' }}</p>
+                </ha-alert>
+            grid_options:
+              columns: full
+              rows: 4
           - type: custom:apexcharts-card
             cache: false
             update_delay: 2s
@@ -53,7 +70,7 @@ views:
               show: true
               show_states: true
               title: Geplande SoC — gekozen versus economisch
-            graph_span: 48h
+            graph_span: 78h
             span:
               start: hour
             now:
@@ -443,7 +460,7 @@ views:
               show: true
               show_states: false
               title: Geplande acties — gekozen versus economisch
-            graph_span: 48h
+            graph_span: 78h
             span:
               start: hour
             now:
@@ -541,7 +558,7 @@ views:
               show: true
               show_states: false
               title: Verwachte prijs+RTE-winst per slot
-            graph_span: 48h
+            graph_span: 78h
             span:
               start: hour
             now:
@@ -736,7 +753,7 @@ views:
               show: true
               show_states: false
               title: Temperatuur over planning
-            graph_span: 48h
+            graph_span: 78h
             span:
               start: hour
             now:
@@ -873,7 +890,7 @@ views:
               show: true
               show_states: false
               title: Straf per slot
-            graph_span: 48h
+            graph_span: 78h
             span:
               start: hour
             now:

@@ -9,9 +9,21 @@ Deze fork behoudt een paar lokale wijzigingen ten opzichte van `Gielz1986/Zendur
 
 - `dynamisch_minimale_spread` gebruikt een absolute spread in `ct/kWh`, geen percentage. AppDaemon gebruikt 2 ct/kWh als de persistente Home Assistant-helper tijdelijk geen geldige waarde heeft.
 - `sensor.dynamisch_spread_indicatie`, `sensor.dynamisch_spread_indicatie_nom`, `sensor.dynamisch_spread_indicatie_morgen`, en `sensor.dynamisch_spread_indicatie_nom_morgen` berekenen spread met `(gemiddelde dure prijs - gemiddelde goedkope prijs) * 100`, zodat de sensorwaarde past bij `unit_of_measurement: "ct/kWh"`.
-- `appdaemon/apps/dynamisch_handelen.py` leest echte 15-minutenprijzen rechtstreeks uit `raw_today` en `raw_tomorrow` van de sensor in `input_text.dynamisch_nordpool_sensor`; ieder beschikbaar kwartier blijft een afzonderlijk prijsslot en ontbrekende tijd tot 12:00 na het einde van de bekende prijsreeks krijgt uurprijzen op basis van het gemiddelde van maximaal de laatste 24 uur geldige bronkwartieren.
+- `appdaemon/apps/dynamisch_handelen.py` rekent 72 uur vooruit. Echte 15-minutenprijzen uit `raw_today` en `raw_tomorrow` houden voorrang; na het laatste bronkwartier gebruikt de strategie WattWanneer-uurprijzen die met overlappende `entsoe_day_ahead`-uren op de prijsbasis van de ingestelde Nordpool-sensor worden gekalibreerd. Ontbrekende uren krijgen een fallback op basis van het gemiddelde van maximaal de laatste 24 uur geldige bronkwartieren.
+- `appdaemon/apps/wattwanneer_forecast.py` bewaart de gesaneerde WattWanneer-forecast, iedere echte ophaalpoging, iedere succesvolle forecastsnapshot, Nordpool-kwartierprijsversies en de toegepaste prijsbasiskalibratie in `/share/zendure_kwartieren.sqlite`. Na succes haalt AppDaemon maximaal eens per 12 uur op; na een fout maximaal eens per 2 uur, ook over Home Assistant- en AppDaemon-herstarts heen.
 - `appdaemon/apps/kwartieradministratie.py` bewaart Zonneplan-kwartierprijzen en gemeten Zendure-import/export idempotent in `/share/zendure_kwartieren.sqlite`; de aparte SQL-sensoren tonen importkosten, exportopbrengst en netto handelsresultaat zonder afhankelijk te blijven van gepurgede kwartierhistorie.
 - `.DS_Store` bestanden worden genegeerd met `.gitignore`, zodat macOS metadata-bestanden buiten commits blijven.
+
+### Historische prijsbrondata voor backtests
+
+De SQLite-database `/share/zendure_kwartieren.sqlite` bevat naast de bestaande `zendure_quarters`-administratie vier tabellen voor de prijsinputs van de strategie:
+
+- `wattwanneer_forecast_fetches`: één regel per uitgevoerde HTTP-poging, met starttijd, eindtijd, status, foutmelding en aantal ontvangen forecastregels.
+- `wattwanneer_forecast_history`: alle prijsregels van iedere succesvolle fetch, gekoppeld via `fetch_id`. Iedere regel bevat de ophaaltijd, het voorspelde begin en einde van het uur, de oorspronkelijke lokale `datetime`, `price_eur_kwh`, `source` en `generated_at`. De p10- en p90-waarden worden niet opgeslagen.
+- `nordpool_quarter_price_history`: de geldige 15-minutenprijzen uit `raw_today` en `raw_tomorrow`. Een ongewijzigde prijs verhoogt `observation_count`; een gewijzigde prijs voor hetzelfde kwartier maakt een nieuwe `price_version_id`, zodat correcties bewaard blijven.
+- `wattwanneer_price_calibration_history`: de factor, EUR/kWh-opslag, maximale restfout en het aantal overlapuren dat een strategierun gebruikte om WattWanneer op de ingestelde Nordpool-sensor te kalibreren. `forecast_fetch_id` verwijst naar de gebruikte forecastsnapshot.
+
+De tabellen worden niet automatisch opgeschoond. Epoch-kolommen zijn geschikt voor tijdsfilters en indexen; de bijbehorende `*_utc` en `*_iso` kolommen maken handmatige inspectie leesbaar. Wanneer de forecast-, Nordpool- of kalibratiehistorie niet kan worden opgeslagen, publiceert `sensor.wattwanneer_forecast_status` de status `fout`, waardoor de rode dashboardmelding zichtbaar wordt.
 
 ## Lokaal deployen naar Home Assistant
 
@@ -54,6 +66,7 @@ scripts/deploy_ha.sh
 - `/config/appdaemon/apps/apps.yaml`: vervangt alleen de top-level secties `dynamisch_handelen:` en `zendure_kwartieradministratie:` en laat andere AppDaemon apps in `apps.yaml` staan.
 - `/config/appdaemon/apps/dynamisch_handelen.py`
 - `/config/appdaemon/apps/strategie_dp.py`
+- `/config/appdaemon/apps/wattwanneer_forecast.py`
 - `/config/appdaemon/apps/kwartieradministratie.py`
 - `/config/packages/zendure_gielz1986_nl.yaml`
 - `/config/packages/zendure_local_nl.yaml`

@@ -2,6 +2,8 @@ dynamisch_handelen:
   module: dynamisch_handelen
   class: DynamischHandelen
   plateau_spreiding: false
+  wattwanneer_url: https://wattwanneer.nl/public/week_forecast.json
+  wattwanneer_cache_db_path: /share/zendure_kwartieren.sqlite
 
 zendure_kwartieradministratie:
   module: kwartieradministratie

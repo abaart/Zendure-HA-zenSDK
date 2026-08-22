@@ -10,6 +10,7 @@ import sys
 import types
 from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -38,13 +39,59 @@ import dynamisch_handelen as dynamisch_handelen_module  # noqa: E402
 from dynamisch_handelen import (  # noqa: E402
     DEFAULT_MINIMALE_SPREAD_CT_PER_KWH,
     ECONOMISCHE_STRATEGIE_ENTITY,
+    PLANNING_HORIZON_UREN,
     DynamischHandelen,
     bereken_penalty_totalen_eur,
     bereken_prijs_rte_winst_eur,
+    bouw_wattwanneer_slots,
     bouw_grafiek_slots,
     formatteer_penalty_attributen,
     haal_grafiek_slots_uit_history_items,
+    kalibreer_wattwanneer_prijzen,
 )
+from wattwanneer_forecast import WattWanneerCacheResultaat  # noqa: E402
+
+
+def _cache_resultaat(
+    records: list[dict] | None = None,
+    *,
+    status: str = "failure",
+    fout: str | None = "testcache heeft geen forecast",
+) -> WattWanneerCacheResultaat:
+    return WattWanneerCacheResultaat(
+        records=records or [],
+        laatste_status=status,
+        poging_uitgevoerd=False,
+        laatste_poging_epoch=None,
+        laatste_succes_epoch=None,
+        volgende_poging_epoch=None,
+        generated_at=(records or [{}])[0].get("generated_at"),
+        fout=fout,
+    )
+
+
+class _VasteForecastCache:
+    def __init__(self, resultaat: WattWanneerCacheResultaat) -> None:
+        self.resultaat = resultaat
+        self.nordpool_calls = []
+        self.kalibratie_calls = []
+
+    def haal(self, *, now_epoch: int) -> WattWanneerCacheResultaat:
+        return self.resultaat
+
+    def lees_status(self) -> WattWanneerCacheResultaat:
+        return self.resultaat
+
+    def bewaar_nordpool_prijzen(self, **kwargs):
+        self.nordpool_calls.append(kwargs)
+        return {
+            "waargenomen_slots": len(kwargs["slots"]),
+            "nieuwe_prijsversies": len(kwargs["slots"]),
+        }
+
+    def bewaar_prijskalibratie(self, **kwargs):
+        self.kalibratie_calls.append(kwargs)
+        return len(self.kalibratie_calls)
 
 
 def _history_item(state: str, tijd: str) -> dict:
@@ -59,6 +106,7 @@ def _maak_app(
     states: dict[str, object] | None = None,
     history: dict[str, list[dict]] | None = None,
     history_calls: list[dict] | None = None,
+    forecast_resultaat: WattWanneerCacheResultaat | None = None,
 ) -> DynamischHandelen:
     app = object.__new__(DynamischHandelen)
     states = states or {}
@@ -91,6 +139,11 @@ def _maak_app(
     app.get_state = get_state
     app.get_history = get_history
     app.log = lambda *args, **kwargs: None
+    app.set_state = lambda *args, **kwargs: None
+    app.args = {}
+    app._wattwanneer_cache = _VasteForecastCache(
+        forecast_resultaat or _cache_resultaat()
+    )
     return app
 
 
@@ -293,7 +346,7 @@ def test_geen_prijsdata_publiceert_beide_strategiesensoren():
 
 
 class TestKwartierPrijsslots:
-    def test_bewaart_kwartierprijzen_en_voegt_12_uur_fallback_toe(self):
+    def test_bewaart_kwartierprijzen_en_rekent_72_uur_vooruit(self):
         start = (
             datetime.now().astimezone().replace(second=0, microsecond=0)
             + timedelta(minutes=15)
@@ -327,7 +380,8 @@ class TestKwartierPrijsslots:
         assert [slot["price"] for slot in echte_slots] == prijzen
         assert [slot["duration_h"] for slot in echte_slots] == [0.25] * 40
         assert {slot["resolutie"] for slot in echte_slots} == {"kwartierprijs"}
-        verwacht_einde = echte_slots[-1]["end"] + timedelta(hours=12)
+        horizon_start = resultaat[0]["start"]
+        verwacht_einde = horizon_start + timedelta(hours=PLANNING_HORIZON_UREN)
         assert resultaat[-1]["end"] == verwacht_einde
         assert sum(slot["duration_h"] for slot in resultaat) == pytest.approx(
             (verwacht_einde - resultaat[0]["start"]).total_seconds() / 3600.0
@@ -451,7 +505,7 @@ class TestKwartierPrijsslots:
             slot["fallback_prijs_basis_slots"] for slot in fallback_slots
         } == {96}
 
-    def test_verstreken_prijzen_mogen_12u_fallback_bepalen(self):
+    def test_verstreken_prijzen_mogen_72u_fallback_bepalen(self):
         nu = datetime.now().astimezone()
         horizon_start = nu.replace(
             minute=(nu.minute // 15) * 15,
@@ -478,14 +532,14 @@ class TestKwartierPrijsslots:
 
         resultaat = app._haal_prijsslots()
 
-        assert len(resultaat) == 12
+        assert len(resultaat) == 72
         assert all(slot["prijs_is_fallback"] for slot in resultaat)
         assert all(slot["duration_h"] == pytest.approx(1.0) for slot in resultaat)
         assert all(slot["price"] == pytest.approx(0.25) for slot in resultaat)
         assert resultaat[0]["start"] == horizon_start
-        assert resultaat[-1]["end"] == horizon_start + timedelta(hours=12)
+        assert resultaat[-1]["end"] == horizon_start + timedelta(hours=72)
 
-    def test_bekende_reeks_tot_middernacht_eindigt_om_twaalf_uur(self):
+    def test_horizon_is_exact_72_verstreken_uren(self):
         nu = datetime.now().astimezone()
         bekende_reeks_einde = (
             nu.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -510,9 +564,166 @@ class TestKwartierPrijsslots:
 
         resultaat = app._haal_prijsslots()
 
-        assert resultaat[-1]["end"].hour == 12
-        assert resultaat[-1]["end"].minute == 0
-        assert resultaat[-1]["end"].date() == bekende_reeks_einde.date()
+        verstreken_uren = (
+            resultaat[-1]["end"].astimezone(timezone.utc)
+            - resultaat[0]["start"].astimezone(timezone.utc)
+        ).total_seconds() / 3600.0
+        assert verstreken_uren == pytest.approx(72.0)
+
+    def test_kalibreert_wattwanneer_op_nordpool_prijsbasis(self):
+        start = datetime(2026, 8, 23, 0, 0, tzinfo=ZoneInfo("Europe/Amsterdam"))
+        records = []
+        kwartier_slots = []
+        for uur in range(8):
+            ruwe_prijs = 0.05 + uur * 0.01
+            records.append({
+                "datetime": (start + timedelta(hours=uur)).strftime("%Y-%m-%d %H:%M"),
+                "price_eur_kwh": ruwe_prijs,
+                "source": "entsoe_day_ahead",
+                "generated_at": "20260822_1320",
+            })
+            nordpool_prijs = 1.21 * ruwe_prijs + 0.13564
+            for kwartier in range(4):
+                kwartier_start = start + timedelta(hours=uur, minutes=15 * kwartier)
+                kwartier_slots.append({
+                    "start": kwartier_start,
+                    "end": kwartier_start + timedelta(minutes=15),
+                    "price": nordpool_prijs,
+                    "duration_h": 0.25,
+                })
+
+        kalibratie = kalibreer_wattwanneer_prijzen(
+            bouw_wattwanneer_slots(records),
+            kwartier_slots,
+        )
+
+        assert kalibratie["meetpunten"] == 8
+        assert kalibratie["factor"] == pytest.approx(1.21)
+        assert kalibratie["opslag_eur_kwh"] == pytest.approx(0.13564)
+        assert kalibratie["max_restfout_eur_kwh"] < 1e-9
+
+    def test_voegt_modeluren_na_kwartieren_toe_tot_72_uur(self):
+        tijdzone = ZoneInfo("Europe/Amsterdam")
+        nu = datetime(2026, 8, 22, 12, 0, tzinfo=tijdzone)
+        forecast_start = datetime(2026, 8, 23, 0, 0, tzinfo=tijdzone)
+        bekende_reeks_einde = datetime(2026, 8, 24, 0, 0, tzinfo=tijdzone)
+        records = []
+        for uur in range(168):
+            records.append({
+                "datetime": (forecast_start + timedelta(hours=uur)).strftime("%Y-%m-%d %H:%M"),
+                "price_eur_kwh": 0.05 + (uur % 24) / 1000,
+                "source": "entsoe_day_ahead" if uur < 24 else "model",
+                "generated_at": "20260822_1320",
+            })
+
+        kwartieren = []
+        cursor = nu
+        while cursor < bekende_reeks_einde:
+            if cursor >= forecast_start:
+                ruwe_prijs = 0.05 + cursor.hour / 1000
+                prijs = 1.21 * ruwe_prijs + 0.13564
+            else:
+                prijs = 0.25
+            kwartieren.append(_bron_prijs_slot(cursor, 15, prijs))
+            cursor += timedelta(minutes=15)
+
+        bron_entity = "sensor.nordpool_kwartier"
+        app = _maak_app(
+            {
+                "input_text.dynamisch_nordpool_sensor": bron_entity,
+                bron_entity: {
+                    "state": "0.25",
+                    "attributes": {
+                        "raw_today": kwartieren[:48],
+                        "raw_tomorrow": kwartieren[48:],
+                    },
+                },
+            },
+            forecast_resultaat=_cache_resultaat(
+                records,
+                status="success",
+                fout=None,
+            ),
+        )
+        app._huidige_planning_tijd = lambda: nu
+
+        resultaat = app._haal_prijsslots()
+        forecast_slots = [
+            slot for slot in resultaat if slot.get("prijs_is_forecast") is True
+        ]
+        fallback_slots = [
+            slot for slot in resultaat if slot.get("prijs_is_fallback") is True
+        ]
+
+        assert resultaat[0]["start"] == nu
+        assert resultaat[-1]["end"] == nu + timedelta(hours=72)
+        assert len(forecast_slots) == 36
+        assert fallback_slots == []
+        assert forecast_slots[0]["start"] == bekende_reeks_einde
+        assert forecast_slots[0]["price"] == pytest.approx(
+            1.21 * float(forecast_slots[0]["ruwe_forecast_prijs"]) + 0.13564
+        )
+        assert app._laatste_wattwanneer_metadata["status"] == "ok"
+        assert app._laatste_wattwanneer_metadata["kalibratie_factor"] == pytest.approx(1.21)
+        assert app._wattwanneer_cache.nordpool_calls[0]["price_entity"] == bron_entity
+        assert len(app._wattwanneer_cache.nordpool_calls[0]["slots"]) == len(kwartieren)
+        assert app._wattwanneer_cache.kalibratie_calls[0]["overlap_hours"] == 24
+        assert app._laatste_wattwanneer_metadata["kalibratie_history_id"] == 1
+
+    def test_historieopslagfout_maakt_forecast_status_rood(self):
+        tijdzone = ZoneInfo("Europe/Amsterdam")
+        nu = datetime(2026, 8, 22, 12, 0, tzinfo=tijdzone)
+        forecast_start = datetime(2026, 8, 22, 0, 0, tzinfo=tijdzone)
+        records = [
+            {
+                "datetime": (forecast_start + timedelta(hours=uur)).strftime(
+                    "%Y-%m-%d %H:%M"
+                ),
+                "price_eur_kwh": 0.05 + (uur % 24) / 1000,
+                "source": "entsoe_day_ahead" if uur < 48 else "model",
+                "generated_at": "20260822_1320",
+            }
+            for uur in range(168)
+        ]
+        kwartieren = []
+        cursor = forecast_start
+        for _ in range(48 * 4):
+            ruwe_prijs = 0.05 + (cursor.hour % 24) / 1000
+            kwartieren.append(
+                _bron_prijs_slot(cursor, 15, 1.21 * ruwe_prijs + 0.13564)
+            )
+            cursor += timedelta(minutes=15)
+        bron_entity = "sensor.nordpool_kwartier"
+        app = _maak_app(
+            {
+                "input_text.dynamisch_nordpool_sensor": bron_entity,
+                bron_entity: {
+                    "state": "0.25",
+                    "attributes": {
+                        "raw_today": kwartieren[:96],
+                        "raw_tomorrow": kwartieren[96:],
+                    },
+                },
+            },
+            forecast_resultaat=_cache_resultaat(
+                records,
+                status="success",
+                fout=None,
+            ),
+        )
+        app._huidige_planning_tijd = lambda: nu
+
+        def opslagfout(**kwargs):
+            raise OSError("database is read-only")
+
+        app._wattwanneer_cache.bewaar_nordpool_prijzen = opslagfout
+
+        assert app._haal_prijsslots()
+        assert app._laatste_wattwanneer_metadata["status"] == "fout"
+        assert "database is read-only" in app._laatste_wattwanneer_metadata["fout"]
+        assert "Nordpool-kwartierprijzen" in app._laatste_wattwanneer_metadata[
+            "historie_fout"
+        ]
 
 
 class TestHistorischeStates:

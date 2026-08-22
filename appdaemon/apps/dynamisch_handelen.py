@@ -10,6 +10,7 @@ BESTANDSLOCATIES IN HA
 -----------------------
   /config/appdaemon/apps/dynamisch_handelen.py   ← dit bestand
   /config/appdaemon/apps/strategie_dp.py         ← het algoritme
+  /config/appdaemon/apps/wattwanneer_forecast.py ← HTTP- en SQLite-cachelogica
 
 AppDaemon voegt de apps-map automatisch toe aan sys.path,
 waardoor `from strategie_dp import ...` direct werkt.
@@ -50,10 +51,11 @@ Uitgang:
   sensor.dynamisch_handelsstrategie_economisch  economisch schema + prijs/RTE-winst (€)
   sensor.dynamisch_strategie_advies   advies over DP- en thermische parameters
   sensor.dynamisch_handelsstrategie_berekening_duur  duur van de laatste bereken-run
+  sensor.wattwanneer_forecast_status  ophaal-, cache- en kalibratiestatus
 """
 
 import math
-from datetime import datetime, time, timedelta
+from datetime import datetime, time, timedelta, timezone
 from time import monotonic
 from zoneinfo import ZoneInfo
 
@@ -82,16 +84,24 @@ from strategie_dp import (
     los_dp_op,
     rond_vermogen_omhoog,
 )
+from wattwanneer_forecast import (
+    WATTWANNEER_URL,
+    WattWanneerCacheResultaat,
+    WattWanneerForecastCache,
+)
 
 
 GRAFIEK_HISTORIE_UREN = 6.0
 KWARTIER_SLOT_MINUTEN = 15
 DEFAULT_MINIMALE_SPREAD_CT_PER_KWH = 2.0
-FALLBACK_NA_BEKENDE_PRIJZEN_UREN = 12
+PLANNING_HORIZON_UREN = 72.0
 FALLBACK_PRIJS_BASIS_UREN = 24
 FALLBACK_SLOT_UREN = 1.0
 PLANNING_TIJDZONE = ZoneInfo("Europe/Amsterdam")
 ECONOMISCHE_STRATEGIE_ENTITY = "sensor.dynamisch_handelsstrategie_economisch"
+DEFAULT_WATTWANNEER_CACHE_DB_PATH = "/share/zendure_kwartieren.sqlite"
+MIN_WATTWANNEER_KALIBRATIE_UREN = 6
+MAX_WATTWANNEER_KALIBRATIE_RESTFOUT_EUR_KWH = 0.0005
 
 
 def bereken_prijs_rte_winst_eur(schema: list[dict]) -> float:
@@ -188,6 +198,122 @@ def _lees_datetime_waarde(waarde) -> datetime | None:
         return datetime.fromisoformat(tekst.replace("Z", "+00:00")).astimezone()
     except ValueError:
         return None
+
+
+def bouw_wattwanneer_slots(records: list[dict]) -> list[dict]:
+    """Zet gevalideerde WattWanneer-records om naar lokale slots van één uur."""
+    slots: list[dict] = []
+    for record in records:
+        try:
+            start = datetime.strptime(
+                str(record["datetime"]),
+                "%Y-%m-%d %H:%M",
+            ).replace(tzinfo=PLANNING_TIJDZONE)
+            end = (
+                start.astimezone(timezone.utc) + timedelta(hours=1)
+            ).astimezone(PLANNING_TIJDZONE)
+            prijs = float(record["price_eur_kwh"])
+            source = str(record["source"])
+            generated_at = str(record["generated_at"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not math.isfinite(prijs) or source not in {"entsoe_day_ahead", "model"}:
+            continue
+        slots.append(
+            {
+                "start": start,
+                "end": end,
+                "price": prijs,
+                "ruwe_forecast_prijs": prijs,
+                "duration_h": 1.0,
+                "resolutie": "uurprijs_forecast",
+                "prijs_bron": "WattWanneer",
+                "prijs_is_forecast": True,
+                "prijs_is_fallback": False,
+                "forecast_source": source,
+                "forecast_generated_at": generated_at,
+            }
+        )
+    return sorted(slots, key=lambda slot: slot["start"])
+
+
+def kalibreer_wattwanneer_prijzen(
+    forecast_slots: list[dict],
+    kwartier_slots: list[dict],
+) -> dict:
+    """Past WattWanneer-prijzen aan op de prijsbasis van de Nordpool-sensor."""
+    meetpunten: list[tuple[float, float]] = []
+    for forecast_slot in forecast_slots:
+        if forecast_slot.get("forecast_source") != "entsoe_day_ahead":
+            continue
+        start = forecast_slot["start"]
+        end = forecast_slot["end"]
+        overlap = [
+            slot
+            for slot in kwartier_slots
+            if slot["start"] >= start and slot["end"] <= end
+        ]
+        overlap.sort(key=lambda slot: slot["start"])
+        if len(overlap) != 4:
+            continue
+        if overlap[0]["start"] != start or overlap[-1]["end"] != end:
+            continue
+        if any(overlap[index]["end"] != overlap[index + 1]["start"] for index in range(3)):
+            continue
+        duur = sum(float(slot["duration_h"]) for slot in overlap)
+        if not math.isclose(duur, 1.0, abs_tol=1e-6):
+            continue
+        nordpool_prijs = sum(
+            float(slot["price"]) * float(slot["duration_h"])
+            for slot in overlap
+        ) / duur
+        meetpunten.append((float(forecast_slot["price"]), nordpool_prijs))
+
+    if len(meetpunten) < MIN_WATTWANNEER_KALIBRATIE_UREN:
+        raise ValueError(
+            "onvoldoende prijsbasis-overlap: "
+            f"{len(meetpunten)} volledige uren, minimaal {MIN_WATTWANNEER_KALIBRATIE_UREN} nodig"
+        )
+
+    x_gemiddeld = sum(x for x, _ in meetpunten) / len(meetpunten)
+    y_gemiddeld = sum(y for _, y in meetpunten) / len(meetpunten)
+    x_variantie = sum((x - x_gemiddeld) ** 2 for x, _ in meetpunten)
+    if x_variantie <= 1e-10:
+        raise ValueError("prijsbasis-overlap heeft te weinig prijsvariatie")
+    factor = sum(
+        (x - x_gemiddeld) * (y - y_gemiddeld)
+        for x, y in meetpunten
+    ) / x_variantie
+    opslag = y_gemiddeld - factor * x_gemiddeld
+    restfouten = [abs(y - (factor * x + opslag)) for x, y in meetpunten]
+    max_restfout = max(restfouten)
+
+    if not 0.5 <= factor <= 2.0:
+        raise ValueError(f"prijsbasis-factor {factor:.6f} valt buiten 0,5-2,0")
+    if not -0.5 <= opslag <= 0.5:
+        raise ValueError(f"prijsbasis-opslag {opslag:.6f} EUR/kWh valt buiten bereik")
+    if max_restfout > MAX_WATTWANNEER_KALIBRATIE_RESTFOUT_EUR_KWH:
+        raise ValueError(
+            "prijsbasis-restfout "
+            f"{max_restfout:.6f} EUR/kWh is groter dan "
+            f"{MAX_WATTWANNEER_KALIBRATIE_RESTFOUT_EUR_KWH:.6f}"
+        )
+
+    gekalibreerd: list[dict] = []
+    for slot in forecast_slots:
+        nieuw_slot = dict(slot)
+        nieuw_slot["price"] = factor * float(slot["price"]) + opslag
+        nieuw_slot["forecast_prijsfactor"] = factor
+        nieuw_slot["forecast_prijsopslag_eur_kwh"] = opslag
+        gekalibreerd.append(nieuw_slot)
+
+    return {
+        "slots": gekalibreerd,
+        "meetpunten": len(meetpunten),
+        "factor": factor,
+        "opslag_eur_kwh": opslag,
+        "max_restfout_eur_kwh": max_restfout,
+    }
 
 
 def haal_grafiek_slots_uit_history_items(
@@ -301,9 +427,11 @@ class DynamischHandelen(hass.Hass):
         self._herberekening_gepland = False
         self._laatste_herberekening_kwargs = None
         self._berekening_generatie = 0
+        self._laatste_wattwanneer_metadata = {}
         self._zet_berekening_bezig(False)
         self._initialiseer_berekening_duur_sensor()
         self._initialiseer_advies_sensor()
+        self._initialiseer_wattwanneer_status_sensor()
         self.run_hourly(self.bereken_strategie, time(0, 55, 0))
         self.listen_state(
             self._herbereken_op_knop,
@@ -458,6 +586,157 @@ class DynamischHandelen(hass.Hass):
                 f"Dynamisch Handelen: kon berekening-duur sensor niet initialiseren: {exc}",
                 level="DEBUG",
             )
+
+    def _get_wattwanneer_cache(self) -> WattWanneerForecastCache:
+        """Maakt de persistente forecastcache eenmalig per AppDaemon-instantie."""
+        bestaande_cache = getattr(self, "_wattwanneer_cache", None)
+        if bestaande_cache is not None:
+            return bestaande_cache
+        args = getattr(self, "args", {}) or {}
+        self._wattwanneer_cache = WattWanneerForecastCache(
+            db_path=str(
+                args.get(
+                    "wattwanneer_cache_db_path",
+                    DEFAULT_WATTWANNEER_CACHE_DB_PATH,
+                )
+            ),
+            url=str(args.get("wattwanneer_url", WATTWANNEER_URL)),
+        )
+        return self._wattwanneer_cache
+
+    @staticmethod
+    def _epoch_naar_iso(epoch: int | None) -> str | None:
+        if epoch is None:
+            return None
+        return datetime.fromtimestamp(
+            int(epoch),
+            tz=timezone.utc,
+        ).astimezone(PLANNING_TIJDZONE).isoformat()
+
+    def _publiceer_wattwanneer_status(
+        self,
+        resultaat: WattWanneerCacheResultaat | None,
+        *,
+        extra_fout: str | None = None,
+        kalibratie: dict | None = None,
+        historie_fout: str | None = None,
+        historie_metadata: dict | None = None,
+    ) -> None:
+        """Publiceert ophaal-, cache-, historie- en kalibratiestatus."""
+        laatste_status = resultaat.laatste_status if resultaat else "failure"
+        cache_beschikbaar = resultaat.cache_beschikbaar if resultaat else False
+        fouten = [
+            waarde
+            for waarde in (
+                extra_fout,
+                historie_fout,
+                resultaat.fout if resultaat else "cache niet beschikbaar",
+            )
+            if waarde
+        ]
+        fout = "; ".join(dict.fromkeys(fouten)) or None
+        if extra_fout or historie_fout:
+            state = "fout"
+        elif laatste_status == "success" and cache_beschikbaar:
+            state = "ok"
+        elif laatste_status == "never":
+            state = "nog_niet_opgehaald"
+        else:
+            state = "fout"
+            if not fout and laatste_status == "in_progress":
+                fout = "vorige ophaalpoging werd niet afgerond"
+
+        attributes = {
+            "friendly_name": "WattWanneer Forecast Status",
+            "icon": "mdi:cloud-alert" if state != "ok" else "mdi:cloud-check",
+            "status": state,
+            "laatste_status": laatste_status,
+            "laatste_poging": self._epoch_naar_iso(
+                resultaat.laatste_poging_epoch if resultaat else None
+            ),
+            "laatste_succes": self._epoch_naar_iso(
+                resultaat.laatste_succes_epoch if resultaat else None
+            ),
+            "volgende_poging": self._epoch_naar_iso(
+                resultaat.volgende_poging_epoch if resultaat else None
+            ),
+            "poging_uitgevoerd": resultaat.poging_uitgevoerd if resultaat else False,
+            "cache_beschikbaar": cache_beschikbaar,
+            "cache_regels": len(resultaat.records) if resultaat else 0,
+            "generated_at": resultaat.generated_at if resultaat else None,
+            "forecast_fetch_id": (
+                resultaat.payload_fetch_id if resultaat else None
+            ),
+            "laatste_poging_fetch_id": (
+                resultaat.laatste_poging_fetch_id if resultaat else None
+            ),
+            "fout": fout,
+            "historie_fout": historie_fout,
+            "nordpool_historie_waarnemingen": (
+                historie_metadata.get("waargenomen_slots")
+                if historie_metadata
+                else None
+            ),
+            "nordpool_nieuwe_prijsversies": (
+                historie_metadata.get("nieuwe_prijsversies")
+                if historie_metadata
+                else None
+            ),
+            "kalibratie_history_id": (
+                historie_metadata.get("kalibratie_history_id")
+                if historie_metadata
+                else None
+            ),
+            "url": str(
+                (getattr(self, "args", {}) or {}).get(
+                    "wattwanneer_url",
+                    WATTWANNEER_URL,
+                )
+            ),
+            "succes_interval_uren": 12,
+            "fout_retry_interval_uren": 2,
+            "planning_horizon_uren": PLANNING_HORIZON_UREN,
+            "kalibratie_meetpunten": (
+                kalibratie.get("meetpunten") if kalibratie else None
+            ),
+            "kalibratie_factor": (
+                round(float(kalibratie["factor"]), 8) if kalibratie else None
+            ),
+            "kalibratie_opslag_eur_kwh": (
+                round(float(kalibratie["opslag_eur_kwh"]), 8)
+                if kalibratie
+                else None
+            ),
+            "kalibratie_max_restfout_eur_kwh": (
+                round(float(kalibratie["max_restfout_eur_kwh"]), 8)
+                if kalibratie
+                else None
+            ),
+        }
+        self._laatste_wattwanneer_metadata = dict(attributes)
+        try:
+            self.set_state(
+                "sensor.wattwanneer_forecast_status",
+                state=state,
+                attributes=attributes,
+            )
+        except Exception as exc:
+            self.log(
+                f"Dynamisch Handelen: kon WattWanneer-status niet publiceren: {exc}",
+                level="DEBUG",
+            )
+
+    def _initialiseer_wattwanneer_status_sensor(self) -> None:
+        """Herstelt bij AppDaemon-start de laatste persistente ophaalstatus."""
+        try:
+            resultaat = self._get_wattwanneer_cache().lees_status()
+        except Exception as exc:
+            self._publiceer_wattwanneer_status(
+                None,
+                extra_fout=f"SQLite-cache kon niet worden gelezen: {exc}",
+            )
+            return
+        self._publiceer_wattwanneer_status(resultaat)
 
     def _publiceer_berekening_duur(
         self,
@@ -1157,6 +1436,10 @@ class DynamischHandelen(hass.Hass):
             s for s in slots
             if s.get("resolutie") == "kwartierprijs"
         ]
+        forecast_prijs_slots = [
+            s for s in slots
+            if s.get("prijs_is_forecast") is True
+        ]
         fallback_prijs_slots = [
             s for s in slots
             if s.get("prijs_is_fallback") is True
@@ -1183,6 +1466,7 @@ class DynamischHandelen(hass.Hass):
 
         self.log(
             f"Dynamisch Handelen: {len(kwartierprijs_slots)} kwartierprijzen "
+            f"+ {len(forecast_prijs_slots)} WattWanneer-uurprijzen "
             f"+ {len(fallback_prijs_slots)} uurfallbackslots "
             f"over {planning_horizon_h:.2f} uur uit {prijs_bron} | "
             f"accu {accu.huidig_kwh:.2f}/{accu.max_kwh:.2f} kWh | "
@@ -1429,13 +1713,47 @@ class DynamischHandelen(hass.Hass):
                 "grafiek_start":       grafiek_start,
                 "strategie_einde":     strategie_einde,
                 "prijs_bron":           prijs_bron,
-                "planning_resolutie":   "echte kwartierprijzen + 12 uur uurfallback op 24-uursgemiddelde",
+                "planning_resolutie":   "echte kwartierprijzen + gekalibreerde WattWanneer-uurprijzen + 24-uursgemiddelde fallback",
                 "planning_horizon_h":   round(planning_horizon_h, 2),
                 "kwartierprijs_slots":  len(kwartierprijs_slots),
-                "uurprijs_slots":       len(fallback_prijs_slots),
+                "uurprijs_slots":       len(forecast_prijs_slots) + len(fallback_prijs_slots),
+                "forecast_prijsslots":  len(forecast_prijs_slots),
                 "fallback_prijsslots":  len(fallback_prijs_slots),
                 "fallback_prijs_ct":    fallback_prijs_ct,
                 "fallback_prijs_basis_slots": fallback_prijs_basis_slots,
+                "wattwanneer_status": getattr(
+                    self, "_laatste_wattwanneer_metadata", {}
+                ).get("status"),
+                "wattwanneer_generated_at": getattr(
+                    self, "_laatste_wattwanneer_metadata", {}
+                ).get("generated_at"),
+                "wattwanneer_laatste_poging": getattr(
+                    self, "_laatste_wattwanneer_metadata", {}
+                ).get("laatste_poging"),
+                "wattwanneer_laatste_succes": getattr(
+                    self, "_laatste_wattwanneer_metadata", {}
+                ).get("laatste_succes"),
+                "wattwanneer_volgende_poging": getattr(
+                    self, "_laatste_wattwanneer_metadata", {}
+                ).get("volgende_poging"),
+                "wattwanneer_fout": getattr(
+                    self, "_laatste_wattwanneer_metadata", {}
+                ).get("fout"),
+                "wattwanneer_forecast_fetch_id": getattr(
+                    self, "_laatste_wattwanneer_metadata", {}
+                ).get("forecast_fetch_id"),
+                "wattwanneer_kalibratie_history_id": getattr(
+                    self, "_laatste_wattwanneer_metadata", {}
+                ).get("kalibratie_history_id"),
+                "prijshistorie_fout": getattr(
+                    self, "_laatste_wattwanneer_metadata", {}
+                ).get("historie_fout"),
+                "wattwanneer_kalibratie_factor": getattr(
+                    self, "_laatste_wattwanneer_metadata", {}
+                ).get("kalibratie_factor"),
+                "wattwanneer_kalibratie_opslag_eur_kwh": getattr(
+                    self, "_laatste_wattwanneer_metadata", {}
+                ).get("kalibratie_opslag_eur_kwh"),
                 # Bestaande attribuutnamen blijven beschikbaar voor dashboards en automations.
                 "fijnmazige_horizon_h": round(kwartier_horizon_h, 2),
                 "fijnmazige_slot_minuten": KWARTIER_SLOT_MINUTEN,
@@ -1526,9 +1844,13 @@ class DynamischHandelen(hass.Hass):
 
     # ── DATA OPHALEN ─────────────────────────────────────────────────────────
 
+    def _huidige_planning_tijd(self) -> datetime:
+        """Geeft de huidige tijd expliciet in Europe/Amsterdam terug."""
+        return datetime.now().astimezone(PLANNING_TIJDZONE)
+
     def _haal_prijsslots(self) -> list[dict]:
         """
-        Bouwt een prijsplanning tot 12 uur na het laatste bekende prijsslot.
+        Bouwt een prijsplanning van exact 72 verstreken uren.
 
         `input_text.dynamisch_nordpool_sensor` bevat de entity_id van de HACS
         Nordpool-sensor. We lezen `raw_today` en `raw_tomorrow` van die bron,
@@ -1537,16 +1859,16 @@ class DynamischHandelen(hass.Hass):
 
         Alleen bron-slots van exact 15 minuten worden geaccepteerd. Ieder
         beschikbaar toekomstig kwartier uit `raw_today` en `raw_tomorrow` blijft
-        een afzonderlijk DP-slot. De planning eindigt 12 lokale klokuren na het
-        laatste geldige bronkwartier. Een normale bronreeks eindigt om 00:00, dus
-        de planning eindigt om 12:00. Ontbrekende perioden worden aangevuld met
-        slots van maximaal één uur. De fallbackprijs is het rekenkundig gemiddelde
-        van maximaal de laatste 96 geldige bronkwartieren (24 uur prijsdata).
+        een afzonderlijk DP-slot. Na het laatste geldige bronkwartier gebruikt de
+        planning gekalibreerde WattWanneer-uurprijzen. Ontbrekende perioden worden
+        aangevuld met slots van maximaal één uur. De fallbackprijs is het
+        rekenkundig gemiddelde van maximaal de laatste 96 geldige bronkwartieren
+        (24 uur prijsdata).
 
-        Verstreken bronkwartieren komen niet in de planning, maar mogen wel de
-        fallbackprijs bepalen. Als geen enkel geldig bronkwartier beschikbaar is,
-        kan geen betrouwbare fallbackprijs worden berekend en blijft de planning
-        leeg.
+        WattWanneer wordt na succes maximaal eens per 12 uur opgehaald. Na een
+        mislukte poging volgt maximaal eens per 2 uur een nieuwe poging. Beide
+        tijdstippen staan in `/share/zendure_kwartieren.sqlite`, zodat Home
+        Assistant- en AppDaemon-herstarts de limieten niet omzeilen.
         """
         bron_entity = str(
             self.get_state("input_text.dynamisch_nordpool_sensor") or ""
@@ -1563,46 +1885,123 @@ class DynamischHandelen(hass.Hass):
         raw_today    = attributes.get("raw_today")    or []
         raw_tomorrow = attributes.get("raw_tomorrow") or []
 
-        nu = datetime.now().astimezone()
+        nu = self._huidige_planning_tijd()
         geldige_bron_slots: dict[tuple[datetime, datetime], dict] = {}
 
-        for item in raw_today + raw_tomorrow:
-            try:
-                start = datetime.fromisoformat(str(item["start"])).astimezone()
-                end   = datetime.fromisoformat(str(item["end"])).astimezone()
-                price = float(item["value"])
-            except (KeyError, ValueError, TypeError) as exc:
-                self.log(f"Dynamisch Handelen: ongeldig prijsslot overgeslagen: {exc}", level="WARNING")
-                continue
+        for source_series, reeks in (
+            ("raw_today", raw_today),
+            ("raw_tomorrow", raw_tomorrow),
+        ):
+            for item in reeks:
+                try:
+                    start = datetime.fromisoformat(str(item["start"])).astimezone(
+                        PLANNING_TIJDZONE
+                    )
+                    end = datetime.fromisoformat(str(item["end"])).astimezone(
+                        PLANNING_TIJDZONE
+                    )
+                    price = float(item["value"])
+                except (KeyError, ValueError, TypeError) as exc:
+                    self.log(
+                        f"Dynamisch Handelen: ongeldig prijsslot overgeslagen: {exc}",
+                        level="WARNING",
+                    )
+                    continue
 
-            duur_seconden = (end - start).total_seconds()
-            if not math.isclose(
-                duur_seconden,
-                KWARTIER_SLOT_MINUTEN * 60,
-                abs_tol=1.0,
-            ):
-                self.log(
-                    f"Dynamisch Handelen: prijsslot van {duur_seconden / 60:.1f} minuten "
-                    f"uit {bron_entity} overgeslagen; 15 minuten vereist",
-                    level="WARNING",
-                )
-                continue
+                duur_seconden = (end - start).total_seconds()
+                if not math.isclose(
+                    duur_seconden,
+                    KWARTIER_SLOT_MINUTEN * 60,
+                    abs_tol=1.0,
+                ):
+                    self.log(
+                        f"Dynamisch Handelen: prijsslot van {duur_seconden / 60:.1f} minuten "
+                        f"uit {bron_entity} overgeslagen; 15 minuten vereist",
+                        level="WARNING",
+                    )
+                    continue
 
-            geldige_bron_slots[(start, end)] = {
-                "start":      start,
-                "end":        end,
-                "price":      price,
-                "duration_h": duur_seconden / 3600.0,
-                "resolutie":  "kwartierprijs",
-                "prijs_bron": bron_entity,
-                "prijs_is_fallback": False,
-            }
+                geldige_bron_slots[(start, end)] = {
+                    "start":      start,
+                    "end":        end,
+                    "price":      price,
+                    "duration_h": duur_seconden / 3600.0,
+                    "resolutie":  "kwartierprijs",
+                    "prijs_bron": bron_entity,
+                    "prijs_is_forecast": False,
+                    "prijs_is_fallback": False,
+                    "source_series": source_series,
+                }
 
         bron_slots = sorted(
             geldige_bron_slots.values(),
             key=lambda slot: slot["start"],
         )
+
+        historie_metadata: dict = {}
+        historie_fouten: list[str] = []
+        forecast_cache = self._get_wattwanneer_cache()
+        try:
+            historie_metadata.update(
+                forecast_cache.bewaar_nordpool_prijzen(
+                    price_entity=bron_entity,
+                    slots=bron_slots,
+                    observed_at_epoch=int(nu.timestamp()),
+                )
+            )
+        except Exception as exc:
+            historie_fouten.append(
+                f"Nordpool-kwartierprijzen konden niet in SQLite worden opgeslagen: {exc}"
+            )
+            self.log(
+                f"Dynamisch Handelen: {historie_fouten[-1]}",
+                level="ERROR",
+            )
+
+        historie_fout = "; ".join(historie_fouten) or None
+
+        forecast_infrastructuur_fout = None
+        try:
+            forecast_resultaat = forecast_cache.haal(
+                now_epoch=int(nu.timestamp())
+            )
+        except Exception as exc:
+            forecast_resultaat = None
+            forecast_infrastructuur_fout = (
+                f"SQLite-cache of downloader gaf een fout: {exc}"
+            )
+            self._publiceer_wattwanneer_status(
+                None,
+                extra_fout=forecast_infrastructuur_fout,
+                historie_fout=historie_fout,
+                historie_metadata=historie_metadata,
+            )
+        else:
+            self._publiceer_wattwanneer_status(
+                forecast_resultaat,
+                historie_fout=historie_fout,
+                historie_metadata=historie_metadata,
+            )
+            if forecast_resultaat.poging_uitgevoerd:
+                if forecast_resultaat.laatste_status == "success":
+                    self.log(
+                        "Dynamisch Handelen: WattWanneer-forecast opgehaald en in SQLite opgeslagen",
+                        level="INFO",
+                    )
+                else:
+                    self.log(
+                        "Dynamisch Handelen: WattWanneer ophalen mislukt; "
+                        f"volgende poging pas na 2 uur: {forecast_resultaat.fout}",
+                        level="ERROR",
+                    )
+
         if not bron_slots:
+            self._publiceer_wattwanneer_status(
+                forecast_resultaat,
+                extra_fout="geen geldige Nordpool-kwartieren voor prijsbasiskalibratie",
+                historie_fout=historie_fout,
+                historie_metadata=historie_metadata,
+            )
             return []
 
         fallback_basis_aantal = int(
@@ -1619,18 +2018,69 @@ class DynamischHandelen(hass.Hass):
             second=0,
             microsecond=0,
         )
-        bekende_reeks_einde = max(slot["end"] for slot in bron_slots)
         horizon_einde = (
-            bekende_reeks_einde.astimezone(PLANNING_TIJDZONE)
-            + timedelta(hours=FALLBACK_NA_BEKENDE_PRIJZEN_UREN)
+            horizon_start.astimezone(timezone.utc)
+            + timedelta(hours=PLANNING_HORIZON_UREN)
+        ).astimezone(PLANNING_TIJDZONE)
+        bekende_reeks_einde = max(slot["end"] for slot in bron_slots)
+
+        forecast_slots: list[dict] = []
+        kalibratie = None
+        forecast_fout = forecast_infrastructuur_fout
+        if forecast_resultaat and forecast_resultaat.records:
+            ruwe_forecast_slots = bouw_wattwanneer_slots(forecast_resultaat.records)
+            try:
+                kalibratie = kalibreer_wattwanneer_prijzen(
+                    ruwe_forecast_slots,
+                    bron_slots,
+                )
+            except ValueError as exc:
+                forecast_fout = f"WattWanneer-prijsbasiskalibratie mislukt: {exc}"
+            else:
+                forecast_slots = kalibratie["slots"]
+                try:
+                    historie_metadata["kalibratie_history_id"] = (
+                        forecast_cache.bewaar_prijskalibratie(
+                            calculated_at_epoch=int(nu.timestamp()),
+                            forecast_fetch_id=(
+                                forecast_resultaat.payload_fetch_id
+                                if forecast_resultaat
+                                else None
+                            ),
+                            price_entity=bron_entity,
+                            overlap_hours=int(kalibratie["meetpunten"]),
+                            factor=float(kalibratie["factor"]),
+                            offset_eur_kwh=float(kalibratie["opslag_eur_kwh"]),
+                            max_residual_eur_kwh=float(
+                                kalibratie["max_restfout_eur_kwh"]
+                            ),
+                        )
+                    )
+                except Exception as exc:
+                    historie_fouten.append(
+                        "WattWanneer-prijskalibratie kon niet in SQLite worden "
+                        f"opgeslagen: {exc}"
+                    )
+                    historie_fout = "; ".join(historie_fouten)
+                    self.log(
+                        f"Dynamisch Handelen: {historie_fouten[-1]}",
+                        level="ERROR",
+                    )
+                for slot in forecast_slots:
+                    slot["kalibratie_bron"] = bron_entity
+                    slot["prijs_bron"] = f"WattWanneer gekalibreerd op {bron_entity}"
+                if not forecast_slots or forecast_slots[-1]["end"] < horizon_einde:
+                    forecast_fout = (
+                        "WattWanneer-forecast dekt de 72-uursplanning niet volledig"
+                    )
+
+        self._publiceer_wattwanneer_status(
+            forecast_resultaat,
+            extra_fout=forecast_fout,
+            kalibratie=kalibratie,
+            historie_fout=historie_fout,
+            historie_metadata=historie_metadata,
         )
-        if horizon_einde <= horizon_start:
-            self.log(
-                "Dynamisch Handelen: einde van bekende prijsreeks + 12 uur "
-                "ligt niet na het huidige kwartier",
-                level="ERROR",
-            )
-            return []
 
         echte_slots_op_start = {
             slot["start"]: slot
@@ -1640,6 +2090,14 @@ class DynamischHandelen(hass.Hass):
             and slot["end"] <= horizon_einde
         }
         echte_starttijden = sorted(echte_slots_op_start)
+        forecast_slots_op_start = {
+            slot["start"]: slot
+            for slot in forecast_slots
+            if slot["start"] >= bekende_reeks_einde
+            and slot["end"] > horizon_start
+            and slot["start"] < horizon_einde
+        }
+        forecast_starttijden = sorted(forecast_slots_op_start)
 
         slots: list[dict] = []
         cursor = horizon_start
@@ -1650,16 +2108,41 @@ class DynamischHandelen(hass.Hass):
                 cursor = echt_slot["end"]
                 continue
 
-            volgende_echte_start = next(
-                (start for start in echte_starttijden if start > cursor),
-                horizon_einde,
+            forecast_slot = forecast_slots_op_start.get(cursor)
+            if forecast_slot is not None:
+                forecast_einde = min(forecast_slot["end"], horizon_einde)
+                nieuw_slot = dict(forecast_slot)
+                nieuw_slot["end"] = forecast_einde
+                nieuw_slot["duration_h"] = (
+                    forecast_einde.astimezone(timezone.utc)
+                    - cursor.astimezone(timezone.utc)
+                ).total_seconds() / 3600.0
+                slots.append(nieuw_slot)
+                cursor = forecast_einde
+                continue
+
+            volgende_start = min(
+                next(
+                    (start for start in echte_starttijden if start > cursor),
+                    horizon_einde,
+                ),
+                next(
+                    (start for start in forecast_starttijden if start > cursor),
+                    horizon_einde,
+                ),
             )
             fallback_einde = min(
-                cursor + timedelta(hours=FALLBACK_SLOT_UREN),
-                volgende_echte_start,
+                (
+                    cursor.astimezone(timezone.utc)
+                    + timedelta(hours=FALLBACK_SLOT_UREN)
+                ).astimezone(PLANNING_TIJDZONE),
+                volgende_start,
                 horizon_einde,
             )
-            duur_h = (fallback_einde - cursor).total_seconds() / 3600.0
+            duur_h = (
+                fallback_einde.astimezone(timezone.utc)
+                - cursor.astimezone(timezone.utc)
+            ).total_seconds() / 3600.0
             if duur_h <= 0:
                 self.log(
                     "Dynamisch Handelen: prijsplanning kon niet voorbij "
@@ -1675,6 +2158,7 @@ class DynamischHandelen(hass.Hass):
                 "duration_h": duur_h,
                 "resolutie": "uurprijs_fallback_24h_gemiddelde",
                 "prijs_bron": bron_entity,
+                "prijs_is_forecast": False,
                 "prijs_is_fallback": True,
                 "fallback_prijs_basis_slots": len(fallback_basis),
             })
