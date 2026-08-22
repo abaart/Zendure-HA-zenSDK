@@ -51,8 +51,9 @@ Uitgang:
 """
 
 import math
-from datetime import datetime, timedelta, time
+from datetime import datetime, time, timedelta
 from time import monotonic
+from zoneinfo import ZoneInfo
 
 import appdaemon.plugins.hass.hassapi as hass
 
@@ -83,6 +84,10 @@ from strategie_dp import (
 
 GRAFIEK_HISTORIE_UREN = 6.0
 KWARTIER_SLOT_MINUTEN = 15
+FALLBACK_NA_BEKENDE_PRIJZEN_UREN = 12
+FALLBACK_PRIJS_BASIS_UREN = 24
+FALLBACK_SLOT_UREN = 1.0
+PLANNING_TIJDZONE = ZoneInfo("Europe/Amsterdam")
 
 
 def _lees_slot_datetimes(slot: dict) -> tuple[datetime, datetime] | None:
@@ -1079,19 +1084,34 @@ class DynamischHandelen(hass.Hass):
             s for s in slots
             if s.get("resolutie") == "kwartierprijs"
         ]
-        uurprijs_slots = [
+        fallback_prijs_slots = [
             s for s in slots
-            if s.get("resolutie") == "uurprijs_gemiddeld"
+            if s.get("prijs_is_fallback") is True
         ]
         kwartier_horizon_h = sum(
             float(s.get("duration_h", 0.0))
             for s in kwartierprijs_slots
         )
+        planning_horizon_h = sum(
+            float(s.get("duration_h", 0.0))
+            for s in slots
+        )
+        fallback_prijs_ct = (
+            round(float(fallback_prijs_slots[0]["price"]) * 100.0, 3)
+            if fallback_prijs_slots
+            else None
+        )
+        fallback_prijs_basis_slots = (
+            int(fallback_prijs_slots[0].get("fallback_prijs_basis_slots", 0))
+            if fallback_prijs_slots
+            else 0
+        )
         prijs_bron = slots[0].get("prijs_bron")
 
         self.log(
             f"Dynamisch Handelen: {len(kwartierprijs_slots)} kwartierprijzen "
-            f"over {kwartier_horizon_h:.2f} uur uit {prijs_bron} | "
+            f"+ {len(fallback_prijs_slots)} uurfallbackslots "
+            f"over {planning_horizon_h:.2f} uur uit {prijs_bron} | "
             f"accu {accu.huidig_kwh:.2f}/{accu.max_kwh:.2f} kWh | "
             f"eta={accu.eta_laad:.3f} | "
             f"laad {accu.max_laad_w:.0f} W / ontlaad {accu.max_ontlaad_w:.0f} W | "
@@ -1223,14 +1243,18 @@ class DynamischHandelen(hass.Hass):
                 "grafiek_start":       grafiek_start,
                 "strategie_einde":     strategie_einde,
                 "prijs_bron":           prijs_bron,
-                "planning_resolutie":   "volledige horizon kwartierprijzen",
+                "planning_resolutie":   "echte kwartierprijzen + 12 uur uurfallback op 24-uursgemiddelde",
+                "planning_horizon_h":   round(planning_horizon_h, 2),
                 "kwartierprijs_slots":  len(kwartierprijs_slots),
-                "uurprijs_slots":       len(uurprijs_slots),
+                "uurprijs_slots":       len(fallback_prijs_slots),
+                "fallback_prijsslots":  len(fallback_prijs_slots),
+                "fallback_prijs_ct":    fallback_prijs_ct,
+                "fallback_prijs_basis_slots": fallback_prijs_basis_slots,
                 # Bestaande attribuutnamen blijven beschikbaar voor dashboards en automations.
                 "fijnmazige_horizon_h": round(kwartier_horizon_h, 2),
                 "fijnmazige_slot_minuten": KWARTIER_SLOT_MINUTEN,
                 "fijnmazige_slots":     len(kwartierprijs_slots),
-                "bron_slots":           len(uurprijs_slots),
+                "bron_slots":           len(fallback_prijs_slots),
                 "laad_slots":          len(laad_slots),
                 "ontlaad_slots":       len(ontlaad_slots),
                 "spread_blokkades":    spread_blokkades,
@@ -1282,7 +1306,7 @@ class DynamischHandelen(hass.Hass):
 
     def _haal_prijsslots(self) -> list[dict]:
         """
-        Haalt toekomstige kwartierprijzen rechtstreeks uit de Nordpool-bron.
+        Bouwt een prijsplanning tot 12 uur na het laatste bekende prijsslot.
 
         `input_text.dynamisch_nordpool_sensor` bevat de entity_id van de HACS
         Nordpool-sensor. We lezen `raw_today` en `raw_tomorrow` van die bron,
@@ -1290,9 +1314,17 @@ class DynamischHandelen(hass.Hass):
         uurprijzen kan middelen voordat de DP ze ontvangt.
 
         Alleen bron-slots van exact 15 minuten worden geaccepteerd. Ieder
-        beschikbaar kwartier uit `raw_today` en `raw_tomorrow` blijft een
-        afzonderlijk DP-slot. Slots die al volledig zijn verstreken worden
-        overgeslagen.
+        beschikbaar toekomstig kwartier uit `raw_today` en `raw_tomorrow` blijft
+        een afzonderlijk DP-slot. De planning eindigt 12 lokale klokuren na het
+        laatste geldige bronkwartier. Een normale bronreeks eindigt om 00:00, dus
+        de planning eindigt om 12:00. Ontbrekende perioden worden aangevuld met
+        slots van maximaal één uur. De fallbackprijs is het rekenkundig gemiddelde
+        van maximaal de laatste 96 geldige bronkwartieren (24 uur prijsdata).
+
+        Verstreken bronkwartieren komen niet in de planning, maar mogen wel de
+        fallbackprijs bepalen. Als geen enkel geldig bronkwartier beschikbaar is,
+        kan geen betrouwbare fallbackprijs worden berekend en blijft de planning
+        leeg.
         """
         bron_entity = str(
             self.get_state("input_text.dynamisch_nordpool_sensor") or ""
@@ -1309,8 +1341,8 @@ class DynamischHandelen(hass.Hass):
         raw_today    = attributes.get("raw_today")    or []
         raw_tomorrow = attributes.get("raw_tomorrow") or []
 
-        nu    = datetime.now().astimezone()
-        slots = []
+        nu = datetime.now().astimezone()
+        geldige_bron_slots: dict[tuple[datetime, datetime], dict] = {}
 
         for item in raw_today + raw_tomorrow:
             try:
@@ -1319,9 +1351,6 @@ class DynamischHandelen(hass.Hass):
                 price = float(item["value"])
             except (KeyError, ValueError, TypeError) as exc:
                 self.log(f"Dynamisch Handelen: ongeldig prijsslot overgeslagen: {exc}", level="WARNING")
-                continue
-
-            if end <= nu:
                 continue
 
             duur_seconden = (end - start).total_seconds()
@@ -1337,16 +1366,98 @@ class DynamischHandelen(hass.Hass):
                 )
                 continue
 
-            slots.append({
+            geldige_bron_slots[(start, end)] = {
                 "start":      start,
                 "end":        end,
                 "price":      price,
                 "duration_h": duur_seconden / 3600.0,
                 "resolutie":  "kwartierprijs",
                 "prijs_bron": bron_entity,
-            })
+                "prijs_is_fallback": False,
+            }
 
-        slots.sort(key=lambda s: s["start"])
+        bron_slots = sorted(
+            geldige_bron_slots.values(),
+            key=lambda slot: slot["start"],
+        )
+        if not bron_slots:
+            return []
+
+        fallback_basis_aantal = int(
+            FALLBACK_PRIJS_BASIS_UREN * 60 / KWARTIER_SLOT_MINUTEN
+        )
+        fallback_basis = bron_slots[-fallback_basis_aantal:]
+        fallback_prijs = (
+            sum(float(slot["price"]) for slot in fallback_basis)
+            / len(fallback_basis)
+        )
+
+        horizon_start = nu.replace(
+            minute=(nu.minute // KWARTIER_SLOT_MINUTEN) * KWARTIER_SLOT_MINUTEN,
+            second=0,
+            microsecond=0,
+        )
+        bekende_reeks_einde = max(slot["end"] for slot in bron_slots)
+        horizon_einde = (
+            bekende_reeks_einde.astimezone(PLANNING_TIJDZONE)
+            + timedelta(hours=FALLBACK_NA_BEKENDE_PRIJZEN_UREN)
+        )
+        if horizon_einde <= horizon_start:
+            self.log(
+                "Dynamisch Handelen: einde van bekende prijsreeks + 12 uur "
+                "ligt niet na het huidige kwartier",
+                level="ERROR",
+            )
+            return []
+
+        echte_slots_op_start = {
+            slot["start"]: slot
+            for slot in bron_slots
+            if slot["end"] > horizon_start
+            and slot["start"] >= horizon_start
+            and slot["end"] <= horizon_einde
+        }
+        echte_starttijden = sorted(echte_slots_op_start)
+
+        slots: list[dict] = []
+        cursor = horizon_start
+        while cursor < horizon_einde:
+            echt_slot = echte_slots_op_start.get(cursor)
+            if echt_slot is not None:
+                slots.append(dict(echt_slot))
+                cursor = echt_slot["end"]
+                continue
+
+            volgende_echte_start = next(
+                (start for start in echte_starttijden if start > cursor),
+                horizon_einde,
+            )
+            fallback_einde = min(
+                cursor + timedelta(hours=FALLBACK_SLOT_UREN),
+                volgende_echte_start,
+                horizon_einde,
+            )
+            duur_h = (fallback_einde - cursor).total_seconds() / 3600.0
+            if duur_h <= 0:
+                self.log(
+                    "Dynamisch Handelen: prijsplanning kon niet voorbij "
+                    f"{cursor.isoformat()} worden opgebouwd",
+                    level="ERROR",
+                )
+                return []
+
+            slots.append({
+                "start": cursor,
+                "end": fallback_einde,
+                "price": fallback_prijs,
+                "duration_h": duur_h,
+                "resolutie": "uurprijs_fallback_24h_gemiddelde",
+                "prijs_bron": bron_entity,
+                "prijs_is_fallback": True,
+                "fallback_prijs_basis_slots": len(fallback_basis),
+            })
+            cursor = fallback_einde
+
         return slots
 
     def _bepaal_dp_start_tijd(self, slots: list[dict]) -> datetime | None:

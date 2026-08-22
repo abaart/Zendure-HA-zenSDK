@@ -140,7 +140,7 @@ def test_initialize_plans_strategy_once_per_hour_at_minute_55():
 
 
 class TestKwartierPrijsslots:
-    def test_bewaart_kwartierprijzen_over_volledige_bronhorizon(self):
+    def test_bewaart_kwartierprijzen_en_voegt_12_uur_fallback_toe(self):
         start = (
             datetime.now().astimezone().replace(second=0, microsecond=0)
             + timedelta(minutes=15)
@@ -167,12 +167,24 @@ class TestKwartierPrijsslots:
         })
 
         resultaat = app._haal_prijsslots()
+        echte_slots = [slot for slot in resultaat if not slot["prijs_is_fallback"]]
+        fallback_slots = [slot for slot in resultaat if slot["prijs_is_fallback"]]
 
-        assert len(resultaat) == 40
-        assert [slot["price"] for slot in resultaat] == prijzen
-        assert [slot["duration_h"] for slot in resultaat] == [0.25] * 40
-        assert {slot["resolutie"] for slot in resultaat} == {"kwartierprijs"}
-        assert resultaat[-1]["end"] == start + timedelta(hours=10)
+        assert len(echte_slots) == 40
+        assert [slot["price"] for slot in echte_slots] == prijzen
+        assert [slot["duration_h"] for slot in echte_slots] == [0.25] * 40
+        assert {slot["resolutie"] for slot in echte_slots} == {"kwartierprijs"}
+        verwacht_einde = echte_slots[-1]["end"] + timedelta(hours=12)
+        assert resultaat[-1]["end"] == verwacht_einde
+        assert sum(slot["duration_h"] for slot in resultaat) == pytest.approx(
+            (verwacht_einde - resultaat[0]["start"]).total_seconds() / 3600.0
+        )
+        assert fallback_slots
+        assert all(slot["duration_h"] <= 1.0 for slot in fallback_slots)
+        assert all(
+            slot["price"] == pytest.approx(sum(prijzen) / len(prijzen))
+            for slot in fallback_slots
+        )
 
     def test_leest_verschillende_kwartierprijzen_rechtstreeks_uit_bron(self):
         start = (
@@ -199,10 +211,11 @@ class TestKwartierPrijsslots:
         })
 
         resultaat = app._haal_prijsslots()
+        echte_slots = [slot for slot in resultaat if not slot["prijs_is_fallback"]]
 
-        assert [slot["price"] for slot in resultaat] == [0.05, 0.08, 0.21, 0.13]
-        assert [slot["duration_h"] for slot in resultaat] == [0.25] * 4
-        assert {slot["resolutie"] for slot in resultaat} == {"kwartierprijs"}
+        assert [slot["price"] for slot in echte_slots] == [0.05, 0.08, 0.21, 0.13]
+        assert [slot["duration_h"] for slot in echte_slots] == [0.25] * 4
+        assert {slot["resolutie"] for slot in echte_slots} == {"kwartierprijs"}
         assert {slot["prijs_bron"] for slot in resultaat} == {bron_entity}
 
     def test_leest_raw_today_en_raw_tomorrow(self):
@@ -223,8 +236,9 @@ class TestKwartierPrijsslots:
         })
 
         resultaat = app._haal_prijsslots()
+        echte_slots = [slot for slot in resultaat if not slot["prijs_is_fallback"]]
 
-        assert [slot["price"] for slot in resultaat] == [0.10, 0.20]
+        assert [slot["price"] for slot in echte_slots] == [0.10, 0.20]
 
     def test_gebruikt_geen_uurprijs_als_kwartierprijs(self):
         start = (
@@ -244,6 +258,108 @@ class TestKwartierPrijsslots:
         })
 
         assert app._haal_prijsslots() == []
+
+    def test_fallback_gebruikt_laatste_96_geldige_bronkwartieren(self):
+        nu = datetime.now().astimezone()
+        horizon_start = nu.replace(
+            minute=(nu.minute // 15) * 15,
+            second=0,
+            microsecond=0,
+        )
+        bron_start = horizon_start - timedelta(hours=24)
+        prijzen = [0.01 + index / 1000 for index in range(100)]
+        bron_entity = "sensor.nordpool_kwartier"
+        raw_today = [
+            _bron_prijs_slot(
+                bron_start + timedelta(minutes=15 * index),
+                15,
+                prijs,
+            )
+            for index, prijs in enumerate(prijzen)
+        ]
+        app = _maak_app({
+            "input_text.dynamisch_nordpool_sensor": bron_entity,
+            bron_entity: {
+                "state": str(prijzen[-1]),
+                "attributes": {"raw_today": raw_today, "raw_tomorrow": []},
+            },
+        })
+
+        resultaat = app._haal_prijsslots()
+        fallback_slots = [slot for slot in resultaat if slot["prijs_is_fallback"]]
+        verwachte_prijs = sum(prijzen[-96:]) / 96
+
+        assert fallback_slots
+        assert all(
+            slot["price"] == pytest.approx(verwachte_prijs)
+            for slot in fallback_slots
+        )
+        assert {
+            slot["fallback_prijs_basis_slots"] for slot in fallback_slots
+        } == {96}
+
+    def test_verstreken_prijzen_mogen_12u_fallback_bepalen(self):
+        nu = datetime.now().astimezone()
+        horizon_start = nu.replace(
+            minute=(nu.minute // 15) * 15,
+            second=0,
+            microsecond=0,
+        )
+        prijzen = [0.10, 0.20, 0.30, 0.40]
+        bron_entity = "sensor.nordpool_kwartier"
+        raw_today = [
+            _bron_prijs_slot(
+                horizon_start - timedelta(hours=1) + timedelta(minutes=15 * index),
+                15,
+                prijs,
+            )
+            for index, prijs in enumerate(prijzen)
+        ]
+        app = _maak_app({
+            "input_text.dynamisch_nordpool_sensor": bron_entity,
+            bron_entity: {
+                "state": str(prijzen[-1]),
+                "attributes": {"raw_today": raw_today, "raw_tomorrow": []},
+            },
+        })
+
+        resultaat = app._haal_prijsslots()
+
+        assert len(resultaat) == 12
+        assert all(slot["prijs_is_fallback"] for slot in resultaat)
+        assert all(slot["duration_h"] == pytest.approx(1.0) for slot in resultaat)
+        assert all(slot["price"] == pytest.approx(0.25) for slot in resultaat)
+        assert resultaat[0]["start"] == horizon_start
+        assert resultaat[-1]["end"] == horizon_start + timedelta(hours=12)
+
+    def test_bekende_reeks_tot_middernacht_eindigt_om_twaalf_uur(self):
+        nu = datetime.now().astimezone()
+        bekende_reeks_einde = (
+            nu.replace(hour=0, minute=0, second=0, microsecond=0)
+            + timedelta(days=1)
+        )
+        bron_entity = "sensor.nordpool_kwartier"
+        raw_today = [
+            _bron_prijs_slot(
+                bekende_reeks_einde - timedelta(minutes=15 * (4 - index)),
+                15,
+                0.20 + index / 100,
+            )
+            for index in range(4)
+        ]
+        app = _maak_app({
+            "input_text.dynamisch_nordpool_sensor": bron_entity,
+            bron_entity: {
+                "state": "0.20",
+                "attributes": {"raw_today": raw_today, "raw_tomorrow": []},
+            },
+        })
+
+        resultaat = app._haal_prijsslots()
+
+        assert resultaat[-1]["end"].hour == 12
+        assert resultaat[-1]["end"].minute == 0
+        assert resultaat[-1]["end"].date() == bekende_reeks_einde.date()
 
 
 class TestHistorischeStates:

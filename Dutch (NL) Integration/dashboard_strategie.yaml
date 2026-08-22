@@ -1529,8 +1529,18 @@ views:
               - type: attribute
                 entity: sensor.dynamisch_handelsstrategie
                 attribute: uurprijs_slots
-                name: Gemiddelde uurprijzen in planning
+                name: Geschatte uurprijzen in planning
                 icon: mdi:clock-outline
+              - type: attribute
+                entity: sensor.dynamisch_handelsstrategie
+                attribute: fallback_prijs_ct
+                name: Geschatte prijs (ct/kWh)
+                icon: mdi:chart-bell-curve-cumulative
+              - type: attribute
+                entity: sensor.dynamisch_handelsstrategie
+                attribute: planning_horizon_h
+                name: Planninghorizon (uur)
+                icon: mdi:timeline-clock-outline
               - type: attribute
                 entity: sensor.dynamisch_handelsstrategie
                 attribute: bijgewerkt
