@@ -1486,9 +1486,11 @@ views:
               SoC-overgang bereiken en wordt dan bewust behouden.
 
 
-              **Buitentemp sensor**: optionele `sensor.*` voor actuele
-              buitentemperatuur. Laat leeg als je alleen `weather.openweathermap`
-              hebt.
+              **Buitentemp sensor**: optionele `sensor.*` voor actuele én
+              historische buitentemperatuur. Bij een lege helper gebruikt
+              AppDaemon `default_buitentemperatuur_sensor` uit `apps.yaml`;
+              die staat op `sensor.buienradar_temperature`. De weerforecast
+              blijft een aparte bron.
 
 
               **Weer forecast**: `weather.*` entity voor `weather.get_forecasts`,
@@ -1557,63 +1559,195 @@ views:
                 attribute: analyse_dagen
                 name: Analyseperiode
                 icon: mdi:calendar-search
+              - type: section
+                label: Statistische schattingen uit Recorder
               - type: attribute
                 entity: sensor.dynamisch_strategie_advies
-                attribute: geanalyseerde_slots
-                name: Geanalyseerde slots
-                icon: mdi:timeline-clock-outline
-              - type: attribute
-                entity: sensor.dynamisch_strategie_advies
-                attribute: strategie_slots_uit_history
-                name: Slots uit recorder-history
-                icon: mdi:history
-              - type: attribute
-                entity: sensor.dynamisch_strategie_advies
-                attribute: strategie_slots_uit_huidige_sensor
-                name: Slots uit actuele sensor
-                icon: mdi:timeline-clock
-              - type: attribute
-                entity: sensor.dynamisch_strategie_advies
-                attribute: temperatuur_vergelijkingen
-                name: Temperatuur vergelijkingen
-                icon: mdi:thermometer-check
-              - type: attribute
-                entity: sensor.dynamisch_strategie_advies
-                attribute: temperatuur_samples
-                name: Temperatuur samples
-                icon: mdi:thermometer-lines
-              - type: attribute
-                entity: sensor.dynamisch_strategie_advies
-                attribute: aanbevolen_warmte_stijging_laden_c_per_c2h
-                name: Advies opwarming laden
+                attribute: statistische_schatting_warmte_stijging_laden_tekst
+                name: Opwarming laden
                 icon: mdi:heat-wave
               - type: attribute
                 entity: sensor.dynamisch_strategie_advies
-                attribute: aanbevolen_warmte_stijging_ontladen_c_per_c2h
-                name: Advies opwarming ontladen
+                attribute: statistische_stijgende_laadblokken_tekst
+                name: Stijgende laadblokken
+                icon: mdi:counter
+              - type: attribute
+                entity: sensor.dynamisch_strategie_advies
+                attribute: statistische_spreiding_warmte_stijging_laden_tekst
+                name: Middelste 50% laden
+                icon: mdi:arrow-expand-horizontal
+              - type: attribute
+                entity: sensor.dynamisch_strategie_advies
+                attribute: statistische_betrouwbaarheid_laden
+                name: Betrouwbaarheid laden
+                icon: mdi:gauge
+              - type: attribute
+                entity: sensor.dynamisch_strategie_advies
+                attribute: statistische_schatting_warmte_stijging_ontladen_tekst
+                name: Opwarming ontladen
                 icon: mdi:heat-wave
               - type: attribute
                 entity: sensor.dynamisch_strategie_advies
-                attribute: aanbevolen_afkoeling_halveringstijd_h
-                name: Advies afkoeling
+                attribute: statistische_stijgende_ontlaadblokken_tekst
+                name: Stijgende ontlaadblokken
+                icon: mdi:counter
+              - type: attribute
+                entity: sensor.dynamisch_strategie_advies
+                attribute: statistische_spreiding_warmte_stijging_ontladen_tekst
+                name: Middelste 50% ontladen
+                icon: mdi:arrow-expand-horizontal
+              - type: attribute
+                entity: sensor.dynamisch_strategie_advies
+                attribute: statistische_betrouwbaarheid_ontladen
+                name: Betrouwbaarheid ontladen
+                icon: mdi:gauge
+              - type: attribute
+                entity: sensor.dynamisch_strategie_advies
+                attribute: statistische_schatting_afkoeling_tekst
+                name: Afkoeling halveertijd
                 icon: mdi:coolant-temperature
               - type: attribute
                 entity: sensor.dynamisch_strategie_advies
-                attribute: aanbevolen_temp_penalty_factor
-                name: Advies temp-straf
+                attribute: statistische_afkoeling_metingen_tekst
+                name: Geldige rustblokken
+                icon: mdi:snowflake-clock
+              - type: attribute
+                entity: sensor.dynamisch_strategie_advies
+                attribute: statistische_afkoeling_blokken_voldoende_duur
+                name: Rustblokken vanaf 30 min
+                icon: mdi:timer-check-outline
+              - type: attribute
+                entity: sensor.dynamisch_strategie_advies
+                attribute: statistische_afkoeling_rustgrens_tekst
+                name: Thermische rustgrens
+                icon: mdi:speedometer-slow
+              - type: attribute
+                entity: sensor.dynamisch_strategie_advies
+                attribute: statistische_afkoeling_afwijzingen_tekst
+                name: Afgewezen rustblokken
+                icon: mdi:filter-remove-outline
+              - type: attribute
+                entity: sensor.dynamisch_strategie_advies
+                attribute: statistische_spreiding_afkoeling_tekst
+                name: Middelste 50% afkoeling
+                icon: mdi:arrow-expand-horizontal
+              - type: section
+                label: Regeladviezen voor economische weging
+              - type: attribute
+                entity: sensor.dynamisch_strategie_advies
+                attribute: aanbevolen_temp_penalty_tekst
+                name: Straf boven temp-limiet
                 icon: mdi:thermometer-chevron-up
               - type: attribute
                 entity: sensor.dynamisch_strategie_advies
-                attribute: aanbevolen_warmte_penalty_laden_factor
-                name: Advies warmtestraf laden
+                attribute: overtemp_slots_tekst
+                name: Slots met temp-straf
+                icon: mdi:thermometer-alert
+              - type: attribute
+                entity: sensor.dynamisch_strategie_advies
+                attribute: aanbevolen_warmte_penalty_laden_tekst
+                name: Warmtestraf laden
                 icon: mdi:thermometer-lines
               - type: attribute
                 entity: sensor.dynamisch_strategie_advies
-                attribute: aanbevolen_warmte_penalty_ontladen_factor
-                name: Advies warmtestraf ontladen
+                attribute: gemiddelde_c_laden_tekst
+                name: Geplande gemiddelde C laden
+                icon: mdi:speedometer
+              - type: attribute
+                entity: sensor.dynamisch_strategie_advies
+                attribute: aanbevolen_warmte_penalty_ontladen_tekst
+                name: Warmtestraf ontladen
                 icon: mdi:thermometer-chevron-down
+              - type: attribute
+                entity: sensor.dynamisch_strategie_advies
+                attribute: gemiddelde_c_ontladen_tekst
+                name: Geplande gemiddelde C ontladen
+                icon: mdi:speedometer
+              - type: section
+                label: Brondekking
+              - type: attribute
+                entity: sensor.dynamisch_strategie_advies
+                attribute: vermogen_samples
+                name: Vermogenssamples
+                icon: mdi:flash-outline
+              - type: attribute
+                entity: sensor.dynamisch_strategie_advies
+                attribute: temperatuur_samples
+                name: Temperatuursamples
+                icon: mdi:thermometer-lines
+              - type: attribute
+                entity: sensor.dynamisch_strategie_advies
+                attribute: buitentemperatuur_bron
+                name: Bron buitentemperatuur
+                icon: mdi:weather-partly-cloudy
+              - type: attribute
+                entity: sensor.dynamisch_strategie_advies
+                attribute: buitentemperatuur_samples
+                name: Buitentemperatuursamples
+                icon: mdi:thermometer-auto
+              - type: attribute
+                entity: sensor.dynamisch_strategie_advies
+                attribute: meetstatistiek_accu_max_kwh
+                name: Gebruikte accucapaciteit
+                icon: mdi:battery-high
+              - type: attribute
+                entity: sensor.dynamisch_strategie_advies
+                attribute: meetstatistiek_analyse_vanaf
+                name: Metingen vanaf
+                icon: mdi:calendar-start
+              - type: attribute
+                entity: sensor.dynamisch_strategie_advies
+                attribute: meetstatistiek_analyse_tot
+                name: Metingen tot
+                icon: mdi:calendar-end
             show_header_toggle: false
             state_color: true
+          - type: markdown
+            title: Berekening per waarde
+            entity_id:
+              - sensor.dynamisch_strategie_advies
+              - input_number.dynamisch_warmte_stijging_laden_c_per_c2h
+              - input_number.dynamisch_warmte_stijging_ontladen_c_per_c2h
+              - input_number.dynamisch_warmte_afkoeling_halveringstijd_uren
+              - input_number.dynamisch_temp_penalty_factor
+              - input_number.dynamisch_warmte_penalty_laden_factor
+              - input_number.dynamisch_warmte_penalty_ontladen_factor
+            content: |-
+              <details>
+              <summary><strong>Opwarming laden</strong> — {{ state_attr('sensor.dynamisch_strategie_advies', 'statistische_schatting_warmte_stijging_laden_tekst') or 'Onvoldoende data' }}</summary>
+
+              `sensor.zendure_2400_ac_vermogen_aansturing` wordt per 5 minuten naar C omgerekend met `meetstatistiek_accu_max_kwh`. Aaneengesloten laadblokken van minimaal 15 minuten en minimaal 1 °C stijging leveren `temperatuurstijging / C²h`; de getoonde waarde is `som(temperatuurstijging) / som(C²h)`. De schatting is netto en corrigeert niet voor gelijktijdige afkoeling. `input_number.dynamisch_warmte_stijging_laden_c_per_c2h` staat nu op {{ states('input_number.dynamisch_warmte_stijging_laden_c_per_c2h') }} en komt niet voor in de schattingsformule.
+              </details>
+
+              <details>
+              <summary><strong>Opwarming ontladen</strong> — {{ state_attr('sensor.dynamisch_strategie_advies', 'statistische_schatting_warmte_stijging_ontladen_tekst') or 'Onvoldoende data' }}</summary>
+
+              Dezelfde nettoberekening gebruikt alleen aaneengesloten ontlaadblokken uit `sensor.zendure_2400_ac_vermogen_aansturing` en corrigeert niet voor gelijktijdige afkoeling. De middelste 50% toont het 25e tot en met 75e percentiel van de afzonderlijke blokfactoren. `input_number.dynamisch_warmte_stijging_ontladen_c_per_c2h` staat nu op {{ states('input_number.dynamisch_warmte_stijging_ontladen_c_per_c2h') }} en verandert de schatting niet.
+              </details>
+
+              <details>
+              <summary><strong>Afkoeling halveertijd</strong> — {{ state_attr('sensor.dynamisch_strategie_advies', 'statistische_schatting_afkoeling_tekst') or 'Onvoldoende data' }}</summary>
+
+              Een thermisch rustig blok duurt op basis van `end_epoch − start_epoch` minimaal 30 minuten en laat vermogensbewegingen toe tot {{ state_attr('sensor.dynamisch_strategie_advies', 'statistische_afkoeling_rustgrens_tekst') or '0,10 C' }}. Een Recorder-state blijft geldig tot de volgende state; een urenlang ongewijzigde `0 W` wordt dus niet na 15 minuten afgebroken. Een expliciete `unknown`- of `unavailable`-state onderbreekt het blok wel. De telling omvat afzonderlijke rustblokken over het hele etmaal en is geen telling van kalendernachten. De gemeten accutemperatuur moet minstens 1 °C dalen, minstens 80% van de 5-minutenstappen moet een historische buitentemperatuur hebben en het startverschil met buiten moet minstens 2 °C zijn. Berekende opwarming door de kleine vermogensbewegingen wordt afgetrokken, tot maximaal 0,25 °C per blok. Daarna gebruikt de analyse `duur × log(0,5) / log((T_eind − T_omgeving) / (T_begin − T_omgeving))`; de getoonde waarde is de mediaan. Bron: `{{ state_attr('sensor.dynamisch_strategie_advies', 'buitentemperatuur_bron') or 'niet beschikbaar' }}` met {{ state_attr('sensor.dynamisch_strategie_advies', 'buitentemperatuur_samples') or 0 }} historische punten. Afwijzingen: {{ state_attr('sensor.dynamisch_strategie_advies', 'statistische_afkoeling_afwijzingen_tekst') or 'nog niet berekend' }}. De toekomstige forecast uit `sensor.dynamisch_handelsstrategie.attributes.slots[].buiten_temp_c` wordt niet gebruikt. De helper staat nu op {{ states('input_number.dynamisch_warmte_afkoeling_halveringstijd_uren') }} uur en komt niet voor in de schattingsformule.
+              </details>
+
+              <details>
+              <summary><strong>Straf boven temp-limiet</strong> — {{ state_attr('sensor.dynamisch_strategie_advies', 'aanbevolen_temp_penalty_tekst') or 'Onvoldoende data' }}</summary>
+
+              `input_number.dynamisch_temp_penalty_factor` is een economische weging, geen fysiek meetbare constante. De regel verhoogt de huidige waarde met 25% wanneer minstens 8% van de geanalyseerde strategieslots een `overtemp_penalty_eur` heeft. De waargenomen verhouding staat bij “Slots met temp-straf”.
+              </details>
+
+              <details>
+              <summary><strong>Warmtestraf laden</strong> — {{ state_attr('sensor.dynamisch_strategie_advies', 'aanbevolen_warmte_penalty_laden_tekst') or 'Onvoldoende data' }}</summary>
+
+              `input_number.dynamisch_warmte_penalty_laden_factor` is een economische keuze. De regel verhoogt de huidige waarde met 15% wanneer de geplande gemiddelde laad-C minstens 0,45 is en de gemiddelde `warmte_penalty_eur` lager dan 1 ct per slot blijft.
+              </details>
+
+              <details>
+              <summary><strong>Warmtestraf ontladen</strong> — {{ state_attr('sensor.dynamisch_strategie_advies', 'aanbevolen_warmte_penalty_ontladen_tekst') or 'Onvoldoende data' }}</summary>
+
+              `input_number.dynamisch_warmte_penalty_ontladen_factor` gebruikt dezelfde 0,45 C- en 1 ct-drempels voor ontlaadslots. De waarde is een regeladvies voor de optimizer en geen statistisch gemeten materiaaleigenschap.
+              </details>
           - type: heading
             heading: Status
             heading_style: title

@@ -2,6 +2,7 @@ dynamisch_handelen:
   module: dynamisch_handelen
   class: DynamischHandelen
   plateau_spreiding: false
+  default_buitentemperatuur_sensor: sensor.buienradar_temperature
   wattwanneer_url: https://wattwanneer.nl/public/week_forecast.json
   wattwanneer_cache_db_path: /share/zendure_kwartieren.sqlite
 

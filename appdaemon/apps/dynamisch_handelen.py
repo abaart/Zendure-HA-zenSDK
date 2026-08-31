@@ -39,7 +39,7 @@ Ingangen:
   input_number.dynamisch_lage_soc_verblijf_penalty_factor verblijfskosten onder 10% SoC
   input_number.dynamisch_standby_verbruik_w               standbyverbruik bij niet-laden (W)
   input_number.dynamisch_minimum_vermogen_w               minimum laad/ontlaadvermogen voor DP (W)
-  input_text.dynamisch_buitentemperatuur_sensor           optionele sensor met actuele buitentemperatuur
+  input_text.dynamisch_buitentemperatuur_sensor           optionele sensor met actuele en historische buitentemperatuur
   input_text.dynamisch_weather_entity                     optionele weather entity voor forecast
   input_button.dynamisch_handelsstrategie_herberekenen   knop voor handmatige herberekening
   input_button.dynamisch_strategie_advies_herberekenen   knop voor handmatige adviesanalyse
@@ -102,6 +102,16 @@ ECONOMISCHE_STRATEGIE_ENTITY = "sensor.dynamisch_handelsstrategie_economisch"
 DEFAULT_WATTWANNEER_CACHE_DB_PATH = "/share/zendure_kwartieren.sqlite"
 MIN_WATTWANNEER_KALIBRATIE_UREN = 6
 MAX_WATTWANNEER_KALIBRATIE_RESTFOUT_EUR_KWH = 0.0005
+ADVIES_SAMPLE_STAP_MINUTEN = 5
+ADVIES_ACTIEF_DREMPEL_W = 100.0
+ADVIES_MIN_ACTIEF_BLOK_MINUTEN = 15
+ADVIES_MIN_RUST_BLOK_MINUTEN = 30
+ADVIES_MIN_C2H = 0.01
+ADVIES_MIN_TEMP_STIJGING_C = 1.0
+ADVIES_MIN_TEMP_DALING_C = 1.0
+ADVIES_MIN_KOELVERSCHIL_C = 2.0
+ADVIES_THERMISCHE_RUST_MAX_C = 0.10
+ADVIES_MAX_KOELBLOK_WARMTE_C = 0.25
 
 
 def bereken_prijs_rte_winst_eur(schema: list[dict]) -> float:
@@ -198,6 +208,364 @@ def _lees_datetime_waarde(waarde) -> datetime | None:
         return datetime.fromisoformat(tekst.replace("Z", "+00:00")).astimezone()
     except ValueError:
         return None
+
+
+def _percentiel(waarden: list[float], fractie: float) -> float | None:
+    """Berekent een lineair geinterpoleerd percentiel voor een kleine meetreeks."""
+    if not waarden:
+        return None
+
+    gesorteerd = sorted(waarden)
+    positie = min(1.0, max(0.0, fractie)) * (len(gesorteerd) - 1)
+    links = int(math.floor(positie))
+    rechts = int(math.ceil(positie))
+    if links == rechts:
+        return gesorteerd[links]
+    gewicht_rechts = positie - links
+    return (
+        gesorteerd[links] * (1.0 - gewicht_rechts)
+        + gesorteerd[rechts] * gewicht_rechts
+    )
+
+
+def _betrouwbaarheid_voor_metingen(aantal: int) -> str:
+    """Geeft een eenvoudige betrouwbaarheidsklasse op basis van onafhankelijke blokken."""
+    if aantal < 3:
+        return "laag"
+    if aantal < 8:
+        return "middel"
+    return "hoog"
+
+
+def bereken_thermische_meetstatistiek(
+    vermogen_samples: list[tuple[datetime, float | None]],
+    temperatuur_samples: list[tuple[datetime, float | None]],
+    accu_max_kwh: float,
+    *,
+    buiten_samples: list[tuple[datetime, float | None]] | None = None,
+    nu: datetime | None = None,
+) -> dict:
+    """
+    Schat thermische modelwaarden rechtstreeks uit gemeten historie.
+
+    Het vermogen wordt op een vijfminutenraster gezet. Aaneengesloten laad- en
+    ontlaadblokken leveren C²×h en gemeten temperatuurstijging. De gewogen
+    factor is som(stijging) / som(C²×h) over blokken met minimaal 1 °C
+    stijging. De ingestelde opwarmingsfactor komt niet in de formule voor.
+
+    Voor de omgevingstemperatuur gebruikt de analyse uitsluitend historische
+    states van een temperatuursensor. Toekomstige forecastwaarden uit
+    `slots[].buiten_temp_c` worden niet gebruikt. Een thermisch rustig blok mag
+    vermogensbewegingen tot 0,10 C bevatten. De gemeten temperatuur moet in
+    minimaal 30 minuten minstens 1 °C dalen; kleine berekende warmtebijdragen
+    worden vóór de halveringstijdberekening afgetrokken.
+    """
+    buiten_samples = buiten_samples or []
+    nu = (nu or datetime.now().astimezone()).astimezone()
+
+    def normaliseer(
+        samples: list[tuple[datetime, float | None]],
+    ) -> list[tuple[float, float | None]]:
+        resultaat: list[tuple[float, float | None]] = []
+        for tijd, waarde in samples:
+            if tijd.tzinfo is None:
+                tijd = tijd.astimezone()
+            if waarde is None:
+                resultaat.append((tijd.timestamp(), None))
+                continue
+            try:
+                getal = float(waarde)
+            except (TypeError, ValueError):
+                resultaat.append((tijd.timestamp(), None))
+                continue
+            if math.isfinite(getal):
+                resultaat.append((tijd.timestamp(), getal))
+            else:
+                resultaat.append((tijd.timestamp(), None))
+        return sorted(resultaat)
+
+    vermogen = normaliseer(vermogen_samples)
+    temperaturen = normaliseer(temperatuur_samples)
+    buiten = normaliseer(buiten_samples)
+    if accu_max_kwh <= 0 or not vermogen or not temperaturen:
+        return {
+            "status": "onvoldoende_data",
+            "accu_max_kwh": round(max(0.0, accu_max_kwh), 3),
+            "vermogen_samples": len(vermogen),
+            "temperatuur_samples": len(temperaturen),
+            "buiten_samples": len(buiten),
+            "laden": {},
+            "ontladen": {},
+            "afkoeling": {"status": "onvoldoende_data", "metingen": 0},
+        }
+
+    stap_s = ADVIES_SAMPLE_STAP_MINUTEN * 60
+    start_epoch = math.ceil(max(vermogen[0][0], temperaturen[0][0]) / stap_s) * stap_s
+    eind_epoch = math.floor(nu.timestamp() / stap_s) * stap_s
+    if eind_epoch - start_epoch < stap_s:
+        return {
+            "status": "onvoldoende_data",
+            "accu_max_kwh": round(accu_max_kwh, 3),
+            "vermogen_samples": len(vermogen),
+            "temperatuur_samples": len(temperaturen),
+            "buiten_samples": len(buiten),
+            "laden": {},
+            "ontladen": {},
+            "afkoeling": {"status": "onvoldoende_data", "metingen": 0},
+        }
+
+    indices = {"vermogen": 0, "temperatuur": 0, "buiten": 0}
+
+    def laatste_waarde(
+        samples: list[tuple[float, float | None]],
+        sleutel: str,
+        epoch: float,
+        max_ouderdom_s: float | None = None,
+    ) -> float | None:
+        if not samples or samples[0][0] > epoch:
+            return None
+        index = indices[sleutel]
+        while index + 1 < len(samples) and samples[index + 1][0] <= epoch:
+            index += 1
+        indices[sleutel] = index
+        sample_tijd, sample_waarde = samples[index]
+        if max_ouderdom_s is not None and epoch - sample_tijd > max_ouderdom_s:
+            return None
+        return sample_waarde
+
+    actieve_blokken: list[dict] = []
+    koelblokken: list[dict] = []
+    blok: dict | None = None
+    koelblok: dict | None = None
+    thermische_rust_grens_w = (
+        ADVIES_THERMISCHE_RUST_MAX_C * accu_max_kwh * 1000.0
+    )
+
+    def sluit_blok() -> None:
+        nonlocal blok
+        if blok is None:
+            return
+        actieve_blokken.append(blok)
+        blok = None
+
+    def sluit_koelblok() -> None:
+        nonlocal koelblok
+        if koelblok is not None:
+            koelblokken.append(koelblok)
+        koelblok = None
+
+    epoch = start_epoch
+    while epoch + stap_s <= eind_epoch:
+        volgend = epoch + stap_s
+        # Een Recorder-state blijft geldig tot de volgende state. Een sensor die
+        # urenlang exact 0 W blijft, krijgt dus terecht geen nieuwe records.
+        # Expliciete unknown/unavailable-records staan als None in de reeks en
+        # onderbreken het blok wel.
+        vermogen_w = laatste_waarde(vermogen, "vermogen", epoch)
+        temp_voor = laatste_waarde(temperaturen, "temperatuur", epoch)
+        temp_na = laatste_waarde(temperaturen, "temperatuur", volgend)
+        buiten_c = laatste_waarde(buiten, "buiten", epoch)
+
+        if vermogen_w is None or temp_voor is None or temp_na is None:
+            sluit_blok()
+            sluit_koelblok()
+            epoch = volgend
+            continue
+
+        if vermogen_w >= ADVIES_ACTIEF_DREMPEL_W:
+            modus = "laden"
+        elif vermogen_w <= -ADVIES_ACTIEF_DREMPEL_W:
+            modus = "ontladen"
+        else:
+            modus = "rust"
+
+        if modus == "rust":
+            sluit_blok()
+        else:
+            if blok is None or blok["modus"] != modus:
+                sluit_blok()
+                blok = {
+                    "modus": modus,
+                    "start_epoch": epoch,
+                    "end_epoch": volgend,
+                    "temp_voor_c": temp_voor,
+                    "temp_na_c": temp_na,
+                    "duur_h": 0.0,
+                    "c2h": 0.0,
+                    "c_h": 0.0,
+                }
+
+        duur_h = stap_s / 3600.0
+        if modus != "rust":
+            blok["end_epoch"] = volgend
+            blok["temp_na_c"] = temp_na
+            blok["duur_h"] += duur_h
+            c_waarde = abs(vermogen_w) / 1000.0 / accu_max_kwh
+            blok["c2h"] += c_waarde * c_waarde * duur_h
+            blok["c_h"] += c_waarde * duur_h
+
+        if abs(vermogen_w) < thermische_rust_grens_w:
+            if koelblok is None:
+                koelblok = {
+                    "start_epoch": epoch,
+                    "end_epoch": volgend,
+                    "temp_voor_c": temp_voor,
+                    "temp_na_c": temp_na,
+                    "stappen": 0,
+                    "buiten_stappen": 0,
+                    "buiten_c_som": 0.0,
+                    "laden_c2h": 0.0,
+                    "ontladen_c2h": 0.0,
+                }
+            koelblok["end_epoch"] = volgend
+            koelblok["temp_na_c"] = temp_na
+            koelblok["stappen"] += 1
+            if buiten_c is not None:
+                koelblok["buiten_stappen"] += 1
+                koelblok["buiten_c_som"] += buiten_c
+            c_waarde = abs(vermogen_w) / 1000.0 / accu_max_kwh
+            if vermogen_w > 0:
+                koelblok["laden_c2h"] += c_waarde * c_waarde * duur_h
+            elif vermogen_w < 0:
+                koelblok["ontladen_c2h"] += c_waarde * c_waarde * duur_h
+        else:
+            sluit_koelblok()
+
+        epoch = volgend
+
+    sluit_blok()
+    sluit_koelblok()
+
+    def vat_actieve_modus_samen(modus: str) -> dict:
+        minimum_duur_s = ADVIES_MIN_ACTIEF_BLOK_MINUTEN * 60
+        gekwalificeerd = [
+            item
+            for item in actieve_blokken
+            if item["modus"] == modus
+            and item["end_epoch"] - item["start_epoch"] >= minimum_duur_s
+            and item["c2h"] >= ADVIES_MIN_C2H
+        ]
+        stijgend = []
+        for item in gekwalificeerd:
+            delta_c = item["temp_na_c"] - item["temp_voor_c"]
+            if delta_c < ADVIES_MIN_TEMP_STIJGING_C:
+                continue
+            factor = delta_c / item["c2h"]
+            stijgend.append({**item, "delta_c": delta_c, "factor": factor})
+
+        factoren = [item["factor"] for item in stijgend]
+        som_c2h = sum(item["c2h"] for item in stijgend)
+        schatting = (
+            sum(item["delta_c"] for item in stijgend) / som_c2h
+            if som_c2h > 0
+            else None
+        )
+        totale_duur_h = sum(item["duur_h"] for item in gekwalificeerd)
+        gemiddelde_c = (
+            sum(item["c_h"] for item in gekwalificeerd) / totale_duur_h
+            if totale_duur_h > 0
+            else None
+        )
+        return {
+            "blokken": len(gekwalificeerd),
+            "stijgende_blokken": len(stijgend),
+            "schatting_c_per_c2h": round(schatting, 2) if schatting is not None else None,
+            "mediaan_c_per_c2h": round(_percentiel(factoren, 0.5), 2) if factoren else None,
+            "p25_c_per_c2h": round(_percentiel(factoren, 0.25), 2) if factoren else None,
+            "p75_c_per_c2h": round(_percentiel(factoren, 0.75), 2) if factoren else None,
+            "gemiddelde_c": round(gemiddelde_c, 3) if gemiddelde_c is not None else None,
+            "betrouwbaarheid": _betrouwbaarheid_voor_metingen(len(stijgend)),
+        }
+
+    laden = vat_actieve_modus_samen("laden")
+    ontladen = vat_actieve_modus_samen("ontladen")
+    factor_laden = float(laden.get("schatting_c_per_c2h") or 0.0)
+    factor_ontladen = float(ontladen.get("schatting_c_per_c2h") or 0.0)
+
+    koeltijden: list[float] = []
+    minimum_rust_s = ADVIES_MIN_RUST_BLOK_MINUTEN * 60
+    afwijzingen = {
+        "te_kort": 0,
+        "onvoldoende_buitentemperatuur": 0,
+        "te_weinig_temperatuurdaling": 0,
+        "te_klein_startverschil": 0,
+        "te_veel_warmtecorrectie": 0,
+        "koelt_niet_naar_omgeving": 0,
+        "halveertijd_buiten_bereik": 0,
+    }
+    blokken_voldoende_duur = 0
+    if buiten:
+        for item in koelblokken:
+            duur_s = item["end_epoch"] - item["start_epoch"]
+            if duur_s < minimum_rust_s:
+                afwijzingen["te_kort"] += 1
+                continue
+            blokken_voldoende_duur += 1
+            if item["buiten_stappen"] < item["stappen"] * 0.8:
+                afwijzingen["onvoldoende_buitentemperatuur"] += 1
+                continue
+            if item["temp_voor_c"] - item["temp_na_c"] < ADVIES_MIN_TEMP_DALING_C:
+                afwijzingen["te_weinig_temperatuurdaling"] += 1
+                continue
+            omgeving_c = item["buiten_c_som"] / item["buiten_stappen"]
+            verschil_voor = item["temp_voor_c"] - omgeving_c
+            if abs(verschil_voor) < ADVIES_MIN_KOELVERSCHIL_C:
+                afwijzingen["te_klein_startverschil"] += 1
+                continue
+            warmtecorrectie_c = (
+                factor_laden * item["laden_c2h"]
+                + factor_ontladen * item["ontladen_c2h"]
+            )
+            if warmtecorrectie_c > ADVIES_MAX_KOELBLOK_WARMTE_C:
+                afwijzingen["te_veel_warmtecorrectie"] += 1
+                continue
+            gecorrigeerde_temp_na_c = item["temp_na_c"] - warmtecorrectie_c
+            verschil_na = gecorrigeerde_temp_na_c - omgeving_c
+            ratio = verschil_na / verschil_voor
+            if not 0.0 < ratio < 1.0:
+                afwijzingen["koelt_niet_naar_omgeving"] += 1
+                continue
+            duur_h = duur_s / 3600.0
+            halvering_h = duur_h * math.log(0.5) / math.log(ratio)
+            if 0.25 <= halvering_h <= 72.0:
+                koeltijden.append(halvering_h)
+            else:
+                afwijzingen["halveertijd_buiten_bereik"] += 1
+
+    afkoeling_status = "ok" if koeltijden else (
+        "geen_omgevingssensor" if not buiten else "onvoldoende_geldige_rustblokken"
+    )
+    heeft_schatting = any(
+        deel.get("schatting_c_per_c2h") is not None
+        for deel in (laden, ontladen)
+    ) or bool(koeltijden)
+
+    return {
+        "status": "ok" if heeft_schatting else "onvoldoende_data",
+        "analyse_vanaf": datetime.fromtimestamp(start_epoch, tz=nu.tzinfo).isoformat(),
+        "analyse_tot": datetime.fromtimestamp(eind_epoch, tz=nu.tzinfo).isoformat(),
+        "sample_stap_minuten": ADVIES_SAMPLE_STAP_MINUTEN,
+        "accu_max_kwh": round(accu_max_kwh, 3),
+        "vermogen_samples": len(vermogen),
+        "temperatuur_samples": len(temperaturen),
+        "buiten_samples": len(buiten),
+        "laden": laden,
+        "ontladen": ontladen,
+        "afkoeling": {
+            "status": afkoeling_status,
+            "blokken": len(koelblokken),
+            "blokken_voldoende_duur": blokken_voldoende_duur,
+            "metingen": len(koeltijden),
+            "schatting_h": round(_percentiel(koeltijden, 0.5), 2) if koeltijden else None,
+            "p25_h": round(_percentiel(koeltijden, 0.25), 2) if koeltijden else None,
+            "p75_h": round(_percentiel(koeltijden, 0.75), 2) if koeltijden else None,
+            "betrouwbaarheid": _betrouwbaarheid_voor_metingen(len(koeltijden)),
+            "thermische_rust_max_c": ADVIES_THERMISCHE_RUST_MAX_C,
+            "thermische_rust_max_w": round(thermische_rust_grens_w),
+            "max_warmtecorrectie_c": ADVIES_MAX_KOELBLOK_WARMTE_C,
+            "afwijzingen": afwijzingen,
+        },
+    }
 
 
 def bouw_wattwanneer_slots(records: list[dict]) -> list[dict]:
@@ -812,6 +1180,10 @@ class DynamischHandelen(hass.Hass):
                 "sensor.zendure_2400_ac_warmste_batterij_temperatuur",
                 dagen,
             )
+            vermogen_items = self._haal_history_items(
+                "sensor.zendure_2400_ac_vermogen_aansturing",
+                dagen,
+            )
         except Exception as exc:
             self.log(
                 f"Dynamisch Handelen: adviesanalyse kon history niet lezen: {exc}",
@@ -831,14 +1203,50 @@ class DynamischHandelen(hass.Hass):
             )
             return
 
+        buiten_entity = self._haal_buitentemperatuur_sensor_entity()
+        buiten_items: list[dict] = []
+        buiten_history_fout = None
+        if buiten_entity:
+            try:
+                buiten_items = self._haal_history_items(buiten_entity, dagen)
+            except Exception as exc:
+                buiten_history_fout = str(exc)
+                self.log(
+                    "Dynamisch Handelen: adviesanalyse kon historie van "
+                    f"{buiten_entity} niet lezen: {exc}",
+                    level="WARNING",
+                )
+
         slots_uit_history = self._haal_geanalyseerde_strategie_slots(strategie_items, dagen)
         slots_uit_huidige_sensor = self._haal_huidige_geanalyseerde_strategie_slots(dagen)
         slots = self._combineer_geanalyseerde_slots(
             slots_uit_history,
             slots_uit_huidige_sensor,
         )
-        temp_samples = self._haal_temp_samples(temp_items)
-        advies = self._bouw_strategie_advies(slots, temp_samples, dagen)
+        temp_samples = self._haal_temp_samples(temp_items, behoud_gaten=True)
+        vermogen_samples = self._haal_numerieke_samples(
+            vermogen_items,
+            behoud_gaten=True,
+        )
+        buiten_samples = self._haal_numerieke_samples(
+            buiten_items,
+            behoud_gaten=True,
+        )
+        buiten_bron = f"{buiten_entity}.state_history" if buiten_samples else None
+        accu_max_kwh = self._haal_advies_accu_max_kwh()
+        meetstatistiek = bereken_thermische_meetstatistiek(
+            vermogen_samples,
+            temp_samples,
+            accu_max_kwh,
+            buiten_samples=buiten_samples,
+        )
+        advies = self._bouw_strategie_advies(
+            slots,
+            temp_samples,
+            dagen,
+            meetstatistiek=meetstatistiek,
+            buiten_bron=buiten_bron,
+        )
         advies["strategie_history_items"] = len(strategie_items)
         advies["strategie_history_items_met_slots"] = self._tel_history_items_met_slots(
             strategie_items
@@ -846,6 +1254,12 @@ class DynamischHandelen(hass.Hass):
         advies["strategie_slots_uit_history"] = len(slots_uit_history)
         advies["strategie_slots_uit_huidige_sensor"] = len(slots_uit_huidige_sensor)
         advies["temperatuur_samples"] = len(temp_samples)
+        advies["vermogen_samples"] = len(vermogen_samples)
+        advies["buitentemperatuur_samples"] = len(buiten_samples)
+        advies["buitentemperatuur_sensor_samples"] = len(buiten_samples)
+        advies["buitentemperatuur_entity"] = buiten_entity or "niet_ingesteld"
+        advies["buitentemperatuur_bron"] = buiten_bron or "niet_beschikbaar"
+        advies["buitentemperatuur_history_fout"] = buiten_history_fout
         advies["trigger"] = trigger
         self._publiceer_advies_sensor(advies.pop("state"), advies)
 
@@ -1103,22 +1517,55 @@ class DynamischHandelen(hass.Hass):
 
         return sorted(gekozen.values(), key=lambda s: s["_start_dt"])
 
-    def _haal_temp_samples(self, temp_items: list[dict]) -> list[tuple[datetime, float]]:
-        samples: list[tuple[datetime, float]] = []
-        for item in temp_items:
+    def _haal_numerieke_samples(
+        self,
+        items: list[dict],
+        *,
+        behoud_gaten: bool = False,
+    ) -> list[tuple[datetime, float | None]]:
+        """Zet HA-history om naar meetpunten en bewaart optioneel ongeldige states."""
+        samples: list[tuple[datetime, float | None]] = []
+        for item in items:
             tijd = self._parse_datetime(item.get("last_changed") or item.get("last_updated"))
             if tijd is None:
                 continue
             try:
                 waarde = float(item.get("state"))
             except (TypeError, ValueError):
+                if behoud_gaten:
+                    samples.append((tijd, None))
+                continue
+            if not math.isfinite(waarde):
+                if behoud_gaten:
+                    samples.append((tijd, None))
                 continue
             samples.append((tijd, waarde))
         return sorted(samples, key=lambda item: item[0])
 
+    def _haal_temp_samples(
+        self,
+        temp_items: list[dict],
+        *,
+        behoud_gaten: bool = False,
+    ) -> list[tuple[datetime, float | None]]:
+        """Backwards-compatible naam voor temperatuur-history."""
+        return self._haal_numerieke_samples(
+            temp_items,
+            behoud_gaten=behoud_gaten,
+        )
+
+    def _haal_advies_accu_max_kwh(self) -> float:
+        """Leest de DP-capaciteit waarmee gemeten vermogen naar C wordt omgerekend."""
+        attributes = self._haal_huidige_strategie_attributen()
+        try:
+            waarde = float(attributes.get("accu_max_kwh"))
+        except (TypeError, ValueError):
+            return 0.0
+        return waarde if math.isfinite(waarde) and waarde > 0 else 0.0
+
     def _temp_rond_tijd(
         self,
-        samples: list[tuple[datetime, float]],
+        samples: list[tuple[datetime, float | None]],
         tijd: datetime,
         marge_voor: timedelta = timedelta(minutes=45),
         marge_na: timedelta = timedelta(minutes=10),
@@ -1127,7 +1574,7 @@ class DynamischHandelen(hass.Hass):
         for sample_tijd, waarde in samples:
             if sample_tijd > tijd + marge_na:
                 break
-            if sample_tijd >= tijd - marge_voor:
+            if waarde is not None and sample_tijd >= tijd - marge_voor:
                 beste = (sample_tijd, waarde)
         return beste[1] if beste is not None else None
 
@@ -1144,20 +1591,17 @@ class DynamischHandelen(hass.Hass):
     def _gemiddelde(self, waarden: list[float]) -> float:
         return sum(waarden) / len(waarden) if waarden else 0.0
 
-    def _pas_factor_aan(self, huidig: float, mediaan_fout_c: float | None) -> float:
-        if mediaan_fout_c is None or abs(mediaan_fout_c) < 1.0:
-            return round(huidig, 2)
-
-        stap = min(0.35, max(-0.35, mediaan_fout_c * 0.08))
-        return round(max(0.0, huidig * (1.0 + stap)), 2)
-
     def _bouw_strategie_advies(
         self,
         slots: list[dict],
         temp_samples: list[tuple[datetime, float]],
         dagen: int,
+        *,
+        meetstatistiek: dict | None = None,
+        buiten_bron: str | None = None,
     ) -> dict:
-        """Maakt advies uit historische strategie-slots en gemeten accutemperaturen."""
+        """Combineert onafhankelijke meetstatistiek met expliciete DP-regeladviezen."""
+        meetstatistiek = meetstatistiek or {}
         huidig_laden = self._haal_warmte_penalty_laden_factor()
         huidig_ontladen = self._haal_warmte_penalty_ontladen_factor()
         huidig_temp_penalty = self._haal_float_met_default(
@@ -1225,12 +1669,18 @@ class DynamischHandelen(hass.Hass):
         mediaan_fout_ontladen = self._mediaan(fouten_ontladen)
         mediaan_fout_rust = self._mediaan(fouten_rust)
 
-        aanbevolen_stijging_laden = self._pas_factor_aan(huidig_stijging_laden, mediaan_fout_laden)
-        aanbevolen_stijging_ontladen = self._pas_factor_aan(huidig_stijging_ontladen, mediaan_fout_ontladen)
-        aanbevolen_halvering = round(huidig_halvering, 2)
-        if mediaan_fout_rust is not None and abs(mediaan_fout_rust) >= 1.0:
-            richting = 1.0 + min(0.35, max(-0.35, mediaan_fout_rust * 0.08))
-            aanbevolen_halvering = round(max(0.25, huidig_halvering * richting), 2)
+        laad_meting = meetstatistiek.get("laden") or {}
+        ontlaad_meting = meetstatistiek.get("ontladen") or {}
+        afkoel_meting = meetstatistiek.get("afkoeling") or {}
+        statistisch_stijging_laden = laad_meting.get("schatting_c_per_c2h")
+        statistisch_stijging_ontladen = ontlaad_meting.get("schatting_c_per_c2h")
+        statistisch_halvering = afkoel_meting.get("schatting_h")
+
+        # De fysieke adviezen zijn de gemeten schattingen zelf. De huidige
+        # helperwaarden komen niet in die schattingen voor.
+        aanbevolen_stijging_laden = statistisch_stijging_laden
+        aanbevolen_stijging_ontladen = statistisch_stijging_ontladen
+        aanbevolen_halvering = statistisch_halvering
 
         overtemp_ratio = len(overtemp_slots) / len(slots) if slots else 0.0
         aanbevolen_temp_penalty = huidig_temp_penalty
@@ -1249,43 +1699,84 @@ class DynamischHandelen(hass.Hass):
             aanbevolen_ontladen = round(min(10.0, max(0.1, huidig_ontladen * 1.15)), 2)
 
         regels: list[str] = []
-        confidence = "laag"
-        state = "te_weinig_data"
+        confidence_volgorde = {"laag": 0, "middel": 1, "hoog": 2}
+        fysieke_confidences = [
+            laad_meting.get("betrouwbaarheid", "laag"),
+            ontlaad_meting.get("betrouwbaarheid", "laag"),
+            afkoel_meting.get("betrouwbaarheid", "laag"),
+        ]
+        confidence = max(
+            fysieke_confidences,
+            key=lambda waarde: confidence_volgorde.get(waarde, 0),
+        )
+        state = "te_weinig_meetdata"
         temp_vergelijkingen = len(fouten_laden) + len(fouten_ontladen) + len(fouten_rust)
+        instelling_wijkt_af = False
 
-        if len(slots) < 8:
+        def voeg_fysieke_schatting_toe(
+            label: str,
+            schatting: float | None,
+            huidig: float,
+            metingen: int,
+            eenheid: str,
+            betrouwbaarheid: str,
+        ) -> None:
+            nonlocal instelling_wijkt_af
+            if schatting is None:
+                regels.append(f"{label}: onvoldoende geldige meetblokken voor een schatting.")
+                return
             regels.append(
-                f"Nog weinig strategieslots gevonden ({len(slots)}). Laat de analyse enkele dagen meelopen."
+                f"{label}: statistisch {schatting:.1f} {eenheid} uit {metingen} meetblokken; "
+                f"ingesteld {huidig:.1f}."
             )
-        elif temp_vergelijkingen < 5:
+            relatieve_afwijking = abs(huidig - schatting) / max(abs(schatting), 0.01)
+            if betrouwbaarheid != "laag" and relatieve_afwijking > 0.15:
+                instelling_wijkt_af = True
+
+        voeg_fysieke_schatting_toe(
+            "Opwarming laden",
+            statistisch_stijging_laden,
+            huidig_stijging_laden,
+            int(laad_meting.get("stijgende_blokken") or 0),
+            "°C per C²h",
+            laad_meting.get("betrouwbaarheid", "laag"),
+        )
+        voeg_fysieke_schatting_toe(
+            "Opwarming ontladen",
+            statistisch_stijging_ontladen,
+            huidig_stijging_ontladen,
+            int(ontlaad_meting.get("stijgende_blokken") or 0),
+            "°C per C²h",
+            ontlaad_meting.get("betrouwbaarheid", "laag"),
+        )
+        if statistisch_halvering is not None:
+            voeg_fysieke_schatting_toe(
+                "Afkoeling halveertijd",
+                statistisch_halvering,
+                huidig_halvering,
+                int(afkoel_meting.get("metingen") or 0),
+                "uur",
+                afkoel_meting.get("betrouwbaarheid", "laag"),
+            )
+        elif not buiten_bron:
             regels.append(
-                f"{len(slots)} strategieslots gevonden, maar slechts {temp_vergelijkingen} bruikbare temperatuurvergelijkingen."
+                "Afkoeling halveertijd: niet statistisch berekenbaar zonder buitentemperatuurpunten."
             )
-            state = "meer_temperatuurdata_nodig"
         else:
-            confidence = "middel" if temp_vergelijkingen < 20 else "hoog"
-            state = "stabiel"
-
-        if mediaan_fout_laden is not None and abs(mediaan_fout_laden) >= 1.0:
-            state = "warmte_model_afwijking"
-            richting = "hoger" if mediaan_fout_laden > 0 else "lager"
             regels.append(
-                f"Laden eindigde mediaan {mediaan_fout_laden:+.1f} °C t.o.v. voorspelling; zet warmte stijging laden waarschijnlijk {richting}."
+                "Afkoeling halveertijd: de gebruikte buitentemperatuurreeks leverde "
+                "onvoldoende geldige rustblokken."
             )
 
-        if mediaan_fout_ontladen is not None and abs(mediaan_fout_ontladen) >= 1.0:
-            state = "warmte_model_afwijking"
-            richting = "hoger" if mediaan_fout_ontladen > 0 else "lager"
-            regels.append(
-                f"Ontladen eindigde mediaan {mediaan_fout_ontladen:+.1f} °C t.o.v. voorspelling; zet warmte stijging ontladen waarschijnlijk {richting}."
+        if any(
+            waarde is not None
+            for waarde in (
+                statistisch_stijging_laden,
+                statistisch_stijging_ontladen,
+                statistisch_halvering,
             )
-
-        if mediaan_fout_rust is not None and abs(mediaan_fout_rust) >= 1.0:
-            state = "warmte_model_afwijking"
-            richting = "trager" if mediaan_fout_rust > 0 else "sneller"
-            regels.append(
-                f"Rustslots koelen mediaan {mediaan_fout_rust:+.1f} °C t.o.v. voorspelling; afkoeling lijkt {richting}."
-            )
+        ):
+            state = "instelling_wijkt_af" if instelling_wijkt_af else "statistiek_beschikbaar"
 
         if overtemp_ratio >= 0.08:
             state = "check_temperatuurlimieten"
@@ -1296,8 +1787,35 @@ class DynamischHandelen(hass.Hass):
         if actie_slots and self._gemiddelde([float(s.get("c_waarde") or 0.0) for s in actie_slots]) >= 0.45:
             regels.append("Gemiddelde C-waarde is hoog; warmtestraf voor laden en ontladen is zinvol.")
 
-        if not regels:
-            regels.append("Geen duidelijke afwijking gevonden. Huidige factoren lijken voorlopig passend.")
+        def getal_tekst(waarde: float | None, decimalen: int, eenheid: str) -> str:
+            if waarde is None:
+                return "Onvoldoende data"
+            return f"{float(waarde):.{decimalen}f} {eenheid}".strip()
+
+        def spreiding_tekst(deel: dict, achtervoegsel: str) -> str:
+            p25 = deel.get(f"p25_{achtervoegsel}")
+            p75 = deel.get(f"p75_{achtervoegsel}")
+            if p25 is None or p75 is None:
+                return "Onvoldoende data"
+            return f"{float(p25):.1f}–{float(p75):.1f}"
+
+        def afkoelafwijzingen_tekst(deel: dict) -> str:
+            labels = {
+                "te_kort": "te kort",
+                "onvoldoende_buitentemperatuur": "onvoldoende buitentemp",
+                "te_weinig_temperatuurdaling": "minder dan 1 °C daling",
+                "te_klein_startverschil": "startverschil onder 2 °C",
+                "te_veel_warmtecorrectie": "warmtecorrectie boven 0,25 °C",
+                "koelt_niet_naar_omgeving": "niet richting omgeving",
+                "halveertijd_buiten_bereik": "halveertijd buiten bereik",
+            }
+            afwijzingen = deel.get("afwijzingen") or {}
+            onderdelen = [
+                f"{label}: {int(afwijzingen.get(sleutel) or 0)}"
+                for sleutel, label in labels.items()
+                if int(afwijzingen.get(sleutel) or 0) > 0
+            ]
+            return ", ".join(onderdelen) if onderdelen else "Geen afwijzingen"
 
         return {
             "state": state,
@@ -1321,12 +1839,94 @@ class DynamischHandelen(hass.Hass):
             "mediaan_temp_fout_laden_c": round(mediaan_fout_laden, 2) if mediaan_fout_laden is not None else None,
             "mediaan_temp_fout_ontladen_c": round(mediaan_fout_ontladen, 2) if mediaan_fout_ontladen is not None else None,
             "mediaan_temp_fout_rust_c": round(mediaan_fout_rust, 2) if mediaan_fout_rust is not None else None,
+            "meetstatistiek_status": meetstatistiek.get("status", "onvoldoende_data"),
+            "meetstatistiek_analyse_vanaf": meetstatistiek.get("analyse_vanaf"),
+            "meetstatistiek_analyse_tot": meetstatistiek.get("analyse_tot"),
+            "meetstatistiek_sample_stap_minuten": meetstatistiek.get("sample_stap_minuten"),
+            "meetstatistiek_accu_max_kwh": meetstatistiek.get("accu_max_kwh"),
+            "statistische_schatting_warmte_stijging_laden_c_per_c2h": statistisch_stijging_laden,
+            "statistische_schatting_warmte_stijging_laden_tekst": getal_tekst(
+                statistisch_stijging_laden, 1, "°C per C²h"
+            ),
+            "statistische_mediaan_warmte_stijging_laden_c_per_c2h": laad_meting.get("mediaan_c_per_c2h"),
+            "statistische_p25_warmte_stijging_laden_c_per_c2h": laad_meting.get("p25_c_per_c2h"),
+            "statistische_p75_warmte_stijging_laden_c_per_c2h": laad_meting.get("p75_c_per_c2h"),
+            "statistische_spreiding_warmte_stijging_laden_tekst": spreiding_tekst(
+                laad_meting, "c_per_c2h"
+            ),
+            "statistische_laadblokken": laad_meting.get("blokken", 0),
+            "statistische_stijgende_laadblokken": laad_meting.get("stijgende_blokken", 0),
+            "statistische_stijgende_laadblokken_tekst": str(
+                int(laad_meting.get("stijgende_blokken") or 0)
+            ),
+            "statistische_betrouwbaarheid_laden": laad_meting.get("betrouwbaarheid", "laag"),
+            "statistische_gemiddelde_c_laden": laad_meting.get("gemiddelde_c"),
+            "statistische_schatting_warmte_stijging_ontladen_c_per_c2h": statistisch_stijging_ontladen,
+            "statistische_schatting_warmte_stijging_ontladen_tekst": getal_tekst(
+                statistisch_stijging_ontladen, 1, "°C per C²h"
+            ),
+            "statistische_mediaan_warmte_stijging_ontladen_c_per_c2h": ontlaad_meting.get("mediaan_c_per_c2h"),
+            "statistische_p25_warmte_stijging_ontladen_c_per_c2h": ontlaad_meting.get("p25_c_per_c2h"),
+            "statistische_p75_warmte_stijging_ontladen_c_per_c2h": ontlaad_meting.get("p75_c_per_c2h"),
+            "statistische_spreiding_warmte_stijging_ontladen_tekst": spreiding_tekst(
+                ontlaad_meting, "c_per_c2h"
+            ),
+            "statistische_ontlaadblokken": ontlaad_meting.get("blokken", 0),
+            "statistische_stijgende_ontlaadblokken": ontlaad_meting.get("stijgende_blokken", 0),
+            "statistische_stijgende_ontlaadblokken_tekst": str(
+                int(ontlaad_meting.get("stijgende_blokken") or 0)
+            ),
+            "statistische_betrouwbaarheid_ontladen": ontlaad_meting.get("betrouwbaarheid", "laag"),
+            "statistische_gemiddelde_c_ontladen": ontlaad_meting.get("gemiddelde_c"),
+            "statistische_schatting_afkoeling_halveringstijd_h": statistisch_halvering,
+            "statistische_schatting_afkoeling_tekst": getal_tekst(
+                statistisch_halvering, 1, "uur"
+            ),
+            "statistische_spreiding_afkoeling_tekst": spreiding_tekst(
+                afkoel_meting, "h"
+            ),
+            "statistische_afkoeling_metingen": afkoel_meting.get("metingen", 0),
+            "statistische_afkoeling_metingen_tekst": str(
+                int(afkoel_meting.get("metingen") or 0)
+            ),
+            "statistische_afkoeling_blokken": afkoel_meting.get("blokken", 0),
+            "statistische_afkoeling_blokken_voldoende_duur": afkoel_meting.get(
+                "blokken_voldoende_duur", 0
+            ),
+            "statistische_afkoeling_afwijzingen": afkoel_meting.get("afwijzingen", {}),
+            "statistische_afkoeling_afwijzingen_tekst": afkoelafwijzingen_tekst(
+                afkoel_meting
+            ),
+            "statistische_afkoeling_rustgrens_c": afkoel_meting.get(
+                "thermische_rust_max_c"
+            ),
+            "statistische_afkoeling_rustgrens_w": afkoel_meting.get(
+                "thermische_rust_max_w"
+            ),
+            "statistische_afkoeling_rustgrens_tekst": (
+                f"{int(afkoel_meting.get('thermische_rust_max_w') or 0)} W "
+                f"({float(afkoel_meting.get('thermische_rust_max_c') or 0.0):.2f} C)"
+            ),
+            "statistische_afkoeling_status": afkoel_meting.get("status", "onvoldoende_data"),
+            "statistische_betrouwbaarheid_afkoeling": afkoel_meting.get("betrouwbaarheid", "laag"),
+            "ingesteld_warmte_stijging_laden_c_per_c2h": huidig_stijging_laden,
+            "ingesteld_warmte_stijging_ontladen_c_per_c2h": huidig_stijging_ontladen,
+            "ingesteld_afkoeling_halveringstijd_h": huidig_halvering,
+            "ingesteld_temp_penalty_factor": huidig_temp_penalty,
+            "ingesteld_warmte_penalty_laden_factor": huidig_laden,
+            "ingesteld_warmte_penalty_ontladen_factor": huidig_ontladen,
             "aanbevolen_warmte_stijging_laden_c_per_c2h": aanbevolen_stijging_laden,
             "aanbevolen_warmte_stijging_ontladen_c_per_c2h": aanbevolen_stijging_ontladen,
             "aanbevolen_afkoeling_halveringstijd_h": aanbevolen_halvering,
             "aanbevolen_temp_penalty_factor": aanbevolen_temp_penalty,
             "aanbevolen_warmte_penalty_laden_factor": aanbevolen_laden,
             "aanbevolen_warmte_penalty_ontladen_factor": aanbevolen_ontladen,
+            "aanbevolen_temp_penalty_tekst": getal_tekst(aanbevolen_temp_penalty, 3, ""),
+            "aanbevolen_warmte_penalty_laden_tekst": getal_tekst(aanbevolen_laden, 2, ""),
+            "aanbevolen_warmte_penalty_ontladen_tekst": getal_tekst(aanbevolen_ontladen, 2, ""),
+            "overtemp_slots_tekst": f"{len(overtemp_slots)} van {len(slots)} ({overtemp_ratio * 100:.1f}%)",
+            "gemiddelde_c_laden_tekst": getal_tekst(self._gemiddelde(c_laden) if c_laden else None, 3, "C"),
+            "gemiddelde_c_ontladen_tekst": getal_tekst(self._gemiddelde(c_ontladen) if c_ontladen else None, 3, "C"),
             "laatst_bijgewerkt": datetime.now().astimezone().isoformat(),
         }
 
@@ -2781,21 +3381,31 @@ class DynamischHandelen(hass.Hass):
             return max(waarden), ",".join(sorted(set(bronnen)))
         return None, "onbekend"
 
-    def _haal_buitentemperatuur_c(self, tijd: datetime | None = None) -> tuple[float | None, str]:
-        """Leest buitentemperatuur uit de ingestelde sensor of OpenWeatherMap."""
-        sensor_entity = (
-            self._haal_entity_id_uit_input_text("input_text.dynamisch_buitentemperatuur_sensor")
-            or "sensor.openweathermap_temperature"
+    def _haal_buitentemperatuur_sensor_entity(self) -> str | None:
+        """Kiest de ingestelde historische sensor of de aanwezige Buienradar-sensor."""
+        ingesteld = self._haal_entity_id_uit_input_text(
+            "input_text.dynamisch_buitentemperatuur_sensor"
         )
+        if ingesteld:
+            return ingesteld
+        standaard = str(self.args.get("default_buitentemperatuur_sensor") or "").strip()
+        if standaard and self.get_state(standaard) is not None:
+            return standaard
+        return None
 
-        if tijd is not None:
+    def _haal_buitentemperatuur_c(self, tijd: datetime | None = None) -> tuple[float | None, str]:
+        """Leest buitentemperatuur uit de historische sensor of weather entity."""
+        sensor_entity = self._haal_buitentemperatuur_sensor_entity()
+
+        if sensor_entity and tijd is not None:
             sensor_temp, sensor_bron = self._historische_float_state(sensor_entity, tijd)
             if sensor_temp is not None:
                 return sensor_temp, f"{sensor_entity}:{sensor_bron}"
 
-        sensor_temp = self._float_state(sensor_entity)
-        if sensor_temp is not None:
-            return sensor_temp, sensor_entity
+        if sensor_entity:
+            sensor_temp = self._float_state(sensor_entity)
+            if sensor_temp is not None:
+                return sensor_temp, sensor_entity
 
         weather_entity = self._haal_weather_entity()
         if weather_entity:
