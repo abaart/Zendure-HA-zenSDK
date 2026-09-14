@@ -1099,6 +1099,77 @@ class TestDeratingEffect:
         assert bereken_derating(2.4 * 0.75, 2.4) == pytest.approx(1.0)
 
 
+# ── EXACT MAXIMAAL ONTLAADVERMOGEN ─────────────────────────────────────────────
+
+class TestExactMaxOntlaadvermogen:
+    @staticmethod
+    def bereken(prijzen, *, start_kwh=4.25, maximum_w=2400, duur_h=0.25, **kwargs):
+        return los_dp_op(
+            maak_slots(prijzen, duur_h=duur_h),
+            maak_accu(huidig_kwh=start_kwh, max_kwh=5.178,
+                     eta=0.927, max_ontlaad_w=maximum_w),
+            warmte_penalty_laden_factor=0,
+            warmte_penalty_ontladen_factor=0,
+            hoge_soc_verblijf_penalty_factor=0,
+            lage_soc_verblijf_penalty_factor=0,
+            **kwargs,
+        )
+
+    @pytest.mark.parametrize("maximum_w", [2400, 2300])
+    def test_maximum_behoudt_extra_energie_binnen_hetzelfde_gridvak(self, maximum_w):
+        schema = self.bereken([0.5], maximum_w=maximum_w,
+                              plateau_spreiding=False, standby_verbruik_w=0)
+        slot = schema[0]
+        net_kwh = maximum_w / 1000 * 0.25
+        assert SOC_STAP_KWH == 0.05
+        assert slot["vermogen_w"] == maximum_w
+        assert slot["verwacht_vermogen_w"] == maximum_w
+        assert slot["soc_na_kwh"] == pytest.approx(4.25 - net_kwh / 0.927, abs=0.0005)
+        assert slot["winst_eur"] == pytest.approx(net_kwh * 0.5, abs=0.00005)
+
+    def test_kort_slot_kan_minder_dan_een_gridstap_ontladen(self):
+        slot = self.bereken([0.5], duur_h=1 / 60,
+                            plateau_spreiding=False, standby_verbruik_w=0)[0]
+        assert slot["vermogen_w"] == 2400
+        assert slot["soc_na_kwh"] == pytest.approx(4.25 - 0.04 / 0.927, abs=0.0005)
+        assert slot["winst_eur"] == pytest.approx(0.02)
+
+    @pytest.mark.parametrize("spreiden", [False, True])
+    def test_opeenvolgende_slots_behouden_energie_en_modelvelden(self, spreiden):
+        schema = self.bereken([0.5] * 4, plateau_spreiding=spreiden,
+                              standby_verbruik_w=15.5, batterij_temp_start_c=27)
+        verwacht_soc = 4.25
+        for slot in schema:
+            assert slot["vermogen_w"] == 2400
+            assert slot["soc_voor_kwh"] == pytest.approx(verwacht_soc, abs=0.001)
+            verwacht_soc -= 0.6 / 0.927 + 0.0155 * 0.25
+            assert slot["soc_na_kwh"] == pytest.approx(verwacht_soc, abs=0.001)
+            assert slot["winst_eur"] == pytest.approx(0.3, abs=0.0001)
+            assert slot["c_waarde"] == pytest.approx((0.6 / 0.927) / 0.25 / 5.178, abs=0.002)
+            assert slot["batterij_temp_na_c"] is not None
+            assert slot["temp_penalty_eur"] == slot["overtemp_penalty_eur"]
+        for vorige, volgende in zip(schema, schema[1:]):
+            assert vorige["soc_na_kwh"] == volgende["soc_voor_kwh"]
+
+    def test_exact_maximum_respecteert_resterende_energie_na_standby(self):
+        schema = self.bereken([0.6, 0.5], start_kwh=1.3,
+                              plateau_spreiding=False, standby_verbruik_w=60)
+        resterend = 1.3 - 0.6 / 0.927 - 0.06 * 0.25
+        assert schema[0]["vermogen_w"] == 2400
+        assert schema[1]["vermogen_w"] == 2400
+        assert schema[1]["soc_voor_kwh"] == schema[0]["soc_na_kwh"]
+        assert schema[1]["soc_na_kwh"] == 0
+        assert schema[1]["winst_eur"] == pytest.approx(resterend * 0.927 * 0.5, abs=0.00005)
+        assert schema[1]["verwacht_vermogen_w"] < 2400
+
+    def test_hogere_toekomstige_prijs_kan_maximum_uitstellen(self):
+        schema = self.bereken([0.01, 1.0], start_kwh=0.65,
+                              plateau_spreiding=False, standby_verbruik_w=0)
+        assert schema[0]["actie"] == "rust"
+        assert schema[1]["vermogen_w"] == 2400
+        assert schema[1]["winst_eur"] == pytest.approx(0.6)
+
+
 # ── ACTIEF SLOT ───────────────────────────────────────────────────────────────
 
 class TestActiefSlotVermogen:

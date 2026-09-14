@@ -55,27 +55,15 @@ en de discretisatiefout is in de praktijk verwaarloosbaar.
 
 CONSISTENTIE VAN DISCRETISATIE
 --------------------------------
-Alle berekeningen in dit module — zowel de backwards pass als de
-forwards extractie — gebruiken uitsluitend gekwantiseerde SoC-waarden
-(veelvouden van SOC_STAP_KWH). Dit is essentieel om twee subtiele fouten
-te vermijden:
+De waardetabel gebruikt vaste SoC-gridpunten. Reguliere vermogenskeuzes
+berekenen energie uit de sprong tussen gridpunten. De maximale ontlaadkeuze
+gebruikt de werkelijke energie bij max_ontlaad_w; interpoleer_waarde() bepaalt
+de toekomstige waarde tussen de aangrenzende gridpunten.
 
-1. Nep-winst door asymmetrische afronding
-   Als kosten worden berekend op het exacte getal maar opbrengst op het
-   afgeronde getal (of vice versa), kan een verlieslatende trade er
-   winstgevend uitzien. Voorbeeld: je slaat 2,277 kWh op (afgerond naar
-   2,30 kWh) maar betaalt alleen voor 2,277 kWh. Dat 'extra' kwartier
-   kWh is gratis — wat de trade kunstmatig winstgevend maakt.
-   Fix: bereken zowel kosten als opbrengst op de feitelijke SoC-sprong
-   tussen twee gridpunten.
-
-2. Springende SoC in de output
-   soc_na van slot t en soc_voor van slot t+1 zijn hetzelfde fysieke
-   moment. Als soc_na het exacte getal is (2,278) maar soc_voor het
-   afgeronde gridpunt (2,30), kloppen de getallen in de output niet met
-   elkaar terwijl ze hetzelfde bedoelen.
-   Fix: gebruik in de forwards extractie altijd de gekwantiseerde waarde,
-   zodat soc_na[t] == soc_voor[t+1] gegarandeerd.
+Kosten, opbrengst en thermische penalties gebruiken dezelfde actie-energie.
+De voorwaartse extractie draagt de werkelijke resterende energie over naar
+het volgende slot en begrenst ontladen door de beschikbare energie. Alleen
+de keuze uit de beleidstabel gebruikt het dichtstbijzijnde SoC-gridpunt.
 
 SOC-EENHEID IN DIT MODULE
 --------------------------
@@ -473,9 +461,9 @@ def los_dp_op(
 
     DISCRETISATIE
     -------------
-    SoC wordt opgedeeld in stappen van SOC_STAP_KWH. Afrondingsfouten per
-    stap zijn ≤ SOC_STAP_KWH/2 kWh. Ze accumuleren niet: elke stap rondt
-    onafhankelijk af, zonder systematische drift over de horizon.
+    De waardetabel gebruikt stappen van SOC_STAP_KWH. De maximale
+    ontlaadkeuze behoudt de exacte actie-energie; de toekomstige waarde wordt
+    geïnterpoleerd. De overige vermogenskeuzes gebruiken gridtransities.
 
     VERMOGENSSTAPPEN EN WARMTE-PENALTY
     -----------------------------------
@@ -1067,13 +1055,19 @@ def los_dp_op(
                 beschikbare_ontlaad_kwh = max(0.0, soc_kwh)
                 energie_ideaal_uit = min(max_uit_accu_kwh, beschikbare_ontlaad_kwh)
                 s_ontladen = kwh_naar_idx_omhoog(soc_kwh - energie_ideaal_uit)
-                if s_ontladen >= s:
+                exact_maximum = vermogen_w == ontlaad_vermogensstappen[-1]
+                if energie_ideaal_uit <= 0 or (s_ontladen >= s and not exact_maximum):
                     continue
-                if s_ontladen in geziene_ontlaad_bestemmingen:
+                if s_ontladen in geziene_ontlaad_bestemmingen and not exact_maximum:
                     continue
                 geziene_ontlaad_bestemmingen.add(s_ontladen)
 
-                energie_uit_accu_q = soc_kwh - soc_kwh_per_idx[s_ontladen]
+                # Behoud de echte energie van de maximale outputLimit, ook als
+                # een lager vermogen hetzelfde afgeronde SoC-gridpunt bereikt.
+                energie_uit_accu_q = (
+                    energie_ideaal_uit if exact_maximum
+                    else soc_kwh - soc_kwh_per_idx[s_ontladen]
+                )
                 energie_naar_net = energie_uit_accu_q * eta_ontlaad
                 opbrengst_ontladen = energie_naar_net * (prijs - spread_helft)
                 kosten_warmte = warmte_penalty_eur(
@@ -1082,7 +1076,7 @@ def los_dp_op(
                     warmte_penalty_ontladen_factor,
                 )
                 soc_na_ontladen_met_standby = soc_met_standby_verlies(
-                    soc_kwh_per_idx[s_ontladen],
+                    soc_kwh - energie_uit_accu_q,
                     duur_h,
                 )
                 s_ontladen_met_standby = kwh_naar_idx(soc_na_ontladen_met_standby)
@@ -1215,11 +1209,10 @@ def los_dp_op(
 
     # ── VOORWAARTSE EXTRACTIE ─────────────────────────────────────────────────
     # Volg de optimale acties voorwaarts vanaf de huidige SoC.
-    # Alle berekeningen hier spiegelen de backwards pass exact:
-    # - SoC-overgangen lopen via kwh_naar_idx / idx_naar_kwh (gekwantiseerd)
-    # - Kosten en opbrengst zijn gebaseerd op de feitelijke gekwantiseerde SoC-sprong
-    # Hierdoor is soc_na[t] == soc_voor[t+1] exact, en is de gerapporteerde winst
-    # consistent met wat het DP-algoritme heeft geoptimaliseerd.
+    # Zoek de actie op bij het dichtstbijzijnde gridpunt, maar draag de echte
+    # resterende energie over. De maximale ontlaadactie gebruikt de exacte
+    # outputLimit-energie, begrensd door de voorraad. Opbrengst en penalties
+    # gebruiken de uitgevoerde actie-energie.
     resultaat: list[dict[str, Any]] = []
     huidig_s = kwh_naar_idx(accu.huidig_kwh)
     huidig_q = temp_naar_idx(batterij_temp_start)
@@ -1252,6 +1245,13 @@ def los_dp_op(
             actie             = "laden"
 
         elif actie_code == -1:  # Ontladen
+            if gekozen_vermogen_w == ontlaad_vermogensstappen[-1]:
+                # De werkelijke SoC kan tussen gridpunten liggen. Bereken de
+                # maximale actie opnieuw vanaf die SoC, begrensd door de voorraad.
+                actie_energie_accu_kwh = (
+                    gekozen_vermogen_w / 1000.0 * duur_h / eta_ontlaad
+                    if eta_ontlaad > 0 else 0.0
+                )
             energie_uit_accu  = max(0.0, min(actie_energie_accu_kwh, soc_kwh))
             energie_naar_net  = energie_uit_accu * eta_ontlaad
             winst             = energie_naar_net * prijs
@@ -1676,8 +1676,7 @@ def los_dp_op(
                 s_r    = resultaat[k]
                 prijs  = s_r["prijs_ct"] / 100.0
                 duur_h = slots[k]["duration_h"]
-                s_voor = kwh_naar_idx(huidig_soc)
-                q_voor = idx_naar_kwh(s_voor)
+                q_voor = huidig_soc
                 standby_kwh = standby_verlies_kwh(duur_h)
                 q_na   = max(0.0, q_voor - delta - standby_kwh)
                 e_uit  = max(0.0, q_voor - q_na - standby_kwh)
