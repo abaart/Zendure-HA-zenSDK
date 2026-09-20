@@ -358,6 +358,29 @@ class TestDPBasis:
 # ── ARBITRAGE LOGICA ──────────────────────────────────────────────────────────
 
 class TestArbitrage:
+    def test_aparte_verkoopprijs_vereist_grotere_spread(self):
+        slots_met_saldering = maak_slots([0.05, 0.15])
+        slots_na_saldering = maak_slots([0.05, 0.15])
+        for slot in slots_na_saldering:
+            slot["buy_price"] = slot["price"]
+            slot["sell_price"] = slot["price"] - 0.1108481
+
+        met_saldering = los_dp_op(
+            slots_met_saldering,
+            maak_accu(huidig_kwh=0.0),
+            plateau_spreiding=False,
+        )
+        na_saldering = los_dp_op(
+            slots_na_saldering,
+            maak_accu(huidig_kwh=0.0),
+            plateau_spreiding=False,
+        )
+
+        assert acties(met_saldering) == ["laden", "ontladen"]
+        assert acties(na_saldering) == ["rust", "rust"]
+        assert na_saldering[0]["inkoop_prijs_ct"] == pytest.approx(5.0)
+        assert na_saldering[1]["verkoop_prijs_ct"] == pytest.approx(3.915, abs=0.001)
+
     def test_simpele_arbitrage_laden_dan_ontladen(self):
         """
         Goedkoop slot → duur slot: algoritme kiest laden + ontladen.

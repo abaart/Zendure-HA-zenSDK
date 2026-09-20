@@ -505,7 +505,9 @@ def los_dp_op(
     zonder de winstgevendheid noemenswaardig te beïnvloeden.
 
     Args:
-        slots:                   Tijdslots met 'start', 'end', 'price' (€/kWh), 'duration_h'
+        slots:                   Tijdslots met 'start', 'end', 'price' (€/kWh), 'duration_h'.
+                                 Optionele 'buy_price' en 'sell_price' overschrijven
+                                 de prijs voor respectievelijk laden en ontladen.
         accu:                    Accustatus snapshot
         min_spread_ct_per_kwh:   Minimale brutosspread (ct/kWh) om te handelen
         plateau_drempel_ct:      Max prijsverschil (ct/kWh) binnen een plateau (standaard 2 ct)
@@ -971,7 +973,9 @@ def los_dp_op(
     # ── BACKWARDS PASS ────────────────────────────────────────────────────────
     for t in range(n - 1, -1, -1):
         controleer_annulering()
-        prijs  = slots[t]["price"]       # €/kWh
+        prijs = float(slots[t]["price"])  # €/kWh; backwards-compatible weergaveprijs
+        inkoop_prijs = float(slots[t].get("buy_price", prijs))
+        verkoop_prijs = float(slots[t].get("sell_price", prijs))
         duur_h = slots[t]["duration_h"]  # uren
 
         # Een temperatuurtransitie hangt binnen een slot alleen af van de
@@ -1020,7 +1024,7 @@ def los_dp_op(
 
                 energie_naar_accu_q = soc_kwh_per_idx[s_laden] - soc_kwh
                 energie_van_net = energie_naar_accu_q / eta_laad if eta_laad > 0 else 0.0
-                kosten_laden = energie_van_net * (prijs + spread_helft)
+                kosten_laden = energie_van_net * (inkoop_prijs + spread_helft)
                 kosten_warmte = warmte_penalty_eur(
                     energie_naar_accu_q,
                     duur_h,
@@ -1069,7 +1073,7 @@ def los_dp_op(
                     else soc_kwh - soc_kwh_per_idx[s_ontladen]
                 )
                 energie_naar_net = energie_uit_accu_q * eta_ontlaad
-                opbrengst_ontladen = energie_naar_net * (prijs - spread_helft)
+                opbrengst_ontladen = energie_naar_net * (verkoop_prijs - spread_helft)
                 kosten_warmte = warmte_penalty_eur(
                     energie_uit_accu_q,
                     duur_h,
@@ -1224,7 +1228,9 @@ def los_dp_op(
         slot       = slots[t]
         soc_kwh    = huidig_soc_kwh
         actie_code, gekozen_vermogen_w, _, _, actie_energie_accu_kwh = P[t][huidig_s][huidig_q]
-        prijs      = slot["price"]
+        prijs      = float(slot["price"])
+        inkoop_prijs = float(slot.get("buy_price", prijs))
+        verkoop_prijs = float(slot.get("sell_price", prijs))
         duur_h     = slot["duration_h"]
         standby_kwh = standby_verlies_kwh(duur_h) if actie_code != 1 else 0.0
 
@@ -1233,7 +1239,7 @@ def los_dp_op(
             eff_laad_w        = max_laad_w * derating
             energie_naar_accu = max(0.0, min(actie_energie_accu_kwh, max_kwh - soc_kwh))
             energie_van_net   = energie_naar_accu / eta_laad if eta_laad > 0 else 0.0
-            winst             = -energie_van_net * prijs
+            winst             = -energie_van_net * inkoop_prijs
             verwacht_vermogen_w = energie_van_net / duur_h * 1000.0 if duur_h > 0 else 0.0
             vermogen_w = gekozen_vermogen_w
             warmte_penalty = warmte_penalty_eur(
@@ -1254,7 +1260,7 @@ def los_dp_op(
                 )
             energie_uit_accu  = max(0.0, min(actie_energie_accu_kwh, soc_kwh))
             energie_naar_net  = energie_uit_accu * eta_ontlaad
-            winst             = energie_naar_net * prijs
+            winst             = energie_naar_net * verkoop_prijs
             verwacht_vermogen_w = energie_naar_net / duur_h * 1000.0 if duur_h > 0 else 0.0
             vermogen_w        = gekozen_vermogen_w
             warmte_penalty    = warmte_penalty_eur(
@@ -1301,6 +1307,8 @@ def los_dp_op(
             "end":          end.isoformat()   if hasattr(end,   "isoformat") else end,
             "slot_duur_min": round(duur_h * 60.0, 1),
             "prijs_ct":     round(prijs * 100, 3),
+            "inkoop_prijs_ct": round(inkoop_prijs * 100, 3),
+            "verkoop_prijs_ct": round(verkoop_prijs * 100, 3),
             "actie":        actie,
             "vermogen_w":   vermogen_w,
             "verwacht_vermogen_w": rond_vermogen_omhoog(
@@ -1674,7 +1682,7 @@ def los_dp_op(
             huidig_soc = soc_start
             for k, delta in zip(range(gs, ge), verdeling):
                 s_r    = resultaat[k]
-                prijs  = s_r["prijs_ct"] / 100.0
+                prijs  = s_r["verkoop_prijs_ct"] / 100.0
                 duur_h = slots[k]["duration_h"]
                 q_voor = huidig_soc
                 standby_kwh = standby_verlies_kwh(duur_h)
@@ -1710,7 +1718,7 @@ def los_dp_op(
             huidig_soc = soc_start
             for k, delta in zip(range(gs, ge), verdeling):
                 s_r    = resultaat[k]
-                prijs  = s_r["prijs_ct"] / 100.0
+                prijs  = s_r["inkoop_prijs_ct"] / 100.0
                 duur_h = slots[k]["duration_h"]
                 s_voor = kwh_naar_idx(huidig_soc)
                 s_na   = kwh_naar_idx(huidig_soc + delta)

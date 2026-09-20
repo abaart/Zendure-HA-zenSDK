@@ -2,9 +2,10 @@
 Dynamisch Handelen - Home Assistant integratie (AppDaemon)
 ==========================================================
 
-AppDaemon app die ieder uur om :55 en op verzoek twee laad/ontlaadstrategieën
-berekent: de gekozen strategie met penalties en de economisch optimale
-vergelijkingsstrategie zonder penalties.
+AppDaemon app die ieder uur om :55 en op verzoek drie laad/ontlaadstrategieën
+berekent: de gekozen strategie met penalties, de economisch optimale
+vergelijkingsstrategie zonder penalties en een economische vergelijking zonder
+saldering van de energiebelasting bij ontladen.
 
 BESTANDSLOCATIES IN HA
 -----------------------
@@ -49,6 +50,7 @@ Ingangen:
 Uitgang:
   sensor.dynamisch_handelsstrategie   gekozen schema met penalties + prijs/RTE-winst (€)
   sensor.dynamisch_handelsstrategie_economisch  economisch schema + prijs/RTE-winst (€)
+  sensor.dynamisch_handelsstrategie_na_saldering  economisch schema na belastingcorrectie (€)
   sensor.dynamisch_strategie_advies   advies over DP- en thermische parameters
   sensor.dynamisch_handelsstrategie_berekening_duur  duur van de laatste bereken-run
   sensor.wattwanneer_forecast_status  ophaal-, cache- en kalibratiestatus
@@ -99,6 +101,11 @@ FALLBACK_PRIJS_BASIS_UREN = 24
 FALLBACK_SLOT_UREN = 1.0
 PLANNING_TIJDZONE = ZoneInfo("Europe/Amsterdam")
 ECONOMISCHE_STRATEGIE_ENTITY = "sensor.dynamisch_handelsstrategie_economisch"
+NA_SALDERING_STRATEGIE_ENTITY = "sensor.dynamisch_handelsstrategie_na_saldering"
+# Belastingdienst 2026: € 0,09161/kWh energiebelasting exclusief 21% btw.
+# De vergelijking gebruikt de huidige bekende belastingcomponent als
+# tegenfeitelijke correctie op de verkoopprijs.
+ENERGIEBELASTING_2026_INCL_BTW_EUR_PER_KWH = 0.09161 * 1.21
 DEFAULT_WATTWANNEER_CACHE_DB_PATH = "/share/zendure_kwartieren.sqlite"
 MIN_WATTWANNEER_KALIBRATIE_UREN = 6
 MAX_WATTWANNEER_KALIBRATIE_RESTFOUT_EUR_KWH = 0.0005
@@ -1407,6 +1414,15 @@ class DynamischHandelen(hass.Hass):
                     **lege_penalty_attributen,
                 },
             )
+            self.set_state(
+                NA_SALDERING_STRATEGIE_ENTITY,
+                state="geen_data",
+                attributes={
+                    "slots": [],
+                    "verwachte_winst_eur": 0,
+                    **lege_penalty_attributen,
+                },
+            )
             return
 
         try:
@@ -1522,6 +1538,16 @@ class DynamischHandelen(hass.Hass):
             is_geannuleerd,
         )
         stop_als_geannuleerd()
+        na_saldering_schema = self._bereken_na_saldering_schema(
+            slots,
+            accu,
+            standby_verbruik_w,
+            minimum_vermogen_w,
+            hw_min_pct,
+            hw_max_pct,
+            is_geannuleerd,
+        )
+        stop_als_geannuleerd()
         self._corrigeer_actief_slot_vermogen(schema, accu, hw_min_pct, hw_max_pct)
         self._corrigeer_actief_slot_vermogen(
             economisch_schema,
@@ -1530,6 +1556,13 @@ class DynamischHandelen(hass.Hass):
             hw_max_pct,
             strategie_entity_id=ECONOMISCHE_STRATEGIE_ENTITY,
         )
+        self._corrigeer_actief_slot_vermogen(
+            na_saldering_schema,
+            accu,
+            hw_min_pct,
+            hw_max_pct,
+            strategie_entity_id=NA_SALDERING_STRATEGIE_ENTITY,
+        )
         stop_als_geannuleerd()
         spread_blokkades = self._markeer_spread_blokkades(schema, accu.eta_laad, min_spread)
         stop_als_geannuleerd()
@@ -1537,7 +1570,7 @@ class DynamischHandelen(hass.Hass):
         # Vertaal DP-interne SoC% (0–100% van hw-venster) naar echte battery-%
         # zodat de grafiek overeenkomt met wat de Zendure rapporteert.
         hw_range = hw_max_pct - hw_min_pct
-        for strategie_schema in (schema, economisch_schema):
+        for strategie_schema in (schema, economisch_schema, na_saldering_schema):
             for s in strategie_schema:
                 s["soc_voor_pct"] = round(
                     hw_min_pct + s["soc_voor_pct"] / 100.0 * hw_range,
@@ -1561,6 +1594,7 @@ class DynamischHandelen(hass.Hass):
 
         verwachte_winst = bereken_prijs_rte_winst_eur(schema)
         economische_verwachte_winst = bereken_prijs_rte_winst_eur(economisch_schema)
+        na_saldering_verwachte_winst = bereken_prijs_rte_winst_eur(na_saldering_schema)
         winstverschil = economische_verwachte_winst - verwachte_winst
         penalty_totalen = bereken_penalty_totalen_eur(schema)
         economische_penalty_totalen = bereken_penalty_totalen_eur(economisch_schema)
@@ -1572,9 +1606,19 @@ class DynamischHandelen(hass.Hass):
         economische_ontlaad_slots = [
             s for s in economisch_schema if s["actie"] == "ontladen"
         ]
+        na_saldering_laad_slots = [
+            s for s in na_saldering_schema if s["actie"] == "laden"
+        ]
+        na_saldering_ontlaad_slots = [
+            s for s in na_saldering_schema if s["actie"] == "ontladen"
+        ]
         volgende        = next((s for s in schema if s["actie"] != "rust"), None)
         economische_volgende = next(
             (s for s in economisch_schema if s["actie"] != "rust"),
+            None,
+        )
+        na_saldering_volgende = next(
+            (s for s in na_saldering_schema if s["actie"] != "rust"),
             None,
         )
         nu_publicatie   = datetime.now().astimezone()
@@ -1595,6 +1639,15 @@ class DynamischHandelen(hass.Hass):
             start, end = datetimes
             if start <= nu_publicatie < end:
                 economisch_huidig = slot
+                break
+        na_saldering_huidig = None
+        for slot in na_saldering_schema:
+            datetimes = _lees_slot_datetimes(slot)
+            if datetimes is None:
+                continue
+            start, end = datetimes
+            if start <= nu_publicatie < end:
+                na_saldering_huidig = slot
                 break
         history_grafiek_slots: list[dict] = []
         try:
@@ -1631,6 +1684,7 @@ class DynamischHandelen(hass.Hass):
         self.log(
             f"Dynamisch Handelen: verwacht gekozen EUR {verwachte_winst:.3f} | "
             f"economisch EUR {economische_verwachte_winst:.3f} | "
+            f"na saldering EUR {na_saldering_verwachte_winst:.3f} | "
             f"verschil EUR {winstverschil:.3f} | "
             f"{len(laad_slots)} laadslots / {len(ontlaad_slots)} ontlaadslots | "
             f"volgende: {volgende['actie'] if volgende else 'rust'} "
@@ -1688,6 +1742,59 @@ class DynamischHandelen(hass.Hass):
         )
 
         self.set_state(
+            NA_SALDERING_STRATEGIE_ENTITY,
+            state=str(round(na_saldering_verwachte_winst, 3)),
+            attributes={
+                "unit_of_measurement": "EUR",
+                "friendly_name": "Strategie Na Salderingsregeling Verwachte Winst",
+                "icon": "mdi:cash-minus",
+                "device_class": "monetary",
+                "strategie_type": "na_salderingsregeling",
+                "optimalisatie": "inkoopprijs_en_verkoopprijs_na_energiebelasting",
+                "penalties_actief": False,
+                "verwachte_winst_berekening": "prijs_rte_en_energiebelasting",
+                "verwachte_winst_eur": round(na_saldering_verwachte_winst, 4),
+                "energiebelasting_basisjaar": 2026,
+                "energiebelasting_excl_btw_eur_kwh": 0.09161,
+                "energiebelasting_incl_btw_eur_kwh": round(
+                    ENERGIEBELASTING_2026_INCL_BTW_EUR_PER_KWH,
+                    6,
+                ),
+                "energiebelasting_incl_btw_ct_kwh": round(
+                    ENERGIEBELASTING_2026_INCL_BTW_EUR_PER_KWH * 100.0,
+                    3,
+                ),
+                "aanname": (
+                    "Bij ontladen is de verkoopprijs 11,085 ct/kWh lager; "
+                    "de inkoopprijs blijft gelijk."
+                ),
+                "slots": na_saldering_schema,
+                "strategie_einde": strategie_einde,
+                "prijs_bron": prijs_bron,
+                "planning_resolutie": "volledige horizon met aparte inkoop- en verkoopprijs",
+                "laad_slots": len(na_saldering_laad_slots),
+                "ontlaad_slots": len(na_saldering_ontlaad_slots),
+                "huidige_actie": (
+                    na_saldering_huidig["actie"] if na_saldering_huidig else "rust"
+                ),
+                "volgende_actie": (
+                    na_saldering_volgende["actie"]
+                    if na_saldering_volgende else "rust"
+                ),
+                "volgende_start": (
+                    na_saldering_volgende["start"] if na_saldering_volgende else None
+                ),
+                "standby_verbruik_w": standby_verbruik_w,
+                "minimum_vermogen_w": minimum_vermogen_w,
+                "dp_vermogen_stap_w": DP_VERMOGEN_STAP_W,
+                "accu_huidig_kwh": round(accu.huidig_kwh, 3),
+                "accu_max_kwh": round(accu.max_kwh, 3),
+                "eta": round(accu.eta_laad, 3),
+                "bijgewerkt": nu_publicatie.isoformat(),
+            },
+        )
+
+        self.set_state(
             "sensor.dynamisch_handelsstrategie",
             state=str(round(verwachte_winst, 3)),
             attributes={
@@ -1704,9 +1811,14 @@ class DynamischHandelen(hass.Hass):
                     economische_verwachte_winst,
                     4,
                 ),
+                "na_saldering_verwachte_winst_eur": round(
+                    na_saldering_verwachte_winst,
+                    4,
+                ),
                 "winstverschil_eur": round(winstverschil, 4),
                 **formatteer_penalty_attributen(penalty_totalen),
                 "economische_strategie_entity": ECONOMISCHE_STRATEGIE_ENTITY,
+                "na_saldering_strategie_entity": NA_SALDERING_STRATEGIE_ENTITY,
                 "slots":               schema,
                 "slots_grafiek":       grafiek_slots,
                 "grafiek_historie_uren": GRAFIEK_HISTORIE_UREN,
@@ -1840,6 +1952,38 @@ class DynamischHandelen(hass.Hass):
             soc_min_pct=hw_min_pct,
             soc_max_pct=hw_max_pct,
             annuleer_check=annuleer_check,
+        )
+
+    def _bereken_na_saldering_schema(
+        self,
+        slots: list[dict],
+        accu: "Accustatus",
+        standby_verbruik_w: float,
+        minimum_vermogen_w: int,
+        hw_min_pct: float,
+        hw_max_pct: float,
+        annuleer_check,
+    ) -> list[dict]:
+        """Optimaliseert met energiebelasting op inkoop en zonder belastingcredit bij verkoop."""
+        slots_na_saldering = []
+        for slot in slots:
+            prijs = float(slot["price"])
+            aangepast_slot = dict(slot)
+            aangepast_slot["buy_price"] = float(slot.get("buy_price", prijs))
+            aangepast_slot["sell_price"] = (
+                float(slot.get("sell_price", prijs))
+                - ENERGIEBELASTING_2026_INCL_BTW_EUR_PER_KWH
+            )
+            slots_na_saldering.append(aangepast_slot)
+
+        return self._bereken_economisch_schema(
+            slots_na_saldering,
+            accu,
+            standby_verbruik_w,
+            minimum_vermogen_w,
+            hw_min_pct,
+            hw_max_pct,
+            annuleer_check,
         )
 
     # ── DATA OPHALEN ─────────────────────────────────────────────────────────

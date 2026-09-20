@@ -326,7 +326,46 @@ def test_economische_strategie_zet_keuzepenalties_uit(monkeypatch):
     }
 
 
-def test_geen_prijsdata_publiceert_beide_strategiesensoren():
+def test_na_saldering_verlaagt_alleen_de_verkoopprijs(monkeypatch):
+    ontvangen = {}
+
+    def fake_economisch_schema(
+        slots,
+        accu,
+        standby_verbruik_w,
+        minimum_vermogen_w,
+        hw_min_pct,
+        hw_max_pct,
+        annuleer_check,
+    ):
+        ontvangen["slots"] = slots
+        ontvangen["accu"] = accu
+        return [{"actie": "rust"}]
+
+    app = _maak_app()
+    monkeypatch.setattr(app, "_bereken_economisch_schema", fake_economisch_schema)
+    slots = [{"price": 0.20, "duration_h": 0.25}]
+    accu = object()
+
+    resultaat = app._bereken_na_saldering_schema(
+        slots,
+        accu,
+        standby_verbruik_w=8.0,
+        minimum_vermogen_w=225,
+        hw_min_pct=5.0,
+        hw_max_pct=95.0,
+        annuleer_check=lambda: False,
+    )
+
+    assert resultaat == [{"actie": "rust"}]
+    assert ontvangen["accu"] is accu
+    assert ontvangen["slots"] is not slots
+    assert slots == [{"price": 0.20, "duration_h": 0.25}]
+    assert ontvangen["slots"][0]["buy_price"] == pytest.approx(0.20)
+    assert ontvangen["slots"][0]["sell_price"] == pytest.approx(0.0891519)
+
+
+def test_geen_prijsdata_publiceert_drie_strategiesensoren():
     app = _maak_app()
     app._berekening_generatie = 4
     app._haal_prijsslots = lambda: []
@@ -340,6 +379,7 @@ def test_geen_prijsdata_publiceert_beide_strategiesensoren():
     assert [item[0] for item in gepubliceerd] == [
         "sensor.dynamisch_handelsstrategie",
         ECONOMISCHE_STRATEGIE_ENTITY,
+        dynamisch_handelen_module.NA_SALDERING_STRATEGIE_ENTITY,
     ]
     assert all(item[1] == "geen_data" for item in gepubliceerd)
     assert all(item[2]["penalty_totaal_eur"] == "0.000000" for item in gepubliceerd)
@@ -1053,8 +1093,10 @@ def test_strategie_dashboard_groepeert_korte_instellingen():
     assert "input_number.dynamisch_minimum_vermogen_w" in tekst
     assert "attribute: dp_vermogen_stap_w" in tekst
     assert "sensor.dynamisch_handelsstrategie_economisch" in tekst
+    assert "sensor.dynamisch_handelsstrategie_na_saldering" in tekst
     assert "name: Gekozen met penalties" in tekst
     assert "name: Economisch optimaal" in tekst
+    assert "name: Na salderingsregeling" in tekst
     assert "title: Verwachte prijs+RTE-winst per slot" in tekst
     assert "title: Cumulatieve penalties — huidige planning" in tekst
     for attribuut in (

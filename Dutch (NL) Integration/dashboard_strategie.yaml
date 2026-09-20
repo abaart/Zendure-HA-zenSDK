@@ -28,12 +28,19 @@ views:
               - type: entity
                 show_state: true
                 show_icon: true
+                entity: sensor.dynamisch_handelsstrategie_na_saldering
+                color: '#ab47bc'
+                tap_action:
+                  action: more-info
+              - type: entity
+                show_state: true
+                show_icon: true
                 entity: sensor.zendure_2400_ac_laadpercentage
                 color: '#01a180'
                 tap_action:
                   action: more-info
           - type: grid
-            columns: 2
+            columns: 3
             square: false
             cards:
               - type: tile
@@ -45,6 +52,11 @@ views:
                 entity: sensor.dynamisch_handelsstrategie_economisch
                 name: Economisch optimaal
                 color: '#42a5f5'
+                vertical: false
+              - type: tile
+                entity: sensor.dynamisch_handelsstrategie_na_saldering
+                name: Na salderingsregeling
+                color: '#ab47bc'
                 vertical: false
           - type: conditional
             conditions:
