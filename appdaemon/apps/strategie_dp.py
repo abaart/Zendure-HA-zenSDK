@@ -305,6 +305,8 @@ def corrigeer_actief_slot_vermogen(
             continue
 
         actie = slot.get("actie")
+        if slot.get("volledige_slots"):
+            return schema
         if actie not in ("laden", "ontladen"):
             return schema
 
@@ -427,6 +429,7 @@ def los_dp_op(
     soc_min_pct: float = 0.0,
     soc_max_pct: float = 100.0,
     annuleer_check: Callable[[], bool] | None = None,
+    volledige_slots: bool = False,
 ) -> list[dict[str, Any]]:
     """
     Berekent de winstmaximaliserende laad/ontlaad strategie via DP.
@@ -450,7 +453,9 @@ def los_dp_op(
     ALGORITME — FORWARDS EXTRACTIE
     --------------------------------
     Na de backwards pass volgen we P voorwaarts vanaf de huidige SoC.
-    Dit geeft het concrete uur-voor-uur schema.
+    Met volledige_slots=True evalueert kies_volledig_slot() alle opdrachten
+    opnieuw vanaf de exacte voorraad, zodat afronden naar een gridpunt geen
+    onuitvoerbare opdracht oplevert.
 
     MINIMALE SPREAD
     ---------------
@@ -464,6 +469,8 @@ def los_dp_op(
     De waardetabel gebruikt stappen van SOC_STAP_KWH. De maximale
     ontlaadkeuze behoudt de exacte actie-energie; de toekomstige waarde wordt
     geïnterpoleerd. De overige vermogenskeuzes gebruiken gridtransities.
+    Met volledige_slots=True behouden alle opdrachten hun exacte slotenergie
+    en wordt de toekomstige waarde tussen gridpunten geïnterpoleerd.
 
     VERMOGENSSTAPPEN EN WARMTE-PENALTY
     -----------------------------------
@@ -534,6 +541,9 @@ def los_dp_op(
         soc_max_pct:             Echte Zendure-SoC bij DP-interne max_kwh.
         annuleer_check:          Callback die True teruggeeft als AppDaemon deze
                                  DP-run moet stoppen voor een nieuwere berekening.
+        volledige_slots:         Reken met vermogen × hele slotduur, zonder afkappen
+                                 op een tussendoel. Alleen fysieke SoC-grenzen stoppen
+                                 de uitvoering. Plateau-nabewerking blijft dan uit.
 
     Returns:
         Lijst van slot-dicts met toegevoegde velden:
@@ -612,7 +622,10 @@ def los_dp_op(
     # SoC-grid: index n_soc_min = ingestelde minimum-SoC. Lagere indexen zijn
     # echte batterij-SoC onder de ingestelde minimum-SoC door standbyverbruik.
     n_soc_min = max(0, math.ceil(abs(soc_floor_kwh) / SOC_STAP_KWH - 1e-9))
-    n_soc_max = max(1, round(max_kwh / SOC_STAP_KWH))
+    n_soc_max = max(
+        1,
+        math.ceil(max_kwh / SOC_STAP_KWH) if volledige_slots else round(max_kwh / SOC_STAP_KWH),
+    )
     n_soc = n_soc_min + n_soc_max
     grid_floor_kwh = -n_soc_min * SOC_STAP_KWH
     soc_kwh_per_idx = [
@@ -960,6 +973,12 @@ def los_dp_op(
             return V[t_idx][laag][temp_idx]
 
         fractie = positie - laag
+        if volledige_slots:
+            # Het bovenste interval kan kleiner dan SOC_STAP_KWH zijn.
+            fractie = (
+                (soc_kwh - soc_kwh_per_idx[laag])
+                / (soc_kwh_per_idx[hoog] - soc_kwh_per_idx[laag])
+            )
         return (
             V[t_idx][laag][temp_idx] * (1.0 - fractie)
             + V[t_idx][hoog][temp_idx] * fractie
@@ -1003,7 +1022,7 @@ def los_dp_op(
             # q-afhankelijke temperatuuruitkomsten staan als tabellen bij elke
             # unieke kandidaat.
             laad_kandidaten = []
-            geziene_laad_bestemmingen: set[int] = set()
+            geziene_laad_bestemmingen: set[int | float] = set()
             derating = bereken_derating(max(0.0, soc_kwh), max_kwh)
             eff_laad_w = max_laad_w * derating
             ruimte_kwh = max_kwh - soc_kwh
@@ -1011,18 +1030,26 @@ def los_dp_op(
                 if stap_index % 16 == 0:
                     controleer_annulering()
                 werkelijk_w = min(float(vermogen_w), eff_laad_w)
-                energie_ideaal = min(werkelijk_w / 1000.0 * duur_h * eta_laad, ruimte_kwh)
+                energie_volledig = werkelijk_w / 1000.0 * duur_h * eta_laad
+                if volledige_slots and (
+                    energie_volledig <= 0 or energie_volledig > ruimte_kwh + 1e-9
+                ):
+                    continue
+                energie_ideaal = min(energie_volledig, ruimte_kwh)
                 s_laden = kwh_naar_idx_omlaag(soc_kwh + energie_ideaal)
-                if s_laden <= s:
+                if s_laden <= s and not volledige_slots:
                     continue
                 # Vermogensstappen staan oplopend. Wanneer meerdere opdrachten
                 # hetzelfde SoC-gridpunt bereiken, had de bestaande strikte
                 # tie-breaker altijd de eerste (laagste) opdracht behouden.
-                if s_laden in geziene_laad_bestemmingen:
+                bestemming = energie_ideaal if volledige_slots else s_laden
+                if bestemming in geziene_laad_bestemmingen:
                     continue
-                geziene_laad_bestemmingen.add(s_laden)
+                geziene_laad_bestemmingen.add(bestemming)
 
-                energie_naar_accu_q = soc_kwh_per_idx[s_laden] - soc_kwh
+                energie_naar_accu_q = (
+                    energie_ideaal if volledige_slots else soc_kwh_per_idx[s_laden] - soc_kwh
+                )
                 energie_van_net = energie_naar_accu_q / eta_laad if eta_laad > 0 else 0.0
                 kosten_laden = energie_van_net * (inkoop_prijs + spread_helft)
                 kosten_warmte = warmte_penalty_eur(
@@ -1042,7 +1069,7 @@ def los_dp_op(
                     energie_naar_accu_q,
                     -kosten_laden - kosten_warmte,
                     *soc_verblijf_penalty_basis(
-                        (soc_kwh + soc_kwh_per_idx[s_laden]) / 2.0,
+                        soc_kwh + energie_naar_accu_q / 2.0,
                         duur_h,
                     ),
                     q_laden_per_q,
@@ -1057,9 +1084,14 @@ def los_dp_op(
                 max_naar_net_kwh = float(vermogen_w) / 1000.0 * duur_h
                 max_uit_accu_kwh = max_naar_net_kwh / eta_ontlaad if eta_ontlaad > 0 else 0.0
                 beschikbare_ontlaad_kwh = max(0.0, soc_kwh)
+                if volledige_slots and (
+                    max_uit_accu_kwh <= 0
+                    or max_uit_accu_kwh + standby_verlies_kwh(duur_h) > beschikbare_ontlaad_kwh + 1e-9
+                ):
+                    continue
                 energie_ideaal_uit = min(max_uit_accu_kwh, beschikbare_ontlaad_kwh)
                 s_ontladen = kwh_naar_idx_omhoog(soc_kwh - energie_ideaal_uit)
-                exact_maximum = vermogen_w == ontlaad_vermogensstappen[-1]
+                exact_maximum = volledige_slots or vermogen_w == ontlaad_vermogensstappen[-1]
                 if energie_ideaal_uit <= 0 or (s_ontladen >= s and not exact_maximum):
                     continue
                 if s_ontladen in geziene_ontlaad_bestemmingen and not exact_maximum:
@@ -1161,7 +1193,10 @@ def los_dp_op(
                         waarde_basis
                         - kosten_temp
                         - kosten_soc_verblijf
-                        + V[t + 1][s_laden][q_laden]
+                        + (
+                            interpoleer_waarde(t + 1, soc_kwh + energie_naar_accu_q, q_laden)
+                            if volledige_slots else V[t + 1][s_laden][q_laden]
+                        )
                     )
 
                     if waarde > beste + 1e-12:
@@ -1220,14 +1255,67 @@ def los_dp_op(
     resultaat: list[dict[str, Any]] = []
     huidig_s = kwh_naar_idx(accu.huidig_kwh)
     huidig_q = temp_naar_idx(batterij_temp_start)
-    huidig_soc_kwh = idx_naar_kwh(huidig_s)
+    huidig_soc_kwh = (
+        min(max_kwh, max(soc_floor_kwh, accu.huidig_kwh))
+        if volledige_slots else idx_naar_kwh(huidig_s)
+    )
     huidig_temp_c = batterij_temp_start
+
+    def kies_volledig_slot(t: int, soc: float, temp: float | None) -> tuple[int, int, float]:
+        """Evalueer hele acties vanaf de exacte voorraad tussen DP-gridpunten."""
+        slot = slots[t]
+        duur = slot["duration_h"]
+        beste = NEG_INF
+        keuze = (0, 0, 0.0)
+        cap = max_laad_w * bereken_derating(max(0.0, soc), max_kwh)
+        for actie, stappen in (
+            ("rust", [0]),
+            ("laden", laad_vermogensstappen),
+            ("ontladen", ontlaad_vermogensstappen),
+        ):
+            for vermogen in stappen:
+                controleer_annulering()
+                if actie == "laden":
+                    energie = min(vermogen, cap) / 1000.0 * duur * eta_laad
+                    na = soc + energie
+                    if energie <= 0 or na > max_kwh + 1e-9:
+                        continue
+                    prijs = float(slot.get("buy_price", slot["price"]))
+                    waarde = -energie / eta_laad * (prijs + spread_helft)
+                    factor = warmte_penalty_laden_factor
+                elif actie == "ontladen":
+                    energie = vermogen / 1000.0 * duur / eta_ontlaad if eta_ontlaad > 0 else 0.0
+                    na = soc - energie - standby_verlies_kwh(duur)
+                    if energie <= 0 or na < -1e-9:
+                        continue
+                    prijs = float(slot.get("sell_price", slot["price"]))
+                    waarde = energie * eta_ontlaad * (prijs - spread_helft)
+                    factor = warmte_penalty_ontladen_factor
+                else:
+                    energie = 0.0
+                    na = soc_met_standby_verlies(soc, duur)
+                    waarde = 0.0
+                    factor = 0.0
+                temp_na = voorspel_temp_na_c(temp, slot_buiten_temp_c(t), energie, duur, actie)
+                waarde += interpoleer_waarde(t + 1, na, temp_naar_idx(temp_na))
+                waarde -= warmte_penalty_eur(energie, duur, factor)
+                waarde -= overtemp_penalty_eur(temp, soc, temp_na, na, duur)
+                waarde -= soc_verblijf_penalty_eur((soc + na) / 2.0, temp_na, duur)
+                if waarde > beste + 1e-12:
+                    beste = waarde
+                    actie_code = 1 if actie == "laden" else -1 if actie == "ontladen" else 0
+                    keuze = (actie_code, int(vermogen), energie)
+        return keuze
 
     for t in range(n):
         controleer_annulering()
         slot       = slots[t]
         soc_kwh    = huidig_soc_kwh
         actie_code, gekozen_vermogen_w, _, _, actie_energie_accu_kwh = P[t][huidig_s][huidig_q]
+        if volledige_slots:
+            actie_code, gekozen_vermogen_w, actie_energie_accu_kwh = kies_volledig_slot(
+                t, soc_kwh, huidig_temp_c,
+            )
         prijs      = float(slot["price"])
         inkoop_prijs = float(slot.get("buy_price", prijs))
         verkoop_prijs = float(slot.get("sell_price", prijs))
@@ -1251,7 +1339,7 @@ def los_dp_op(
             actie             = "laden"
 
         elif actie_code == -1:  # Ontladen
-            if gekozen_vermogen_w == ontlaad_vermogensstappen[-1]:
+            if volledige_slots or gekozen_vermogen_w == ontlaad_vermogensstappen[-1]:
                 # De werkelijke SoC kan tussen gridpunten liggen. Bereken de
                 # maximale actie opnieuw vanaf die SoC, begrensd door de voorraad.
                 actie_energie_accu_kwh = (
@@ -1325,6 +1413,7 @@ def los_dp_op(
             "minimum_vermogen_w": minimum_vermogen_w,
             "dp_vermogen_stap_w": DP_VERMOGEN_STAP_W,
             "aansturing_vermogen_stap_w": VERMOGEN_STAP_W,
+            "volledige_slots": volledige_slots,
             "standby_verlies_kwh": round(standby_kwh, 4),
             "standby_verlies_wh": round(standby_kwh * 1000.0, 1),
             "soc_verblijf_penalty_eur": round(soc_verblijf[0], 6),
@@ -1337,6 +1426,10 @@ def los_dp_op(
             "soc_verblijf_temp_factor": round(soc_verblijf[5], 3),
             "c_waarde": round(c_waarde(energie_accu_voor_model, duur_h), 3),
         }
+        if volledige_slots:
+            slot_resultaat["geplande_actieduur_min"] = (
+                round(duur_h * 60.0, 1) if actie != "rust" else 0.0
+            )
         if thermisch_actief:
             temp_limiet_voor_c = temp_limiet_voor_soc_kwh(soc_kwh)
             temp_limiet_na_c = temp_limiet_voor_soc_kwh(soc_na_kwh)
@@ -1378,6 +1471,13 @@ def los_dp_op(
     def herbereken_modelvelden(schema: list[dict[str, Any]]) -> None:
         def werk_stop_soc_velden_bij(k: int, s_r: dict[str, Any]) -> None:
             actie = s_r.get("actie")
+            if volledige_slots and actie in ("laden", "ontladen"):
+                s_r["stop_soc_kwh"] = max_kwh if actie == "laden" else 0.0
+                s_r["stop_soc_pct"] = 100.0 if actie == "laden" else 0.0
+                s_r["stop_soc_richting"] = (
+                    "boven_of_gelijk" if actie == "laden" else "onder_of_gelijk"
+                )
+                return
             if actie not in ("laden", "ontladen"):
                 s_r["stop_soc_kwh"] = None
                 s_r["stop_soc_pct"] = None
@@ -1501,7 +1601,7 @@ def los_dp_op(
 
     herbereken_modelvelden(resultaat)
 
-    if not plateau_spreiding:
+    if volledige_slots or not plateau_spreiding:
         return resultaat
 
     controleer_annulering()

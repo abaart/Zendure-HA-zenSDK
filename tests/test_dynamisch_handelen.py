@@ -43,6 +43,7 @@ from dynamisch_handelen import (  # noqa: E402
     DynamischHandelen,
     bereken_penalty_totalen_eur,
     bereken_prijs_rte_winst_eur,
+    bereken_thermische_meetstatistiek,
     bouw_wattwanneer_slots,
     bouw_grafiek_slots,
     formatteer_penalty_attributen,
@@ -184,7 +185,9 @@ def test_initialize_plans_strategy_once_per_hour_at_minute_55():
     app = _maak_app()
     geplande_taken = []
     state_listeners = []
+    startup_taken = []
     app.run_hourly = lambda callback, start: geplande_taken.append((callback, start))
+    app.run_in = lambda callback, delay, **kwargs: startup_taken.append((callback, delay, kwargs))
     app.listen_state = lambda callback, entity, **kwargs: state_listeners.append(entity)
     app._zet_berekening_bezig = lambda bezig: None
     app._initialiseer_berekening_duur_sensor = lambda: None
@@ -193,9 +196,88 @@ def test_initialize_plans_strategy_once_per_hour_at_minute_55():
     app.initialize()
 
     assert geplande_taken == [(app.bereken_strategie, time(0, 55, 0))]
+    assert startup_taken == [(app._bereken_na_startup, 15, {"poging": 1})]
     assert "input_number.dynamisch_minimum_vermogen_w" in state_listeners
     assert "input_number.zendure_2400_ac_max_oplaadvermogen" in state_listeners
     assert "input_number.zendure_2400_ac_max_ontlaadvermogen" in state_listeners
+
+
+class TestStartupBerekening:
+    def maak_startup_app(self, overrides=None):
+        states = {
+            "sensor.zendure_2400_ac_laadpercentage": "10",
+            "sensor.zendure_2400_ac_indicatie_beschikbare_energie": "0",
+            "sensor.zendure_2400_ac_indicatie_benodigde_energie": "10",
+            **(overrides or {}),
+        }
+        app = _maak_app(states)
+        app._berekening_bezig = False
+        app._startup_bijgewerkt = None
+        app.retry = []
+        app.calls = []
+        app.run_in = lambda callback, delay, **kwargs: app.retry.append((delay, kwargs))
+
+        def bereken(kwargs):
+            app.calls.append(kwargs)
+            states["sensor.dynamisch_handelsstrategie"] = {
+                "state": "ok", "attributes": {"slots": [{"actie": "rust"}], "bijgewerkt": "nieuw"}
+            }
+        app.bereken_strategie = bereken
+        return app, states
+
+    def test_berekent_eenmaal_en_herhaalde_callback_stopt_bij_vers_schema(self):
+        app, _ = self.maak_startup_app()
+        app._bereken_na_startup({"poging": 1})
+        app._bereken_na_startup({"poging": 2})
+        assert app.calls == [{"trigger": "startup"}]
+        assert app.retry == []
+
+    @pytest.mark.parametrize("waarde", [None, "unknown", "unavailable", "nan", "inf", "-1", "101"])
+    def test_wacht_op_soc_en_berekent_na_herstel(self, waarde):
+        app, states = self.maak_startup_app({"sensor.zendure_2400_ac_laadpercentage": waarde})
+        app._bereken_na_startup({"poging": 1})
+        assert app.calls == []
+        assert app.retry == [(30, {"poging": 2})]
+        states["sensor.zendure_2400_ac_laadpercentage"] = "10"
+        app._bereken_na_startup({"poging": 2})
+        assert app.calls == [{"trigger": "startup"}]
+
+    @pytest.mark.parametrize("waarde", [None, "unavailable", "nan", "-1", "0"])
+    def test_wacht_op_beschikbare_capaciteit(self, waarde):
+        app, _ = self.maak_startup_app({"sensor.zendure_2400_ac_indicatie_benodigde_energie": waarde})
+        app._bereken_na_startup({"poging": 1})
+        assert app.calls == []
+        assert app.retry == [(30, {"poging": 2})]
+
+    def test_annuleert_geen_lopende_berekening(self):
+        app, _ = self.maak_startup_app()
+        app._berekening_bezig = True
+        app._bereken_na_startup({"poging": 1})
+        assert app.calls == []
+        assert app.retry == [(30, {"poging": 2})]
+
+    def test_stopt_retries_na_twintig_pogingen(self):
+        app, _ = self.maak_startup_app({"sensor.zendure_2400_ac_laadpercentage": None})
+        app._bereken_na_startup({"poging": 20})
+        assert app.retry == []
+        assert app.calls == []
+
+    def test_mislukte_berekening_plant_retry(self):
+        app, _ = self.maak_startup_app()
+        app.bereken_strategie = lambda kwargs: (_ for _ in ()).throw(RuntimeError("tijdelijk"))
+        app._bereken_na_startup({"poging": 1})
+        assert app.retry == [(30, {"poging": 2})]
+
+    def test_oud_schema_wordt_opnieuw_berekend(self):
+        app, states = self.maak_startup_app({
+            "sensor.dynamisch_handelsstrategie": {
+                "state": "ok", "attributes": {"slots": [{"actie": "laden"}], "bijgewerkt": "oud"}
+            }
+        })
+        app._startup_bijgewerkt = "oud"
+        app._bereken_na_startup({"poging": 1})
+        assert app.calls == [{"trigger": "startup"}]
+        assert states["sensor.dynamisch_handelsstrategie"]["attributes"]["bijgewerkt"] == "nieuw"
 
 
 class TestMinimaleSpread:
@@ -311,6 +393,7 @@ def test_economische_strategie_zet_keuzepenalties_uit(monkeypatch):
     assert ontvangen["kwargs"] == {
         "min_spread_ct_per_kwh": 0.0,
         "plateau_spreiding": False,
+        "volledige_slots": True,
         "warmte_penalty_laden_factor": 0.0,
         "warmte_penalty_ontladen_factor": 0.0,
         "standby_verbruik_w": 8.0,
@@ -917,6 +1000,289 @@ class TestHistorischeStates:
 
 
 class TestStrategieAdvies:
+    def test_thermische_meetstatistiek_houdt_ongewijzigde_recorder_state_vast(self):
+        start = datetime(2026, 8, 26, 20, 0, tzinfo=timezone.utc)
+        temperatuur_samples = []
+        buiten_samples = []
+        for index in range(97):
+            tijd = start + timedelta(minutes=5 * index)
+            duur_h = index * 5 / 60.0
+            temperatuur_samples.append((tijd, 20.0 + 10.0 * (0.5 ** (duur_h / 6.0))))
+            buiten_samples.append((tijd, 20.0))
+
+        statistiek = bereken_thermische_meetstatistiek(
+            [(start, 0.0)],
+            temperatuur_samples,
+            5.0,
+            buiten_samples=buiten_samples,
+            nu=start + timedelta(hours=8),
+        )
+
+        assert statistiek["afkoeling"]["blokken"] == 1
+        assert statistiek["afkoeling"]["blokken_voldoende_duur"] == 1
+        assert statistiek["afkoeling"]["metingen"] == 1
+        assert statistiek["afkoeling"]["schatting_h"] == pytest.approx(6.0)
+
+    def test_numerieke_samples_bewaart_unknown_als_onderbreking(self):
+        start = datetime(2026, 8, 26, 20, 0, tzinfo=timezone.utc)
+        app = _maak_app()
+
+        samples = app._haal_numerieke_samples(
+            [
+                _history_item("0", start.isoformat()),
+                _history_item("unavailable", (start + timedelta(hours=1)).isoformat()),
+                _history_item("100", (start + timedelta(hours=2)).isoformat()),
+            ],
+            behoud_gaten=True,
+        )
+
+        assert [waarde for _, waarde in samples] == [0.0, None, 100.0]
+
+    def test_thermische_meetstatistiek_schat_factor_uit_vermogen_en_temperatuur(self):
+        start = datetime(2026, 8, 26, 8, 0, tzinfo=timezone.utc)
+        vermogen_samples = []
+        temperatuur_samples = []
+        for index in range(13):
+            tijd = start + timedelta(minutes=5 * index)
+            vermogen_samples.append((tijd, 2500.0 if index < 12 else 0.0))
+            temperatuur_samples.append((tijd, 20.0 + 5.0 * index / 12.0))
+
+        statistiek = bereken_thermische_meetstatistiek(
+            vermogen_samples,
+            temperatuur_samples,
+            5.0,
+            nu=start + timedelta(minutes=65),
+        )
+
+        assert statistiek["status"] == "ok"
+        assert statistiek["laden"]["blokken"] == 1
+        assert statistiek["laden"]["stijgende_blokken"] == 1
+        assert statistiek["laden"]["schatting_c_per_c2h"] == pytest.approx(20.0)
+        assert statistiek["laden"]["mediaan_c_per_c2h"] == pytest.approx(20.0)
+        assert statistiek["afkoeling"]["status"] == "geen_omgevingssensor"
+
+    def test_thermische_meetstatistiek_schat_halvering_uit_rust_en_omgeving(self):
+        start = datetime(2026, 8, 26, 8, 0, tzinfo=timezone.utc)
+        vermogen_samples = []
+        temperatuur_samples = []
+        buiten_samples = []
+        for index in range(13):
+            tijd = start + timedelta(minutes=5 * index)
+            duur_h = index * 5 / 60.0
+            vermogen_samples.append((tijd, 0.0))
+            temperatuur_samples.append((tijd, 20.0 + 8.0 * (0.5**duur_h)))
+            buiten_samples.append((tijd, 20.0))
+
+        statistiek = bereken_thermische_meetstatistiek(
+            vermogen_samples,
+            temperatuur_samples,
+            5.0,
+            buiten_samples=buiten_samples,
+            nu=start + timedelta(hours=1),
+        )
+
+        assert statistiek["status"] == "ok"
+        assert statistiek["afkoeling"]["status"] == "ok"
+        assert statistiek["afkoeling"]["metingen"] == 1
+        assert statistiek["afkoeling"]["schatting_h"] == pytest.approx(1.0)
+
+    def test_afkoeling_accepteert_exact_dertig_minuten_zonder_floatafrondingsfout(self):
+        start = datetime(2026, 8, 26, 8, 0, tzinfo=timezone.utc)
+        vermogen_samples = []
+        temperatuur_samples = []
+        buiten_samples = []
+        for index in range(7):
+            tijd = start + timedelta(minutes=5 * index)
+            duur_h = index * 5 / 60.0
+            vermogen_samples.append((tijd, 0.0))
+            temperatuur_samples.append((tijd, 20.0 + 8.0 * (0.5**duur_h)))
+            buiten_samples.append((tijd, 20.0))
+
+        statistiek = bereken_thermische_meetstatistiek(
+            vermogen_samples,
+            temperatuur_samples,
+            5.0,
+            buiten_samples=buiten_samples,
+            nu=start + timedelta(minutes=30),
+        )
+
+        assert statistiek["afkoeling"]["blokken_voldoende_duur"] == 1
+        assert statistiek["afkoeling"]["metingen"] == 1
+        assert statistiek["afkoeling"]["schatting_h"] == pytest.approx(1.0)
+
+    def test_afkoeling_staat_thermisch_kleine_vermogensbewegingen_toe(self):
+        start = datetime(2026, 8, 26, 8, 0, tzinfo=timezone.utc)
+        vermogen_samples = []
+        temperatuur_samples = []
+        buiten_samples = []
+        for index in range(7):
+            tijd = start + timedelta(minutes=5 * index)
+            duur_h = index * 5 / 60.0
+            vermogen_samples.append((tijd, 400.0))
+            temperatuur_samples.append((tijd, 20.0 + 8.0 * (0.5**duur_h)))
+            buiten_samples.append((tijd, 20.0))
+
+        statistiek = bereken_thermische_meetstatistiek(
+            vermogen_samples,
+            temperatuur_samples,
+            5.0,
+            buiten_samples=buiten_samples,
+            nu=start + timedelta(minutes=30),
+        )
+
+        assert statistiek["afkoeling"]["thermische_rust_max_w"] == 500
+        assert statistiek["afkoeling"]["metingen"] == 1
+
+    def test_afkoeling_sluit_vermogen_boven_tien_procent_c_uit(self):
+        start = datetime(2026, 8, 26, 8, 0, tzinfo=timezone.utc)
+        vermogen_samples = []
+        temperatuur_samples = []
+        buiten_samples = []
+        for index in range(7):
+            tijd = start + timedelta(minutes=5 * index)
+            duur_h = index * 5 / 60.0
+            vermogen_samples.append((tijd, 600.0))
+            temperatuur_samples.append((tijd, 20.0 + 8.0 * (0.5**duur_h)))
+            buiten_samples.append((tijd, 20.0))
+
+        statistiek = bereken_thermische_meetstatistiek(
+            vermogen_samples,
+            temperatuur_samples,
+            5.0,
+            buiten_samples=buiten_samples,
+            nu=start + timedelta(minutes=30),
+        )
+
+        assert statistiek["afkoeling"]["blokken"] == 0
+        assert statistiek["afkoeling"]["metingen"] == 0
+
+    def test_advies_gebruikt_buienradar_history_zonder_ingestelde_sensor(self):
+        nu = datetime.now().astimezone()
+        slot = _advies_slot(nu - timedelta(minutes=30), 0.25)
+        slot["buiten_temp_c"] = 99.0
+        app = _maak_app(
+            states={
+                "sensor.buienradar_temperature": "18.5",
+                "sensor.dynamisch_handelsstrategie": {
+                    "state": "0.0",
+                    "attributes": {
+                        "slots_grafiek": [slot],
+                        "accu_max_kwh": 5.0,
+                    },
+                },
+            },
+            history={
+                "sensor.buienradar_temperature": [
+                    _history_item("18.5", (nu - timedelta(minutes=30)).isoformat()),
+                ],
+            },
+        )
+        app.args["default_buitentemperatuur_sensor"] = "sensor.buienradar_temperature"
+        gepubliceerd = {}
+
+        def set_state(entity_id, *, state, attributes):
+            gepubliceerd[entity_id] = {"state": state, "attributes": attributes}
+
+        app.set_state = set_state
+
+        app.bereken_strategie_advies({"trigger": "test"})
+
+        attributen = gepubliceerd["sensor.dynamisch_strategie_advies"]["attributes"]
+        assert attributen["buitentemperatuur_bron"] == (
+            "sensor.buienradar_temperature.state_history"
+        )
+        assert attributen["buitentemperatuur_samples"] == 1
+        assert attributen["buitentemperatuur_sensor_samples"] == 1
+
+    def test_ingestelde_buitentemperatuur_sensor_heeft_voorrang_op_buienradar(self):
+        app = _maak_app(
+            states={
+                "input_text.dynamisch_buitentemperatuur_sensor": "sensor.temperatuur_tuin",
+                "sensor.buienradar_temperature": "18.5",
+            }
+        )
+        app.args["default_buitentemperatuur_sensor"] = "sensor.buienradar_temperature"
+
+        assert app._haal_buitentemperatuur_sensor_entity() == "sensor.temperatuur_tuin"
+
+    def test_advies_gebruikt_geen_forecastslots_als_historische_buitentemperatuur(self):
+        nu = datetime.now().astimezone()
+        slot = _advies_slot(nu - timedelta(minutes=30), 0.25)
+        slot["buiten_temp_c"] = 18.5
+        app = _maak_app(
+            states={
+                "sensor.dynamisch_handelsstrategie": {
+                    "state": "0.0",
+                    "attributes": {
+                        "slots_grafiek": [slot],
+                        "accu_max_kwh": 5.0,
+                    },
+                },
+            }
+        )
+        gepubliceerd = {}
+        app.set_state = lambda entity_id, *, state, attributes: gepubliceerd.update(
+            {entity_id: {"state": state, "attributes": attributes}}
+        )
+
+        app.bereken_strategie_advies({"trigger": "test"})
+
+        attributen = gepubliceerd["sensor.dynamisch_strategie_advies"]["attributes"]
+        assert attributen["buitentemperatuur_bron"] == "niet_beschikbaar"
+        assert attributen["buitentemperatuur_samples"] == 0
+
+    def test_statistische_opwarming_is_onafhankelijk_van_huidige_helperwaarde(self):
+        meetstatistiek = {
+            "status": "ok",
+            "laden": {
+                "schatting_c_per_c2h": 42.0,
+                "mediaan_c_per_c2h": 41.0,
+                "p25_c_per_c2h": 38.0,
+                "p75_c_per_c2h": 45.0,
+                "blokken": 5,
+                "stijgende_blokken": 4,
+                "gemiddelde_c": 0.4,
+                "betrouwbaarheid": "middel",
+            },
+            "ontladen": {},
+            "afkoeling": {
+                "status": "geen_omgevingssensor",
+                "metingen": 0,
+                "betrouwbaarheid": "laag",
+            },
+        }
+
+        adviezen = []
+        for huidige_waarde in (96.0, 63.0):
+            app = _maak_app(
+                states={
+                    "input_number.dynamisch_warmte_stijging_laden_c_per_c2h": str(
+                        huidige_waarde
+                    ),
+                }
+            )
+            adviezen.append(
+                app._bouw_strategie_advies(
+                    [],
+                    [],
+                    14,
+                    meetstatistiek=meetstatistiek,
+                )
+            )
+
+        assert [
+            advies["statistische_schatting_warmte_stijging_laden_c_per_c2h"]
+            for advies in adviezen
+        ] == [42.0, 42.0]
+        assert [
+            advies["aanbevolen_warmte_stijging_laden_c_per_c2h"]
+            for advies in adviezen
+        ] == [42.0, 42.0]
+        assert [
+            advies["ingesteld_warmte_stijging_laden_c_per_c2h"]
+            for advies in adviezen
+        ] == [96.0, 63.0]
+
     def test_advies_gebruikt_actuele_slots_grafiek_als_history_geen_slots_heeft(self):
         nu = datetime.now().astimezone()
         slots = [
@@ -956,12 +1322,17 @@ class TestStrategieAdvies:
         advies = gepubliceerde_states[-1]
         attributes = advies["attributes"]
         assert advies["entity"] == "sensor.dynamisch_strategie_advies"
-        assert advies["state"] == "stabiel"
+        assert advies["state"] == "te_weinig_meetdata"
         assert attributes["geanalyseerde_slots"] == 8
         assert attributes["temperatuur_vergelijkingen"] == 8
         assert attributes["strategie_slots_uit_history"] == 0
         assert attributes["strategie_slots_uit_huidige_sensor"] == 8
         assert attributes["strategie_history_items_met_slots"] == 0
+        assert attributes["vermogen_samples"] == 0
+        assert (
+            attributes["statistische_schatting_warmte_stijging_laden_tekst"]
+            == "Onvoldoende data"
+        )
 
 
 class TestStrategieConfig:
@@ -1109,6 +1480,29 @@ def test_strategie_dashboard_groepeert_korte_instellingen():
     ):
         assert f"attribute: {attribuut}" in tekst
 
+    for attribuut in (
+        "statistische_schatting_warmte_stijging_laden_tekst",
+        "statistische_schatting_warmte_stijging_ontladen_tekst",
+        "statistische_schatting_afkoeling_tekst",
+        "statistische_spreiding_warmte_stijging_laden_tekst",
+        "statistische_spreiding_warmte_stijging_ontladen_tekst",
+        "aanbevolen_temp_penalty_tekst",
+        "aanbevolen_warmte_penalty_laden_tekst",
+        "aanbevolen_warmte_penalty_ontladen_tekst",
+    ):
+        assert f"attribute: {attribuut}" in tekst
+
+    assert "title: Berekening per waarde" in tekst
+    assert tekst.count("<details>") >= 6
+    assert tekst.count("<summary>") >= 6
+    assert "komt niet voor in de schattingsformule" in tekst
+    assert "attribute: buitentemperatuur_bron" in tekst
+    assert "attribute: buitentemperatuur_samples" in tekst
+    assert "attribute: statistische_afkoeling_blokken_voldoende_duur" in tekst
+    assert "attribute: statistische_afkoeling_afwijzingen_tekst" in tekst
+    assert "sensor.dynamisch_handelsstrategie.attributes.slots[].buiten_temp_c" in tekst
+    assert "wordt niet gebruikt" in tekst
+
 
 def test_bouw_grafiek_slots_bewaart_laatste_zes_uur():
     nu = datetime(2026, 5, 24, 14, 0, tzinfo=timezone.utc)
@@ -1165,3 +1559,17 @@ def test_haal_grafiek_slots_uit_history_items_leest_recente_slots():
     grafiek_slots = haal_grafiek_slots_uit_history_items(history_items, nu)
 
     assert [slot["label"] for slot in grafiek_slots] == ["recent-laat"]
+
+
+def test_volledig_actief_slot_behoudt_opdracht_in_plaats_van_restdoel():
+    nu = datetime.now().astimezone()
+    slot = {
+        'start': (nu - timedelta(minutes=10)).isoformat(),
+        'end': (nu + timedelta(minutes=5)).isoformat(),
+        'actie': 'laden', 'vermogen_w': 600, 'volledige_slots': True,
+        'soc_na_kwh': 1.5, 'stop_soc_pct': 100,
+    }
+    app = _maak_app()
+    voor = dict(slot)
+    app._corrigeer_actief_slot_vermogen([slot], object(), 10, 100)
+    assert slot == voor

@@ -1513,3 +1513,73 @@ class TestKwartierSlots:
         n_ontlaad = sum(1 for s in schema if s["actie"] == "ontladen")
         # Minimaal één ontlaadblok; met genoeg capaciteit twee blokken
         assert n_ontlaad >= 4  # minstens 4 kwartierslots ontladen (= 1 volledige cyclus)
+
+
+class TestVolledigeSlots:
+    @staticmethod
+    def bereken(prijzen, accu, **kwargs):
+        return los_dp_op(
+            maak_slots(prijzen, duur_h=kwargs.pop('duur_h', 0.25)), accu,
+            volledige_slots=True, minimum_vermogen_w=600,
+            warmte_penalty_laden_factor=0, warmte_penalty_ontladen_factor=0,
+            hoge_soc_verblijf_penalty_factor=0, lage_soc_verblijf_penalty_factor=0,
+            **kwargs,
+        )
+
+    @pytest.mark.parametrize('duur_h', [0.25, 1.0])
+    def test_geen_laadactie_voor_50_wh_restcapaciteit(self, duur_h):
+        accu = maak_accu(huidig_kwh=5.173, max_kwh=5.228, eta=0.929, max_laad_w=3000)
+        slot = self.bereken([-1.0], accu, duur_h=duur_h)[0]
+        assert slot['actie'] == 'rust'
+
+    @pytest.mark.parametrize('voorraad', [0.006, 0.047, 0.15])
+    def test_geen_ontlaadactie_voor_kleine_restvoorraad(self, voorraad):
+        slot = self.bereken([1.0], maak_accu(huidig_kwh=voorraad), standby_verbruik_w=15.5)[0]
+        assert slot['actie'] == 'rust'
+
+    @pytest.mark.parametrize('spreiden', [False, True])
+    @pytest.mark.parametrize('thermisch', [False, True])
+    def test_alle_acties_gebruiken_hele_slotenergie_en_fysieke_stopgrens(self, spreiden, thermisch):
+        accu = maak_accu(huidig_kwh=0.237, max_kwh=5.228, eta=0.929, max_laad_w=3000)
+        schema = self.bereken(
+            [-0.1] * 8 + [0.8] * 10 + [0.1] * 3 + [0.6] * 5, accu,
+            plateau_spreiding=spreiden, standby_verbruik_w=15.5,
+            batterij_temp_start_c=35 if thermisch else None,
+        )
+        assert {'laden', 'ontladen', 'rust'} <= set(acties(schema))
+        voorraad = accu.huidig_kwh
+        for slot in schema:
+            assert slot['soc_voor_kwh'] == pytest.approx(voorraad, abs=0.00051)
+            p = slot['vermogen_w']
+            if slot['actie'] == 'laden':
+                verwacht = min(p, accu.max_laad_w * bereken_derating(voorraad, accu.max_kwh))
+                energie = verwacht / 1000 * 0.25 * accu.eta_laad
+                voorraad += energie
+                assert slot['stop_soc_pct'] == 100
+                assert slot['winst_eur'] == pytest.approx(-energie / accu.eta_laad * slot['prijs_ct'] / 100, abs=0.000051)
+            elif slot['actie'] == 'ontladen':
+                voorraad -= p / 1000 * 0.25 / accu.eta_ontlaad + 0.0155 * 0.25
+                assert voorraad >= -1e-9
+                assert slot['stop_soc_pct'] == 0
+                assert slot['winst_eur'] == pytest.approx(p / 1000 * 0.25 * slot['prijs_ct'] / 100, abs=0.000051)
+            else:
+                voorraad = max(0, voorraad - 0.0155 * 0.25)
+                assert p == 0
+            assert voorraad <= accu.max_kwh + 1e-9
+            assert slot['soc_na_kwh'] == pytest.approx(voorraad, abs=0.00051)
+            if slot['actie'] != 'rust':
+                assert p >= 600
+                assert slot['geplande_actieduur_min'] == 15
+
+    def test_ondergrens_bewaart_ook_standbyverbruik(self):
+        accu = maak_accu(huidig_kwh=0.16, eta=1, max_laad_w=0)
+        slot = self.bereken([1], accu, standby_verbruik_w=60)[0]
+        assert slot['actie'] == 'rust'
+
+    def test_economische_stopwaarde_wordt_niet_nagejaagd_in_actief_slot(self):
+        accu = maak_accu(huidig_kwh=1.237)
+        schema = self.bereken([1], accu, standby_verbruik_w=0)
+        voor = dict(schema[0])
+        accu.huidig_kwh = 0.01
+        corrigeer_actief_slot_vermogen(schema, accu, _T0 + timedelta(minutes=14))
+        assert schema[0] == voor
