@@ -188,6 +188,7 @@ sync_file "appdaemon/apps/kwartieradministratie.py" "appdaemon/apps/kwartieradmi
 sync_file "Dutch (NL) Integration/packages/zendure_gielz1986_nl.yaml" "packages/zendure_gielz1986_nl.yaml"
 sync_file "Dutch (NL) Integration/packages/zendure_local_nl.yaml" "packages/zendure_local_nl.yaml"
 sync_file "Dutch (NL) Integration/packages/zendure_kwartieradministratie_nl.yaml" "packages/zendure_kwartieradministratie_nl.yaml"
+sync_file "Dutch (NL) Integration/packages/zendure_health_nl.yaml" "packages/zendure_health_nl.yaml"
 
 check_and_reload_home_assistant
 

@@ -1,0 +1,107 @@
+input_boolean:
+  zendure_health_alert_actief:
+    name: Zendure health alert actief
+    icon: mdi:alert
+input_text:
+  zendure_health_notify_service:
+    name: Health meldingsservice
+    max: 100
+    initial: notify.mobile_app_bbf
+template:
+- binary_sensor:
+  - name: Zendure health probleem
+    unique_id: zendure_health_probleem
+    device_class: problem
+    delay_on:
+      minutes: 5
+    delay_off:
+      minutes: 2
+    state: "{% set ns = namespace(problemen=[]) %}\n{% set bijgewerkt = as_timestamp(state_attr('sensor.dynamisch_handelsstrategie',\
+      \ 'bijgewerkt'), 0) %}\n{% if bijgewerkt == 0 or as_timestamp(now()) - bijgewerkt > 5400 %}\n  {% set ns.problemen\
+      \ = ns.problemen + ['Strategie ontbreekt of is ouder dan 90 minuten'] %}\n{% endif %}\n{% if states('sensor.zendure_proxy_uptime')\
+      \ | float(0) < 120 %}\n  {% set ns.problemen = ns.problemen + ['Zendure-proxy ontbreekt of herstart herhaaldelijk']\
+      \ %}\n{% endif %}\n{% if is_state('input_boolean.dynamisch_handelsstrategie_berekening_bezig', 'on') %}\n\
+      \  {% set gestart = as_timestamp(states.input_boolean.dynamisch_handelsstrategie_berekening_bezig.last_changed,\
+      \ 0) %}\n  {% if as_timestamp(now()) - gestart > 600 %}\n    {% set ns.problemen = ns.problemen + ['Strategieberekening\
+      \ loopt langer dan 10 minuten'] %}\n  {% endif %}\n{% endif %}\n{% if state_attr('sensor.dynamisch_handelsstrategie_berekening_duur',\
+      \ 'status') == 'fout' %}\n  {% set ns.problemen = ns.problemen + ['Laatste strategieberekening is mislukt']\
+      \ %}\n{% endif %}\n{% set bron = states('input_text.dynamisch_nordpool_sensor') %}\n{% set morgen = (now()\
+      \ + timedelta(days=1)).date() %}\n{% set prijzen = state_attr(bron, 'raw_tomorrow') or [] %}\n{% set geldig\
+      \ = namespace(aantal=0) %}\n{% for prijs in prijzen %}\n  {% set start = as_datetime(prijs.get('start'), none)\
+      \ %}\n  {% if start is not none and as_local(start).date() == morgen %}\n    {% set geldig.aantal = geldig.aantal\
+      \ + 1 %}\n  {% endif %}\n{% endfor %}\n{% if now().hour >= 15 and (not state_attr(bron, 'tomorrow_valid')\
+      \ or geldig.aantal == 0) %}\n  {% set ns.problemen = ns.problemen + ['Nord Pool-prijzen voor morgen ontbreken\
+      \ na 15:00'] %}\n{% endif %}\n{% if states('sensor.memory_free') | float(99999) < 300 %}\n  {% set ns.problemen\
+      \ = ns.problemen + ['Minder dan 300 MiB vrij RAM'] %}\n{% endif %}\n{% if states('sensor.memory_free') in\
+      \ ['unknown', 'unavailable'] %}\n  {% set ns.problemen = ns.problemen + ['RAM-meting is niet beschikbaar']\
+      \ %}\n{% endif %}\n{{ ns.problemen | length > 0 }}"
+    attributes:
+      problemen: "{% set ns = namespace(problemen=[]) %}\n{% set bijgewerkt = as_timestamp(state_attr('sensor.dynamisch_handelsstrategie',\
+        \ 'bijgewerkt'), 0) %}\n{% if bijgewerkt == 0 or as_timestamp(now()) - bijgewerkt > 5400 %}\n  {% set ns.problemen\
+        \ = ns.problemen + ['Strategie ontbreekt of is ouder dan 90 minuten'] %}\n{% endif %}\n{% if states('sensor.zendure_proxy_uptime')\
+        \ | float(0) < 120 %}\n  {% set ns.problemen = ns.problemen + ['Zendure-proxy ontbreekt of herstart herhaaldelijk']\
+        \ %}\n{% endif %}\n{% if is_state('input_boolean.dynamisch_handelsstrategie_berekening_bezig', 'on') %}\n\
+        \  {% set gestart = as_timestamp(states.input_boolean.dynamisch_handelsstrategie_berekening_bezig.last_changed,\
+        \ 0) %}\n  {% if as_timestamp(now()) - gestart > 600 %}\n    {% set ns.problemen = ns.problemen + ['Strategieberekening\
+        \ loopt langer dan 10 minuten'] %}\n  {% endif %}\n{% endif %}\n{% if state_attr('sensor.dynamisch_handelsstrategie_berekening_duur',\
+        \ 'status') == 'fout' %}\n  {% set ns.problemen = ns.problemen + ['Laatste strategieberekening is mislukt']\
+        \ %}\n{% endif %}\n{% set bron = states('input_text.dynamisch_nordpool_sensor') %}\n{% set morgen = (now()\
+        \ + timedelta(days=1)).date() %}\n{% set prijzen = state_attr(bron, 'raw_tomorrow') or [] %}\n{% set geldig\
+        \ = namespace(aantal=0) %}\n{% for prijs in prijzen %}\n  {% set start = as_datetime(prijs.get('start'),\
+        \ none) %}\n  {% if start is not none and as_local(start).date() == morgen %}\n    {% set geldig.aantal\
+        \ = geldig.aantal + 1 %}\n  {% endif %}\n{% endfor %}\n{% if now().hour >= 15 and (not state_attr(bron,\
+        \ 'tomorrow_valid') or geldig.aantal == 0) %}\n  {% set ns.problemen = ns.problemen + ['Nord Pool-prijzen\
+        \ voor morgen ontbreken na 15:00'] %}\n{% endif %}\n{% if states('sensor.memory_free') | float(99999) <\
+        \ 300 %}\n  {% set ns.problemen = ns.problemen + ['Minder dan 300 MiB vrij RAM'] %}\n{% endif %}\n{% if\
+        \ states('sensor.memory_free') in ['unknown', 'unavailable'] %}\n  {% set ns.problemen = ns.problemen +\
+        \ ['RAM-meting is niet beschikbaar'] %}\n{% endif %}\n{{ ns.problemen }}"
+automation:
+- id: zendure_health_alert
+  alias: Zendure healthcheck en herstelmelding
+  mode: single
+  triggers:
+  - trigger: state
+    entity_id: binary_sensor.zendure_health_probleem
+    to: 'on'
+  - trigger: state
+    entity_id: binary_sensor.zendure_health_probleem
+    to: 'off'
+  - trigger: time_pattern
+    minutes: /5
+  actions:
+  - choose:
+    - conditions: '{{ is_state(''binary_sensor.zendure_health_probleem'', ''on'') and is_state(''input_boolean.zendure_health_alert_actief'',
+        ''off'') }}'
+      sequence:
+      - action: persistent_notification.create
+        data:
+          notification_id: zendure_health
+          title: 'Zendure healthcheck: aandacht nodig'
+          message: '{{ state_attr(''binary_sensor.zendure_health_probleem'', ''problemen'') | join(''; '') }}. Laatste
+            strategie: {{ state_attr(''sensor.dynamisch_handelsstrategie'', ''bijgewerkt'') }}.'
+      - action: '{{ states(''input_text.zendure_health_notify_service'') }}'
+        continue_on_error: true
+        data:
+          title: Zendure healthcheck
+          message: '{{ state_attr(''binary_sensor.zendure_health_probleem'', ''problemen'') | join(''; '') }}'
+          data:
+            tag: zendure_health
+      - action: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.zendure_health_alert_actief
+    - conditions: '{{ is_state(''binary_sensor.zendure_health_probleem'', ''off'') and is_state(''input_boolean.zendure_health_alert_actief'',
+        ''on'') }}'
+      sequence:
+      - action: persistent_notification.dismiss
+        data:
+          notification_id: zendure_health
+      - action: '{{ states(''input_text.zendure_health_notify_service'') }}'
+        continue_on_error: true
+        data:
+          title: 'Zendure healthcheck: hersteld'
+          message: De bewaakte strategie, prijzen en RAM-meting zijn weer in orde.
+          data:
+            tag: zendure_health
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.zendure_health_alert_actief
