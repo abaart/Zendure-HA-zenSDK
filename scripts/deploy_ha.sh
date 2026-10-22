@@ -189,6 +189,7 @@ sync_file "Dutch (NL) Integration/packages/zendure_gielz1986_nl.yaml" "packages/
 sync_file "Dutch (NL) Integration/packages/zendure_local_nl.yaml" "packages/zendure_local_nl.yaml"
 sync_file "Dutch (NL) Integration/packages/zendure_kwartieradministratie_nl.yaml" "packages/zendure_kwartieradministratie_nl.yaml"
 sync_file "Dutch (NL) Integration/packages/zendure_health_nl.yaml" "packages/zendure_health_nl.yaml"
+sync_file "Dutch (NL) Integration/packages/z2m_health_nl.yaml" "packages/z2m_health_nl.yaml"
 
 check_and_reload_home_assistant
 

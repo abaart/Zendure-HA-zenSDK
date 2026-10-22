@@ -1,0 +1,96 @@
+input_boolean:
+  z2m_health_alert_actief:
+    name: Zigbee health alert actief
+    icon: mdi:zigbee
+template:
+- binary_sensor:
+  - name: Zigbee health probleem
+    unique_id: z2m_health_probleem
+    device_class: problem
+    delay_on:
+      minutes: 5
+    delay_off:
+      minutes: 2
+    state: '{{ not is_state(''binary_sensor.zigbee2mqtt_bridge_connection_state'', ''on'') or not is_state(''binary_sensor.zigbee_coordinator_antwoord'',
+      ''on'') }}'
+    attributes:
+      bridge: '{{ states("binary_sensor.zigbee2mqtt_bridge_connection_state") }}'
+      coordinator_antwoord: '{{ states("binary_sensor.zigbee_coordinator_antwoord") }}'
+automation:
+- id: z2m_health_poll
+  alias: Zigbee coordinator actief controleren
+  mode: single
+  triggers:
+  - trigger: time_pattern
+    minutes: /2
+  - trigger: homeassistant
+    event: start
+  actions:
+  - action: mqtt.publish
+    data:
+      topic: zigbee2mqtt/bridge/request/health_check
+      payload: ''
+      retain: false
+- actions:
+  - choose:
+    - conditions: '{{ is_state(''binary_sensor.zigbee_health_probleem'', ''on'') and is_state(''input_boolean.z2m_health_alert_actief'',
+        ''off'') }}'
+      sequence:
+      - action: persistent_notification.create
+        data:
+          message: 'Zigbee2MQTT, de coordinator of MQTT reageert niet. Controleer na een NAS-reboot de Sonoff USB-koppeling
+            in Synology VMM. Bridge: {{ states("binary_sensor.zigbee2mqtt_bridge_connection_state") }}; health-antwoord:
+            {{ states("binary_sensor.zigbee_coordinator_antwoord") }}.'
+          notification_id: z2m_health
+          title: 'Zigbee: verbinding controleren'
+      - action: '{{ states(''input_text.zendure_health_notify_service'') }}'
+        continue_on_error: true
+        data:
+          data:
+            tag: z2m_health
+          message: 'Zigbee2MQTT, de coordinator of MQTT reageert niet. Controleer na een NAS-reboot de Sonoff USB-koppeling
+            in Synology VMM. Bridge: {{ states("binary_sensor.zigbee2mqtt_bridge_connection_state") }}; health-antwoord:
+            {{ states("binary_sensor.zigbee_coordinator_antwoord") }}.'
+          title: 'Zigbee: verbinding controleren'
+      - action: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.z2m_health_alert_actief
+    - conditions: '{{ is_state(''binary_sensor.zigbee_health_probleem'', ''off'') and is_state(''input_boolean.z2m_health_alert_actief'',
+        ''on'') }}'
+      sequence:
+      - action: persistent_notification.dismiss
+        data:
+          notification_id: z2m_health
+      - action: '{{ states(''input_text.zendure_health_notify_service'') }}'
+        continue_on_error: true
+        data:
+          data:
+            tag: z2m_health
+          message: Zigbee2MQTT is verbonden en de coordinator-healthcheck antwoordt weer.
+          title: 'Zigbee: verbinding hersteld'
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.z2m_health_alert_actief
+  alias: Zigbee healthcheck en herstelmelding
+  id: z2m_health_alert
+  mode: single
+  triggers:
+  - entity_id: binary_sensor.zigbee_health_probleem
+    to: 'on'
+    trigger: state
+  - entity_id: binary_sensor.zigbee_health_probleem
+    to: 'off'
+    trigger: state
+  - minutes: /5
+    trigger: time_pattern
+mqtt:
+  binary_sensor:
+  - name: Zigbee coordinator antwoord
+    unique_id: z2m_coordinator_antwoord
+    device_class: connectivity
+    state_topic: zigbee2mqtt/bridge/response/health_check
+    value_template: '{{ "ON" if value_json.get("status") == "ok" and value_json.get("data", {}).get("healthy") ==
+      true else "OFF" }}'
+    payload_on: 'ON'
+    payload_off: 'OFF'
+    expire_after: 300
