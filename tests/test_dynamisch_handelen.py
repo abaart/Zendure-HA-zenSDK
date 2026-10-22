@@ -504,10 +504,10 @@ class TestKwartierPrijsslots:
         assert [slot["duration_h"] for slot in echte_slots] == [0.25] * 40
         assert {slot["resolutie"] for slot in echte_slots} == {"kwartierprijs"}
         horizon_start = resultaat[0]["start"]
-        verwacht_einde = horizon_start + timedelta(hours=PLANNING_HORIZON_UREN)
+        verwacht_einde = (horizon_start.astimezone(timezone.utc) + timedelta(hours=PLANNING_HORIZON_UREN)).astimezone(horizon_start.tzinfo)
         assert resultaat[-1]["end"] == verwacht_einde
         assert sum(slot["duration_h"] for slot in resultaat) == pytest.approx(
-            (verwacht_einde - resultaat[0]["start"]).total_seconds() / 3600.0
+            (verwacht_einde.astimezone(timezone.utc) - resultaat[0]["start"].astimezone(timezone.utc)).total_seconds() / 3600.0
         )
         assert fallback_slots
         assert all(slot["duration_h"] <= 1.0 for slot in fallback_slots)
@@ -1573,3 +1573,56 @@ def test_volledig_actief_slot_behoudt_opdracht_in_plaats_van_restdoel():
     voor = dict(slot)
     app._corrigeer_actief_slot_vermogen([slot], object(), 10, 100)
     assert slot == voor
+
+
+@pytest.mark.parametrize('date', ['2026-03-27T16:00:00', '2026-10-22T16:15:00'])
+def test_planning_klokovergang_exact_72_uur(date, monkeypatch):
+    tz = ZoneInfo('Europe/Amsterdam')
+    nu = datetime.fromisoformat(date).replace(tzinfo=tz)
+    begin = nu.replace(hour=0, minute=0).astimezone(timezone.utc)
+    raw = [{'start': (begin + timedelta(minutes=15*i)).isoformat(),
+            'end': (begin + timedelta(minutes=15*(i+1))).isoformat(),
+            'value': .2} for i in range(96)]
+    app = _maak_app({'input_text.dynamisch_nordpool_sensor': 'sensor.test',
+                     'sensor.test': {'attributes': {'raw_today': raw}}})
+    app._huidige_planning_tijd = lambda: nu
+    # Forecast omvat beide uren van de wintertijdwisseling als aparte UTC-slots.
+    forecast = [{'start': begin + timedelta(hours=i),
+                 'end': begin + timedelta(hours=i+1), 'price': .2,
+                 'duration_h': 1., 'prijs_is_forecast': True} for i in range(120)]
+    app._wattwanneer_cache.resultaat.records.extend([{'dummy': True}])
+    monkeypatch.setattr(dynamisch_handelen_module, 'bouw_wattwanneer_slots', lambda _: forecast)
+    monkeypatch.setattr(dynamisch_handelen_module, 'kalibreer_wattwanneer_prijzen',
+                        lambda *a: {'slots': forecast, 'meetpunten': 24, 'factor': 1.,
+                                    'opslag_eur_kwh': 0., 'max_restfout_eur_kwh': 0.})
+    slots = app._haal_prijsslots()
+    assert sum(s['duration_h'] for s in slots) == pytest.approx(72)
+    assert len(slots) <= 290
+    assert all(s['end'].timestamp() > s['start'].timestamp() for s in slots)
+    assert all(a['end'].timestamp() == b['start'].timestamp() for a,b in zip(slots,slots[1:]))
+    if nu.month == 10:
+        repeated = [s for s in slots if s['start'].day == 25 and s['start'].hour == 2]
+        assert {s['start'].fold for s in repeated} == {0, 1}
+    else:
+        assert not any(s['start'].day == 29 and s['start'].hour == 2 for s in slots)
+
+
+@pytest.mark.parametrize('mode', ['zero', 'slot_limit'])
+def test_planning_breekt_af_bij_forecast_zonder_vooruitgang(monkeypatch, mode):
+    tz = ZoneInfo('Europe/Amsterdam')
+    nu = datetime(2026, 10, 22, 16, tzinfo=tz)
+    raw = [{'start': nu.isoformat(), 'end': (nu+timedelta(minutes=15)).isoformat(), 'value': .2}]
+    app = _maak_app({'input_text.dynamisch_nordpool_sensor': 'sensor.test',
+                     'sensor.test': {'attributes': {'raw_today': raw}}})
+    app._huidige_planning_tijd = lambda: nu
+    end = nu + timedelta(minutes=15)
+    forecast = [{'start': end, 'end': end, 'price': .2, 'duration_h': 0.}]
+    if mode == 'slot_limit':
+        forecast = [{'start': end + timedelta(seconds=i), 'end': end + timedelta(seconds=i+1),
+                     'price': .2, 'duration_h': 1/3600} for i in range(400)]
+    app._wattwanneer_cache.resultaat.records.extend([{'dummy': True}])
+    monkeypatch.setattr(dynamisch_handelen_module, 'bouw_wattwanneer_slots', lambda _: forecast)
+    monkeypatch.setattr(dynamisch_handelen_module, 'kalibreer_wattwanneer_prijzen',
+                        lambda *a: {'slots': forecast, 'meetpunten': 1, 'factor': 1.,
+                                    'opslag_eur_kwh': 0., 'max_restfout_eur_kwh': 0.})
+    assert app._haal_prijsslots() == []

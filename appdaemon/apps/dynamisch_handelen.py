@@ -2684,7 +2684,7 @@ class DynamischHandelen(hass.Hass):
         raw_today    = attributes.get("raw_today")    or []
         raw_tomorrow = attributes.get("raw_tomorrow") or []
 
-        nu = self._huidige_planning_tijd()
+        nu = self._huidige_planning_tijd().astimezone(timezone.utc)
         geldige_bron_slots: dict[tuple[datetime, datetime], dict] = {}
 
         for source_series, reeks in (
@@ -2694,10 +2694,10 @@ class DynamischHandelen(hass.Hass):
             for item in reeks:
                 try:
                     start = datetime.fromisoformat(str(item["start"])).astimezone(
-                        PLANNING_TIJDZONE
+                        timezone.utc
                     )
                     end = datetime.fromisoformat(str(item["end"])).astimezone(
-                        PLANNING_TIJDZONE
+                        timezone.utc
                     )
                     price = float(item["value"])
                 except (KeyError, ValueError, TypeError) as exc:
@@ -2820,7 +2820,7 @@ class DynamischHandelen(hass.Hass):
         horizon_einde = (
             horizon_start.astimezone(timezone.utc)
             + timedelta(hours=PLANNING_HORIZON_UREN)
-        ).astimezone(PLANNING_TIJDZONE)
+        ).astimezone(timezone.utc)
         bekende_reeks_einde = max(slot["end"] for slot in bron_slots)
 
         forecast_slots: list[dict] = []
@@ -2828,6 +2828,9 @@ class DynamischHandelen(hass.Hass):
         forecast_fout = forecast_infrastructuur_fout
         if forecast_resultaat and forecast_resultaat.records:
             ruwe_forecast_slots = bouw_wattwanneer_slots(forecast_resultaat.records)
+            for slot in ruwe_forecast_slots:
+                slot["start"] = slot["start"].astimezone(timezone.utc)
+                slot["end"] = slot["end"].astimezone(timezone.utc)
             try:
                 kalibratie = kalibreer_wattwanneer_prijzen(
                     ruwe_forecast_slots,
@@ -2900,7 +2903,19 @@ class DynamischHandelen(hass.Hass):
 
         slots: list[dict] = []
         cursor = horizon_start
+        vorige_cursor = None
+        maximum_slots = int(PLANNING_HORIZON_UREN * 60 / KWARTIER_SLOT_MINUTEN) + 2
         while cursor < horizon_einde:
+            # UTC maakt beide lokale 02:00-uren verschillende tijdstippen.
+            # Breek af voordat een ongeldige overgang de lijst laat doorgroeien.
+            if (vorige_cursor is not None and cursor <= vorige_cursor) or len(slots) >= maximum_slots:
+                self.log(
+                    f"Dynamisch Handelen: prijsplanning afgebroken bij {cursor.isoformat()}; "
+                    "tijd gaat niet vooruit of maximum aantal slots bereikt",
+                    level="ERROR",
+                )
+                return []
+            vorige_cursor = cursor
             echt_slot = echte_slots_op_start.get(cursor)
             if echt_slot is not None:
                 slots.append(dict(echt_slot))
@@ -2934,7 +2949,7 @@ class DynamischHandelen(hass.Hass):
                 (
                     cursor.astimezone(timezone.utc)
                     + timedelta(hours=FALLBACK_SLOT_UREN)
-                ).astimezone(PLANNING_TIJDZONE),
+                ).astimezone(timezone.utc),
                 volgende_start,
                 horizon_einde,
             )
@@ -2963,6 +2978,10 @@ class DynamischHandelen(hass.Hass):
             })
             cursor = fallback_einde
 
+        # Publiceer Nederlandse tijden; vergelijkingen en sleutels hierboven zijn UTC.
+        for slot in slots:
+            slot["start"] = slot["start"].astimezone(PLANNING_TIJDZONE)
+            slot["end"] = slot["end"].astimezone(PLANNING_TIJDZONE)
         return slots
 
     def _bepaal_dp_start_tijd(self, slots: list[dict]) -> datetime | None:
