@@ -616,27 +616,57 @@ def kalibreer_wattwanneer_prijzen(
     forecast_slots: list[dict],
     kwartier_slots: list[dict],
 ) -> dict:
-    """Past WattWanneer-prijzen aan op de prijsbasis van de Nordpool-sensor."""
+    """Kalibreert op volledige lokale klokuren, met beide wintertijduren samen."""
+    kwartieren_utc = [
+        {
+            **slot,
+            "start": slot["start"].astimezone(timezone.utc),
+            "end": slot["end"].astimezone(timezone.utc),
+        }
+        for slot in kwartier_slots
+    ]
     meetpunten: list[tuple[float, float]] = []
     for forecast_slot in forecast_slots:
         if forecast_slot.get("forecast_source") != "entsoe_day_ahead":
             continue
-        start = forecast_slot["start"]
-        end = forecast_slot["end"]
+        lokaal = forecast_slot["start"].astimezone(PLANNING_TIJDZONE)
+        # WattWanneer heeft één prijs per lokaal klokuur. Bij wintertijd
+        # bevat die prijs beide uren 02:00; vergelijk daarom alle acht kwartieren.
+        # De roundtrip sluit niet-bestaande klokuren bij zomertijd uit.
+        starts = {
+            lokaal.replace(fold=fold).astimezone(timezone.utc)
+            for fold in (0, 1)
+            if lokaal.replace(fold=fold).astimezone(timezone.utc).astimezone(
+                PLANNING_TIJDZONE
+            ).replace(tzinfo=None) == lokaal.replace(tzinfo=None)
+        }
+        if not starts:
+            continue
+        start = min(starts)
+        end = max(starts) + timedelta(hours=1)
+        verwachte_duur = (end - start).total_seconds() / 3600.0
         overlap = [
             slot
-            for slot in kwartier_slots
+            for slot in kwartieren_utc
             if slot["start"] >= start and slot["end"] <= end
         ]
         overlap.sort(key=lambda slot: slot["start"])
-        if len(overlap) != 4:
+        if len(overlap) != round(4 * verwachte_duur):
             continue
         if overlap[0]["start"] != start or overlap[-1]["end"] != end:
             continue
-        if any(overlap[index]["end"] != overlap[index + 1]["start"] for index in range(3)):
+        if any(
+            overlap[index]["end"] != overlap[index + 1]["start"]
+            for index in range(len(overlap) - 1)
+        ):
+            continue
+        if any(
+            not math.isclose((slot["end"] - slot["start"]).total_seconds(), 900.0, abs_tol=1e-6)
+            for slot in overlap
+        ):
             continue
         duur = sum(float(slot["duration_h"]) for slot in overlap)
-        if not math.isclose(duur, 1.0, abs_tol=1e-6):
+        if not math.isclose(duur, verwachte_duur, abs_tol=1e-6):
             continue
         nordpool_prijs = sum(
             float(slot["price"]) * float(slot["duration_h"])

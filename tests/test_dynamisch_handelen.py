@@ -725,6 +725,60 @@ class TestKwartierPrijsslots:
         assert kalibratie["opslag_eur_kwh"] == pytest.approx(0.13564)
         assert kalibratie["max_restfout_eur_kwh"] < 1e-9
 
+    @pytest.mark.parametrize("datum,uren", [
+        ((2026, 10, 24), 24),
+        ((2026, 10, 25), 25),
+        ((2026, 3, 29), 23),
+    ])
+    @pytest.mark.parametrize("gebruik_utc", [False, True])
+    @pytest.mark.parametrize("ontbrekend_kwartier", [False, True])
+    def test_kalibratie_klokwisselingen(self, datum, uren, gebruik_utc, ontbrekend_kwartier):
+        tijdzone = ZoneInfo("Europe/Amsterdam")
+        start = datetime(*datum, tzinfo=tijdzone).astimezone(timezone.utc)
+        kwartieren = []
+        prijzen_per_klokuur = {}
+        for index in range(uren * 4):
+            kwartier_start = start + timedelta(minutes=15 * index)
+            lokaal = kwartier_start.astimezone(tijdzone)
+            # De twee uren 02:00 hebben bewust sterk verschillende prijzen.
+            prijs = 0.01 + index * 0.001
+            prijzen_per_klokuur.setdefault(lokaal.strftime("%Y-%m-%d %H:00"), []).append(prijs)
+            kwartieren.append({
+                "start": kwartier_start if gebruik_utc else lokaal,
+                "end": (kwartier_start + timedelta(minutes=15)).astimezone(
+                    timezone.utc if gebruik_utc else tijdzone
+                ),
+                "price": 1.21 * prijs + 0.13564,
+                "duration_h": 0.25,
+            })
+        records = [
+            {"datetime": uur, "price_eur_kwh": sum(prijzen) / len(prijzen),
+             "source": "entsoe_day_ahead", "generated_at": "test"}
+            for uur, prijzen in prijzen_per_klokuur.items()
+        ]
+        forecast = bouw_wattwanneer_slots(records)
+        if gebruik_utc:
+            for slot in forecast:
+                slot["start"] = slot["start"].astimezone(timezone.utc)
+                slot["end"] = slot["end"].astimezone(timezone.utc)
+        if ontbrekend_kwartier:
+            # Op wintertijd ontbreekt een kwartier uit het tweede uur 02:00.
+            # Ook het eerste, volledige uur mag dan geen meetpunt opleveren.
+            kwartieren.pop(12 if uren == 25 else 8)
+        resultaat = kalibreer_wattwanneer_prijzen(forecast, list(reversed(kwartieren)))
+        assert resultaat["meetpunten"] == len(records) - int(ontbrekend_kwartier)
+        assert resultaat["factor"] == pytest.approx(1.21)
+        assert resultaat["opslag_eur_kwh"] == pytest.approx(0.13564)
+        assert resultaat["max_restfout_eur_kwh"] < 1e-9
+        assert len(resultaat["slots"]) == len(forecast)
+        for slot, record in zip(resultaat["slots"], records):
+            assert slot["price"] == pytest.approx(1.21 * record["price_eur_kwh"] + 0.13564)
+
+        # Een echte afwijking in een volledig uur blijft de forecast afwijzen.
+        kwartieren[-1]["price"] += 0.04
+        with pytest.raises(ValueError, match="prijsbasis-restfout"):
+            kalibreer_wattwanneer_prijzen(forecast, kwartieren)
+
     def test_voegt_modeluren_na_kwartieren_toe_tot_72_uur(self):
         tijdzone = ZoneInfo("Europe/Amsterdam")
         nu = datetime(2026, 8, 22, 12, 0, tzinfo=tijdzone)
